@@ -10,6 +10,7 @@ export const PERMISSION_GROUPS = [
       { key: "products:create", label: "登记商品与到样" },
       { key: "products:edit", label: "修改商品与追加样品" },
       { key: "products:archive", label: "归档商品" },
+      { key: "products:correct_merge", label: "纠正误判同款" },
       { key: "products:export", label: "导出商品" },
     ],
   },
@@ -44,6 +45,7 @@ export const PERMISSION_GROUPS = [
       { key: "audits:view", label: "查看操作日志" },
       { key: "backups:view", label: "查看备份" },
       { key: "backups:manage", label: "创建与下载备份" },
+      { key: "image_matching:manage", label: "管理图片识别" },
     ],
   },
 ] as const;
@@ -53,4 +55,3 @@ export const ALL_PERMISSIONS = PERMISSION_GROUPS.flatMap((group) =>
 );
 
 export type PermissionKey = (typeof ALL_PERMISSIONS)[number];
-

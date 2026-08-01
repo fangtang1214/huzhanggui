@@ -25,6 +25,51 @@ services:
     volumes:
       - backup_data:/backups
 
+  model-init:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 1001:1001 /models && chmod 0770 /models"]
+    volumes:
+      - model_cache:/models
+
+  vision:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["node", "scripts/vision-server.mjs"]
+    environment:
+      HF_HOME: /models
+      VISION_PORT: 3100
+      TZ: Asia/Shanghai
+    volumes:
+      - model_cache:/models
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  indexer:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["node", "scripts/image-indexer.mjs"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      VISION_URL: http://vision:3100
+      TZ: Asia/Shanghai
+    depends_on:
+      database:
+        condition: service_healthy
+      vision:
+        condition: service_healthy
+    networks:
+      - internal
+
   app:
     build: .
     restart: unless-stopped
@@ -35,6 +80,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       ADMIN_NAME: ${ADMIN_NAME}
       APP_URL: https://${DOMAIN}
+      VISION_URL: http://vision:3100
       TZ: Asia/Shanghai
     volumes:
       - backup_data:/backups
@@ -43,6 +89,8 @@ services:
         condition: service_healthy
       backup-init:
         condition: service_completed_successfully
+      vision:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 15s
@@ -96,6 +144,7 @@ services:
 volumes:
   database_data:
   backup_data:
+  model_cache:
   caddy_data:
   caddy_config:
 

@@ -4,10 +4,11 @@ import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { productLinkSchema } from "@/lib/product-link";
+import { syncProductImageQueue } from "@/lib/image-matching";
+import { imageUrlSchema } from "@/lib/image-url";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
 const schema = z.object({
-  sku: z.string().trim().min(1, "请填写货号").max(100),
   name: z.string().trim().min(1, "请填写商品名称").max(200),
   departmentIds: z.array(z.string().uuid()).min(1, "至少选择一个选品直播间"),
   businessContactId: z.string().uuid().optional().nullable(),
@@ -20,7 +21,7 @@ const schema = z.object({
   cooperationMechanism: optionalText,
   categoryId: z.string().uuid().optional().nullable(),
   tagIds: z.array(z.string().uuid()).default([]),
-  imageUrls: z.array(z.string().trim().url("图片网址格式不正确")).max(12).default([]),
+  imageUrls: z.array(imageUrlSchema).max(100).default([]),
   notes: optionalText,
 });
 
@@ -73,12 +74,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (!before) return Response.json({ ok: false, message: "商品不存在" }, { status: 404 });
     await sql.begin(async (tx) => {
       await tx`
-        UPDATE products SET sku = ${input.sku}, name = ${input.name},
+        UPDATE products SET name = ${input.name},
           business_contact_id = ${input.businessContactId || null}, store_name = ${input.storeName || null},
           price = ${input.price ?? null}, product_url = ${input.productUrl || null}, commission = ${input.commission || null},
           store_rating = ${input.storeRating ?? null}, supply_chain = ${input.supplyChain || null},
           cooperation_mechanism = ${input.cooperationMechanism || null}, category_id = ${input.categoryId || null},
-          image_urls = ${tx.json(input.imageUrls)}, notes = ${input.notes || null}, updated_at = now()
+          image_urls = ${tx.json(input.imageUrls)}, notes = ${input.notes || null}, version = version + 1, updated_at = now()
         WHERE id = ${id}
       `;
       await tx`DELETE FROM product_departments WHERE product_id = ${id}`;
@@ -90,7 +91,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         await tx`INSERT INTO product_tags(product_id, tag_id) VALUES (${id}, ${tagId})`;
       }
     });
-    await writeAudit(user, "product.update", "product", id, `修改商品 ${input.sku}`, { before, after: input }, requestIp(request));
+    await syncProductImageQueue(id, input.imageUrls);
+    await writeAudit(user, "product.update", "product", id, `修改商品 ${before.sku}`, { before, after: input }, requestIp(request));
     return ok({ id });
   } catch (error) {
     return apiError(error);
@@ -109,7 +111,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
       return Response.json({ ok: false, message: "该商品仍有在库或在用样品，请先处理样品状态" }, { status: 409 });
     }
     await sql.begin(async (tx) => {
-      await tx`UPDATE products SET archived = true, updated_at = now() WHERE id = ${id}`;
+      await tx`UPDATE products SET archived = true, version = version + 1, updated_at = now() WHERE id = ${id}`;
       await tx`UPDATE samples SET archived = true, updated_at = now() WHERE product_id = ${id}`;
     });
     await writeAudit(user, "product.archive", "product", id, `归档商品 ${product.sku} ${product.name}`, undefined, requestIp(request));

@@ -41,7 +41,7 @@ if [ "$DEPLOY_MODE" = "nginx" ]; then
   fi
   docker compose --profile caddy rm -sf caddy >/dev/null 2>&1 || true
   COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.nginx.yml)
-  "${COMPOSE[@]}" up -d --build --remove-orphans database backup-init app backup
+  "${COMPOSE[@]}" up -d --build --remove-orphans database backup-init model-init vision indexer app backup
 else
   COMPOSE=(docker compose --profile caddy)
   "${COMPOSE[@]}" up -d --build --remove-orphans

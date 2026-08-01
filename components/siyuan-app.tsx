@@ -12,7 +12,8 @@ import { MovementsView } from "./views/movements-view";
 import { OrganizationView } from "./views/organization-view";
 import { UsersView, RolesView } from "./views/access-view";
 import { AuditsView, BackupsView, ProfileView } from "./views/system-view";
-import { Boxes, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, QrCode, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { RecognitionView } from "./views/recognition-view";
+import { Boxes, BrainCircuit, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, QrCode, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
@@ -27,6 +28,7 @@ const manageNav = [
   { href: "/catalog", key: "catalog", label: "分类标签", permission: "catalog:manage", icon: Tags },
   { href: "/users", key: "users", label: "账号管理", permission: "users:view", icon: UserCog },
   { href: "/roles", key: "roles", label: "角色权限", permission: "roles:view", icon: ShieldCheck },
+  { href: "/recognition", key: "recognition", label: "图片识别", permission: "image_matching:manage|products:correct_merge", icon: BrainCircuit },
   { href: "/audits", key: "audits", label: "操作日志", permission: "audits:view", icon: ClipboardList },
   { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
 ];
@@ -34,7 +36,7 @@ const manageNav = [
 type NavEntry = (typeof primaryNav)[number] | (typeof manageNav)[number];
 
 function NavGroup({ items, label, can, pathname, onNavigate }: { items: readonly NavEntry[]; label?: string; can: (permission: string) => boolean; pathname: string; onNavigate: () => void }) {
-  return <>{label && <p className="nav-label">{label}</p>}<nav>{items.filter((item) => can(item.permission)).map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); const Icon = item.icon; return <Link className={active ? "active" : ""} href={item.href} key={item.key} onClick={onNavigate}><Icon size={19} /><span>{item.label}</span></Link>; })}</nav></>;
+  return <>{label && <p className="nav-label">{label}</p>}<nav>{items.filter((item) => item.permission.split("|").some(can)).map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); const Icon = item.icon; return <Link className={active ? "active" : ""} href={item.href} key={item.key} onClick={onNavigate}><Icon size={19} /><span>{item.label}</span></Link>; })}</nav></>;
 }
 
 function viewTitle(path: string[]) {
@@ -58,6 +60,7 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "departments" || view === "locations" || view === "catalog") return <OrganizationView section={view} />;
   if (view === "users") return <UsersView />;
   if (view === "roles") return <RolesView />;
+  if (view === "recognition") return <RecognitionView />;
   if (view === "audits") return <AuditsView />;
   if (view === "backups") return <BackupsView />;
   if (view === "profile") return <ProfileView />;

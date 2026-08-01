@@ -16,6 +16,7 @@
     "db:bootstrap": "npm run db:migrate && npm run db:seed"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "bcryptjs": "3.0.3",
     "fflate": "^0.8.2",
     "lucide-react": "1.28.0",
