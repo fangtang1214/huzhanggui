@@ -23,6 +23,8 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /node_modules\/postgres/);
   assert.match(dockerfile, /node_modules\/bcryptjs/);
+  const updateScript = await readFile(new URL("../update.sh", import.meta.url), "utf8");
+  assert.match(updateScript, /ADMIN_PASSWORD=.*BOOTSTRAP_PLACEHOLDER/);
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {
