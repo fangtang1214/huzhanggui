@@ -25,6 +25,12 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   assert.match(dockerfile, /node_modules\/bcryptjs/);
   const updateScript = await readFile(new URL("../update.sh", import.meta.url), "utf8");
   assert.match(updateScript, /ADMIN_PASSWORD=.*BOOTSTRAP_PLACEHOLDER/);
+  assert.match(updateScript, /8800 8000 8080 8008/);
+  const installScript = await readFile(new URL("../install.sh", import.meta.url), "utf8");
+  assert.match(installScript, /8800 8000 8080 8008/);
+  assert.match(installScript, /systemctl is-active --quiet nginx/);
+  const nginxCompose = await readFile(new URL("../docker-compose.nginx.yml", import.meta.url), "utf8");
+  assert.match(nginxCompose, /127\.0\.0\.1:\$\{APP_PORT:-8800\}:3000/);
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {

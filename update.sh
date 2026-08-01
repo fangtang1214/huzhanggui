@@ -13,7 +13,39 @@ fi
 
 cd "$INSTALL_DIR"
 git pull --ff-only
-docker compose up -d --build --remove-orphans
+
+DEPLOY_MODE="$(sed -n 's/^DEPLOY_MODE=//p' .env | tail -n 1)"
+if [ -z "$DEPLOY_MODE" ]; then
+  if systemctl is-active --quiet nginx; then
+    DEPLOY_MODE="nginx"
+  else
+    DEPLOY_MODE="caddy"
+  fi
+  echo "DEPLOY_MODE=$DEPLOY_MODE" >> .env
+fi
+
+if [ "$DEPLOY_MODE" = "nginx" ]; then
+  APP_PORT_VALUE="$(sed -n 's/^APP_PORT=//p' .env | tail -n 1)"
+  if [ -z "$APP_PORT_VALUE" ]; then
+    for candidate in 8800 8000 8080 8008; do
+      if ! ss -H -ltn "sport = :$candidate" | grep -q .; then
+        APP_PORT_VALUE="$candidate"
+        echo "APP_PORT=$APP_PORT_VALUE" >> .env
+        break
+      fi
+    done
+  fi
+  if [ -z "$APP_PORT_VALUE" ]; then
+    echo "备用端口 8800、8000、8080、8008 均已被占用，请先释放其中一个端口。"
+    exit 1
+  fi
+  docker compose --profile caddy rm -sf caddy >/dev/null 2>&1 || true
+  COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.nginx.yml)
+  "${COMPOSE[@]}" up -d --build --remove-orphans database backup-init app backup
+else
+  COMPOSE=(docker compose --profile caddy)
+  "${COMPOSE[@]}" up -d --build --remove-orphans
+fi
 
 echo "正在等待系统完成启动..."
 READY=0
@@ -32,6 +64,10 @@ fi
 # 首次安装曾在启动阶段中断时，.env 仍可能保留初始管理员密码；健康后统一清除。
 BOOTSTRAP_PLACEHOLDER="$(openssl rand -hex 32)"
 sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$BOOTSTRAP_PLACEHOLDER/" .env
-docker compose up -d --force-recreate app >/dev/null
+"${COMPOSE[@]}" up -d --force-recreate app >/dev/null
 docker image prune -f
 echo "系统已更新，现有数据库和备份均已保留。"
+if [ "$DEPLOY_MODE" = "nginx" ]; then
+  echo "应用内部端口：http://127.0.0.1:$APP_PORT_VALUE"
+  echo "请让现有 Nginx 将系统域名反向代理到此地址。"
+fi

@@ -50,7 +50,7 @@ fi
 
 echo "正在准备服务器环境..."
 apt-get update -y
-apt-get install -y ca-certificates curl git openssl
+apt-get install -y ca-certificates curl git openssl iproute2
 
 if ! command -v docker >/dev/null 2>&1; then
   . /etc/os-release
@@ -77,6 +77,23 @@ EOF
 fi
 systemctl enable --now docker
 
+DEPLOY_MODE="caddy"
+APP_PORT_VALUE=""
+if systemctl is-active --quiet nginx; then
+  DEPLOY_MODE="nginx"
+  for candidate in 8800 8000 8080 8008; do
+    if ! ss -H -ltn "sport = :$candidate" | grep -q .; then
+      APP_PORT_VALUE="$candidate"
+      break
+    fi
+  done
+  if [ -z "$APP_PORT_VALUE" ]; then
+    echo "检测到 Nginx，且备用端口 8800、8000、8080、8008 均已被占用。"
+    exit 1
+  fi
+  echo "检测到现有 Nginx，系统自动使用内部端口 $APP_PORT_VALUE。"
+fi
+
 if [ -e "$INSTALL_DIR" ]; then
   echo "$INSTALL_DIR 已存在。请先运行更新脚本，或备份后移除旧目录。"
   exit 1
@@ -97,11 +114,18 @@ SESSION_SECRET=$SESSION_SECRET
 ADMIN_USERNAME=$ADMIN_USERNAME
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 ADMIN_NAME=$ADMIN_NAME
+DEPLOY_MODE=$DEPLOY_MODE
 TZ=Asia/Shanghai
 EOF
+if [ "$DEPLOY_MODE" = "nginx" ]; then
+  echo "APP_PORT=$APP_PORT_VALUE" >> .env
+  COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.nginx.yml)
+else
+  COMPOSE=(docker compose --profile caddy)
+fi
 chmod 600 .env
 
-docker compose up -d --build
+"${COMPOSE[@]}" up -d --build
 
 echo "正在等待系统完成首次初始化..."
 READY=0
@@ -120,10 +144,15 @@ fi
 # 初始管理员已经写入数据库；移除容器环境中的明文初始密码。
 BOOTSTRAP_PLACEHOLDER="$(openssl rand -hex 32)"
 sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$BOOTSTRAP_PLACEHOLDER/" .env
-docker compose up -d --force-recreate app >/dev/null
+"${COMPOSE[@]}" up -d --force-recreate app >/dev/null
 
 echo
 echo "安装完成。"
-echo "访问地址：https://$DOMAIN"
 echo "管理员账号：$ADMIN_USERNAME"
-echo "如域名刚完成解析，HTTPS 证书可能需要等待几分钟。"
+if [ "$DEPLOY_MODE" = "nginx" ]; then
+  echo "应用内部端口：http://127.0.0.1:$APP_PORT_VALUE"
+  echo "请让现有 Nginx 将 https://$DOMAIN 反向代理到此地址。"
+else
+  echo "访问地址：https://$DOMAIN"
+  echo "如域名刚完成解析，HTTPS 证书可能需要等待几分钟。"
+fi

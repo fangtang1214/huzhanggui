@@ -75,6 +75,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    profiles: ["caddy"]
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN}
