@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { strFromU8, unzipSync } from "fflate";
 import { createXlsx } from "../lib/xlsx.ts";
+import { isSupportedProductLink, isWebProductLink, productLinkSchema } from "../lib/product-link.ts";
 import { PGlite } from "@electric-sql/pglite";
 
 test("系统包含核心样品流转数据结构", async () => {
@@ -40,6 +41,13 @@ test("Excel 导出文件包含中文表头和数据", () => {
   const sheet = strFromU8(files["xl/worksheets/sheet1.xml"]);
   assert.match(sheet, /货号/);
   assert.match(sheet, /商务部 · A 货架/);
+});
+
+test("商品链接支持标准网址和视频号内部格式", () => {
+  assert.equal(productLinkSchema.parse("weixinstorehs/28512353738164"), "weixinstorehs/28512353738164");
+  assert.equal(productLinkSchema.parse("https://example.com/product/1"), "https://example.com/product/1");
+  assert.equal(isSupportedProductLink("javascript:alert(1)"), false);
+  assert.equal(isWebProductLink("weixinstorehs/28512353738164"), false);
 });
 
 test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {

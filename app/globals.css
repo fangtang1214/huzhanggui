@@ -322,7 +322,7 @@ select { cursor: pointer; }
 .commercial-line small, .commercial-line b { display: block; }
 .commercial-line small { color: var(--muted); }
 .commercial-line b { margin-top: 2px; font-size: 17px; }
-.external-product-link { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-weight: 700; }
+.external-product-link { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; color: var(--green); cursor: pointer; font-weight: 700; }
 .detail-info { padding: 22px; }
 .detail-info h2 { margin: 0 0 12px; font-size: 18px; }
 .detail-info dl { margin: 0; }
@@ -608,4 +608,3 @@ select { cursor: pointer; }
   .page-content { max-width: none; padding: 0; }
   .panel { box-shadow: none; break-inside: avoid; }
 }
-

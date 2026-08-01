@@ -3,6 +3,7 @@ import { apiError, ok, readJson, requestIp } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
+import { productLinkSchema } from "@/lib/product-link";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
 const schema = z.object({
@@ -12,7 +13,7 @@ const schema = z.object({
   businessContactId: z.string().uuid().optional().nullable(),
   storeName: optionalText,
   price: z.coerce.number().min(0).max(99999999).optional().nullable(),
-  productUrl: z.string().trim().url("商品链接格式不正确").optional().or(z.literal("")).nullable(),
+  productUrl: productLinkSchema,
   commission: optionalText,
   storeRating: z.coerce.number().min(0).max(5).optional().nullable(),
   supplyChain: optionalText,
@@ -117,4 +118,3 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     return apiError(error);
   }
 }
-
