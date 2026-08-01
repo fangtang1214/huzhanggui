@@ -1,0 +1,102 @@
+services:
+  database:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - database_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - internal
+
+  backup-init:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 1001:1001 /backups && chmod 0770 /backups"]
+    volumes:
+      - backup_data:/backups
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_NAME: ${ADMIN_NAME}
+      APP_URL: https://${DOMAIN}
+      TZ: Asia/Shanghai
+    volumes:
+      - backup_data:/backups
+    depends_on:
+      database:
+        condition: service_healthy
+      backup-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  backup:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    user: "1001:1001"
+    environment:
+      PGHOST: database
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - backup_data:/backups
+      - ./scripts/backup-loop.sh:/usr/local/bin/backup-loop.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup-loop.sh"]
+    depends_on:
+      database:
+        condition: service_healthy
+      backup-init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  database_data:
+  backup_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

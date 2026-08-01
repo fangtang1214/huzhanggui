@@ -1,0 +1,85 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
+import type { CurrentUser } from "@/lib/auth";
+import { AppDataProvider, ToastProvider, apiFetch } from "./client-utils";
+import { DashboardView } from "./views/dashboard-view";
+import { ProductsView, ProductFormView, ProductDetailView } from "./views/products-view";
+import { SamplesView, SampleDetailView, ScannerView } from "./views/samples-view";
+import { MovementsView } from "./views/movements-view";
+import { OrganizationView } from "./views/organization-view";
+import { UsersView, RolesView } from "./views/access-view";
+import { AuditsView, BackupsView, ProfileView } from "./views/system-view";
+import { Boxes, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, QrCode, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+
+const primaryNav = [
+  { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
+  { href: "/products", key: "products", label: "商品档案", permission: "products:view", icon: FolderKanban },
+  { href: "/samples", key: "samples", label: "实物样品", permission: "samples:view", icon: Boxes },
+  { href: "/scan", key: "scan", label: "扫码流转", permission: "samples:view", icon: ScanLine },
+  { href: "/movements", key: "movements", label: "流转记录", permission: "movements:view", icon: History },
+];
+const manageNav = [
+  { href: "/departments", key: "departments", label: "部门管理", permission: "departments:view", icon: LayoutGrid },
+  { href: "/locations", key: "locations", label: "位置管理", permission: "locations:view", icon: MapPin },
+  { href: "/catalog", key: "catalog", label: "分类标签", permission: "catalog:manage", icon: Tags },
+  { href: "/users", key: "users", label: "账号管理", permission: "users:view", icon: UserCog },
+  { href: "/roles", key: "roles", label: "角色权限", permission: "roles:view", icon: ShieldCheck },
+  { href: "/audits", key: "audits", label: "操作日志", permission: "audits:view", icon: ClipboardList },
+  { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
+];
+
+type NavEntry = (typeof primaryNav)[number] | (typeof manageNav)[number];
+
+function NavGroup({ items, label, can, pathname, onNavigate }: { items: readonly NavEntry[]; label?: string; can: (permission: string) => boolean; pathname: string; onNavigate: () => void }) {
+  return <>{label && <p className="nav-label">{label}</p>}<nav>{items.filter((item) => can(item.permission)).map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); const Icon = item.icon; return <Link className={active ? "active" : ""} href={item.href} key={item.key} onClick={onNavigate}><Icon size={19} /><span>{item.label}</span></Link>; })}</nav></>;
+}
+
+function viewTitle(path: string[]) {
+  if (path[0] === "products" && path[1] === "new") return "登记新商品";
+  if (path[0] === "products" && path[1]) return "商品详情";
+  if (path[0] === "samples" && path[1]) return "样品详情";
+  return [...primaryNav, ...manageNav].find((item) => item.key === (path[0] || "dashboard"))?.label || "斯源样品";
+}
+
+function ViewRouter({ path }: { path: string[] }) {
+  const view = path[0] || "dashboard";
+  if (view === "dashboard") return <DashboardView />;
+  if (view === "products" && path[1] === "new") return <ProductFormView />;
+  if (view === "products" && path[1] && path[2] === "edit") return <ProductFormView id={path[1]} />;
+  if (view === "products" && path[1]) return <ProductDetailView id={path[1]} />;
+  if (view === "products") return <ProductsView />;
+  if (view === "samples" && path[1]) return <SampleDetailView id={path[1]} />;
+  if (view === "samples") return <SamplesView />;
+  if (view === "scan") return <ScannerView />;
+  if (view === "movements") return <MovementsView />;
+  if (view === "departments" || view === "locations" || view === "catalog") return <OrganizationView section={view} />;
+  if (view === "users") return <UsersView />;
+  if (view === "roles") return <RolesView />;
+  if (view === "audits") return <AuditsView />;
+  if (view === "backups") return <BackupsView />;
+  if (view === "profile") return <ProfileView />;
+  return <DashboardView />;
+}
+
+export function SiyuanApp({ initialUser, path }: { initialUser: CurrentUser; path: string[] }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false); const [userOpen, setUserOpen] = useState(false); const pathname = usePathname();
+  const can = (permission: string) => initialUser.permissions.includes("*") || initialUser.permissions.includes(permission);
+  async function logout() { await apiFetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }
+  return <ToastProvider><AppDataProvider user={initialUser}>
+    <div className="app-shell">
+      {sidebarOpen && <button className="sidebar-scrim" aria-label="关闭菜单" onClick={() => setSidebarOpen(false)} />}
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+        <div className="sidebar-brand"><div className="brand-mark"><Boxes size={22} /></div><div><b>斯源直播</b><span>样品管理系统</span></div><button className="mobile-close icon-button" onClick={() => setSidebarOpen(false)}><X size={20} /></button></div>
+        <div className="sidebar-nav"><NavGroup items={primaryNav} can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /><NavGroup items={manageNav} label="系统管理" can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /></div>
+        <div className="sidebar-foot"><div className="department-chip"><UsersRound size={16} /><span>{initialUser.departmentName}</span></div><small>数据持续自动保存</small></div>
+      </aside>
+      <div className="app-main">
+        <header className="topbar"><div className="topbar-title"><button className="mobile-menu icon-button" onClick={() => setSidebarOpen(true)}><Menu size={21} /></button><h2>{viewTitle(path)}</h2></div><div className="topbar-actions">{can("products:create") && <Link href="/products/new" className="button button-primary button-compact"><PackagePlus size={17} /><span>登记到样</span></Link>}{can("samples:view") && <Link href="/scan" className="icon-button qr-shortcut" aria-label="扫码"><QrCode size={20} /></Link>}<div className="user-menu"><button className="user-button" onClick={() => setUserOpen((value) => !value)}><span className="avatar">{initialUser.name.slice(0, 1)}</span><span className="user-copy"><b>{initialUser.name}</b><small>{initialUser.roleName}</small></span><ChevronDown size={16} /></button>{userOpen && <div className="user-dropdown"><Link href="/profile" onClick={() => setUserOpen(false)}><Settings2 size={17} />账号设置</Link><button onClick={logout}><LogOut size={17} />退出登录</button></div>}</div></div></header>
+        <main className="page-content"><ViewRouter path={path} /></main>
+      </div>
+    </div>
+  </AppDataProvider></ToastProvider>;
+}

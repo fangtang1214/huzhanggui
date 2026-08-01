@@ -1,0 +1,76 @@
+"use client";
+
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import type { CurrentUser } from "@/lib/auth";
+
+export type LookupData = {
+  departments: Array<{ id: string; name: string; kind: string }>;
+  locations: Array<{ id: string; name: string; code?: string | null; departmentId: string; departmentName: string }>;
+  categories: Array<{ id: string; name: string }>;
+  tags: Array<{ id: string; name: string; color: string }>;
+  users: Array<{ id: string; name: string; username: string; departmentId: string; departmentName: string }>;
+  roles: Array<{ id: string; name: string }>;
+  permissionGroups: Array<{ label: string; items: Array<{ key: string; label: string }> }>;
+};
+
+export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers } });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.message || "操作失败，请稍后重试");
+  return payload.data as T;
+}
+
+type AppContextValue = {
+  user: CurrentUser;
+  lookups: LookupData | null;
+  refreshLookups: () => Promise<void>;
+  can: (permission: string) => boolean;
+};
+
+const AppContext = createContext<AppContextValue | null>(null);
+
+export function AppDataProvider({ user, children }: { user: CurrentUser; children: ReactNode }) {
+  const [lookups, setLookups] = useState<LookupData | null>(null);
+  const refreshLookups = useCallback(async () => {
+    try { setLookups(await apiFetch<LookupData>("/api/lookups")); } catch { setLookups(null); }
+  }, []);
+  useEffect(() => { void refreshLookups(); }, [refreshLookups]);
+  const value = useMemo<AppContextValue>(() => ({ user, lookups, refreshLookups, can: (permission) => user.permissions.includes("*") || user.permissions.includes(permission) }), [user, lookups, refreshLookups]);
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+export function useAppData() {
+  const value = useContext(AppContext);
+  if (!value) throw new Error("AppDataProvider is missing");
+  return value;
+}
+
+type Toast = { id: number; message: string; tone: "success" | "error" };
+const ToastContext = createContext<(message: string, tone?: Toast["tone"]) => void>(() => {});
+
+export function ToastProvider({ children }: { children: ReactNode }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const show = useCallback((message: string, tone: Toast["tone"] = "success") => {
+    const id = Date.now() + Math.random(); setToasts((items) => [...items, { id, message, tone }]);
+    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 3200);
+  }, []);
+  return <ToastContext.Provider value={show}>{children}<div className="toast-stack" aria-live="polite">{toasts.map((toast) => <div className={`toast toast-${toast.tone}`} key={toast.id}>{toast.message}</div>)}</div></ToastContext.Provider>;
+}
+
+export const useToast = () => useContext(ToastContext);
+
+export function useRemote<T>(url: string | null) {
+  const [data, setData] = useState<T | null>(null); const [loading, setLoading] = useState(Boolean(url)); const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    if (!url) return; setLoading(true); setError("");
+    try { setData(await apiFetch<T>(url)); } catch (reason) { setError(reason instanceof Error ? reason.message : "加载失败"); }
+    finally { setLoading(false); }
+  }, [url]);
+  useEffect(() => { void load(); }, [load]);
+  return { data, loading, error, reload: load, setData };
+}
+
+export function formatDate(value?: string | Date | null, includeTime = false) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", ...(includeTime ? { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false } : {}) }).format(new Date(value));
+}
