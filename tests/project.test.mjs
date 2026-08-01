@@ -20,6 +20,9 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   assert.match(layout, /斯源直播样品管理系统/);
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(packageJson.name, "siyuan-sample-management");
+  const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /node_modules\/postgres/);
+  assert.match(dockerfile, /node_modules\/bcryptjs/);
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {
