@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${SIYUAN_REPO_URL:-https://github.com/REPLACE_GITHUB_USER/siyuan.git}"
+REPO_URL="${SIYUAN_REPO_URL:-https://github.com/fangtang1214/siyuan.git}"
 INSTALL_DIR="/opt/siyuan"
 
 if [ "$(id -u)" -ne 0 ]; then

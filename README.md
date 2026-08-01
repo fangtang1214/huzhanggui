@@ -26,7 +26,13 @@
 
 ## 一键安装
 
-GitHub 仓库发布后，使用仓库首页提供的一键命令。安装过程会询问：
+在已经解析好域名的 Ubuntu 服务器上执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fangtang1214/siyuan/main/install.sh | sudo bash
+```
+
+安装过程会询问：
 
 1. 系统域名；
 2. 初始管理员账号；
