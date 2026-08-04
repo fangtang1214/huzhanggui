@@ -13,6 +13,7 @@ export type CurrentUser = {
   name: string;
   departmentId: string;
   departmentName: string;
+  departmentKind: "business" | "live_room" | "management" | "other";
   roleId: string;
   roleName: string;
   permissions: string[];
@@ -39,7 +40,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const sql = getDb();
   const tokenHash = hashToken(token);
   const rows = await sql`
-    SELECT u.id, u.username, u.name, u.department_id, d.name AS department_name,
+    SELECT u.id, u.username, u.name, u.department_id, d.name AS department_name, d.kind AS department_kind,
            u.role_id, r.name AS role_name, r.permissions, r.data_scope,
            u.must_change_password
     FROM sessions s
@@ -60,6 +61,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     name: row.name,
     departmentId: row.departmentId,
     departmentName: row.departmentName,
+    departmentKind: row.departmentKind,
     roleId: row.roleId,
     roleName: row.roleName,
     permissions: Array.isArray(row.permissions) ? row.permissions : [],

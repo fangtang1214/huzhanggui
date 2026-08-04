@@ -45,6 +45,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 .button-primary:hover:not(:disabled) { background: var(--green-dark); }
 .button-secondary { background: var(--paper-strong); border-color: var(--line); color: var(--ink); }
 .button-secondary:hover:not(:disabled) { border-color: #b5c0bb; background: #fbfcfa; }
+.button-warning { border-color: #e1bd8d; background: #fff4e4; color: #8c5c24; }
+.button-warning:hover:not(:disabled) { border-color: #cf9d60; background: #fbedda; }
 .button-ghost { background: transparent; color: var(--ink-soft); }
 .button-compact { min-height: 36px; padding: 0 12px; font-size: 13px; }
 .icon-button, .icon-plain { display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; cursor: pointer; padding: 0; }
@@ -167,6 +169,7 @@ select { cursor: pointer; }
 .sidebar nav a { height: 43px; padding: 0 12px; display: flex; align-items: center; gap: 11px; border-radius: 9px; color: #bdd0ca; font-weight: 600; }
 .sidebar nav a:hover { color: #fff; background: rgba(255,255,255,.055); }
 .sidebar nav a.active { color: #fff; background: #315e52; box-shadow: inset 3px 0 #d7a469; }
+.nav-count { min-width: 23px; height: 21px; margin-left: auto; padding: 0 6px; display: inline-grid; place-items: center; border-radius: 999px; background: #dc754f; color: #fff; font-size: 10px; line-height: 1; }
 .nav-label { margin: 25px 12px 8px; color: #719188; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
 .sidebar-foot { padding: 17px 20px 20px; border-top: 1px solid rgba(255,255,255,.08); }
 .department-chip { min-height: 34px; padding: 0 10px; display: flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; color: #dbe7e3; }
@@ -652,6 +655,50 @@ select { cursor: pointer; }
 .password-card form { display: grid; gap: 14px; }
 .password-card form .button { justify-self: start; }
 
+/* 商品链接问题协作 */
+.issue-list-panel { display: grid; gap: 12px; }
+.issue-list-panel > .pagination { border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.issue-card { overflow: hidden; padding: 20px 22px 17px; }
+.issue-card.issue-focused { border-color: #c18b4e; box-shadow: 0 0 0 3px rgba(193,139,78,.12), var(--shadow); }
+.issue-history-reminder { margin: -20px -22px 18px; padding: 13px 20px; display: flex; align-items: flex-start; gap: 10px; border-bottom: 1px solid #ead1ae; background: #fff5e7; color: #8d5b22; }
+.issue-history-reminder b, .issue-history-reminder p { display: block; }
+.issue-history-reminder p { margin: 1px 0 0; color: #7a674f; font-size: 12px; }
+.issue-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.issue-product { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.issue-product > div:last-child { min-width: 0; }
+.issue-product h2 { max-width: 600px; margin: 3px 0 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
+.issue-product p { margin: 0; display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+.issue-meta { margin: 15px 0; padding: 9px 12px; display: flex; flex-wrap: wrap; gap: 8px 20px; border-radius: 9px; background: #f6f6f2; color: var(--ink-soft); font-size: 11px; }
+.issue-meta span { display: inline-flex; align-items: center; gap: 5px; }
+.issue-body { display: grid; gap: 12px; }
+.issue-note, .issue-resolution-note { padding: 12px 14px; border-left: 3px solid #d2a76f; border-radius: 0 9px 9px 0; background: #fffaf2; }
+.issue-note small, .issue-note p, .issue-resolution-note small, .issue-resolution-note p { display: block; }
+.issue-note small, .issue-resolution-note small, .issue-links small { color: var(--muted); font-size: 10px; font-weight: 800; }
+.issue-note p, .issue-resolution-note p { margin: 3px 0 0; white-space: pre-wrap; }
+.issue-resolution-note { border-left-color: #8bada1; background: #f1f6f3; }
+.issue-links { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.issue-links > div { min-width: 0; padding: 11px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; border: 1px solid var(--line-soft); border-radius: 10px; background: #fafaf7; }
+.issue-links small { grid-column: 1 / -1; }
+.issue-links code { min-width: 0; overflow: hidden; color: var(--ink-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.issue-links button { padding: 2px 0; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--green); cursor: pointer; font-size: 11px; font-weight: 800; }
+.issue-links .current-link { border-color: #c6d9d2; background: #f1f7f4; }
+.issue-links .resolved-link { border-color: #b9d6c9; background: #eaf5ef; }
+.issue-actions { margin-top: 16px; padding-top: 13px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; border-top: 1px solid var(--line-soft); }
+.issue-actions > :first-child { margin-right: auto; }
+.issue-product-summary { padding: 11px 12px; display: flex; align-items: center; gap: 11px; border-radius: 11px; background: #f5f6f2; }
+.issue-product-summary b, .issue-product-summary span { display: block; }
+.issue-product-summary span { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.issue-result-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.issue-result-picker label { min-height: 79px; padding: 10px; display: flex; flex-direction: column; justify-content: center; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.issue-result-picker label.selected { border-color: #6c9185; background: #edf4f1; box-shadow: inset 0 0 0 1px #6c9185; }
+.issue-result-picker input { display: none; }
+.issue-result-picker b { font-size: 12px; }
+.issue-result-picker small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.issue-repeat-warning { padding: 13px 14px; display: flex; align-items: flex-start; gap: 10px; border: 1px solid #e8c89e; border-radius: 11px; background: #fff6e9; color: #8d5b22; }
+.issue-repeat-warning p { margin: 2px 0 0; color: #75644f; font-size: 12px; }
+.product-mobile-record .issue-mobile-button { flex: 0 0 38px; color: var(--green); }
+.product-mobile-record .issue-mobile-button.has-pending { border-color: #e1bd8d; background: #fff4e4; color: #956329; }
+
 .toast-stack { position: fixed; z-index: 200; right: 22px; bottom: 22px; display: grid; gap: 8px; }
 .toast { min-width: 250px; max-width: 390px; padding: 12px 15px; border-radius: 10px; color: #fff; box-shadow: 0 10px 30px rgba(0,0,0,.18); animation: toast-in .2s ease-out; }
 .toast-success { background: var(--green-dark); }
@@ -684,6 +731,7 @@ select { cursor: pointer; }
   .batch-scan-grid { grid-template-columns: 1fr; }
   .image-large { width: 190px; height: 210px; }
   .product-hero-card, .sample-identity { align-items: flex-start; }
+  .issue-links { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 700px) {
@@ -732,6 +780,16 @@ select { cursor: pointer; }
   .mobile-record.compact { justify-content: space-between; }
   .mobile-record.selectable > input { width: auto; min-height: auto; }
   .mobile-record.selectable.selected { background: #edf4f1; }
+  .issue-card { padding: 16px; }
+  .issue-history-reminder { margin: -16px -16px 15px; padding: 12px 15px; }
+  .issue-card-head { gap: 10px; }
+  .issue-product h2 { max-width: 54vw; font-size: 15px; }
+  .issue-meta { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .issue-links { grid-template-columns: 1fr; }
+  .issue-actions { flex-wrap: wrap; }
+  .issue-actions > :first-child { width: 100%; margin-right: 0; }
+  .issue-actions .button { flex: 1; }
+  .issue-result-picker { grid-template-columns: 1fr; }
   .bulk-bar { align-items: stretch; flex-direction: column; gap: 8px; }
   .check-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid, .image-url-layout { grid-template-columns: 1fr; }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { CurrentUser } from "@/lib/auth";
 import { AppDataProvider, ToastProvider, apiFetch } from "./client-utils";
 import { DashboardView } from "./views/dashboard-view";
@@ -14,11 +14,13 @@ import { OrganizationView } from "./views/organization-view";
 import { UsersView, RolesView } from "./views/access-view";
 import { AuditsView, BackupsView, ProfileView, SystemUpdateView } from "./views/system-view";
 import { RecognitionView } from "./views/recognition-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { LinkIssuesView } from "./views/link-issues-view";
+import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
   { href: "/products", key: "products", label: "商品档案", permission: "products:view", icon: FolderKanban },
+  { href: "/link-issues", key: "link-issues", label: "问题处理", permission: "", icon: CircleAlert },
   { href: "/samples", key: "samples", label: "实物样品", permission: "samples:view", icon: Boxes },
   { href: "/scan", key: "scan", label: "扫码流转", permission: "samples:view", icon: ScanLine },
   { href: "/movements", key: "movements", label: "流转记录", permission: "movements:view", icon: History },
@@ -37,8 +39,8 @@ const manageNav = [
 
 type NavEntry = (typeof primaryNav)[number] | (typeof manageNav)[number];
 
-function NavGroup({ items, label, can, pathname, onNavigate }: { items: readonly NavEntry[]; label?: string; can: (permission: string) => boolean; pathname: string; onNavigate: () => void }) {
-  return <>{label && <p className="nav-label">{label}</p>}<nav>{items.filter((item) => item.permission.split("|").some(can)).map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); const Icon = item.icon; return <Link className={active ? "active" : ""} href={item.href} key={item.key} onClick={onNavigate}><Icon size={19} /><span>{item.label}</span></Link>; })}</nav></>;
+function NavGroup({ items, label, can, pathname, onNavigate, pendingIssueCount = 0 }: { items: readonly NavEntry[]; label?: string; can: (permission: string) => boolean; pathname: string; onNavigate: () => void; pendingIssueCount?: number }) {
+  return <>{label && <p className="nav-label">{label}</p>}<nav>{items.filter((item) => !item.permission || item.permission.split("|").some(can)).map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); const Icon = item.icon; return <Link className={active ? "active" : ""} href={item.href} key={item.key} onClick={onNavigate}><Icon size={19} /><span>{item.label}</span>{item.key === "link-issues" && pendingIssueCount > 0 && <b className="nav-count" aria-label={`${pendingIssueCount} 条待处理问题`}>{pendingIssueCount > 99 ? "99+" : pendingIssueCount}</b>}</Link>; })}</nav></>;
 }
 
 function viewTitle(path: string[]) {
@@ -55,6 +57,7 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "products" && path[1] && path[2] === "edit") return <ProductFormView id={path[1]} />;
   if (view === "products" && path[1]) return <ProductDetailView id={path[1]} />;
   if (view === "products") return <ProductsView />;
+  if (view === "link-issues") return <LinkIssuesView />;
   if (view === "samples" && path[1]) return <SampleDetailView id={path[1]} />;
   if (view === "samples") return <SamplesView />;
   if (view === "scan") return <ScannerView />;
@@ -71,15 +74,20 @@ function ViewRouter({ path }: { path: string[] }) {
 }
 
 export function HuZhangGuiApp({ initialUser, path }: { initialUser: CurrentUser; path: string[] }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false); const [userOpen, setUserOpen] = useState(false); const pathname = usePathname();
+  const [sidebarOpen, setSidebarOpen] = useState(false); const [userOpen, setUserOpen] = useState(false); const [pendingIssueCount, setPendingIssueCount] = useState(0); const pathname = usePathname();
   const can = (permission: string) => initialUser.permissions.includes("*") || initialUser.permissions.includes(permission);
+  const refreshPendingIssueCount = useCallback(async () => {
+    try { const result = await apiFetch<{ count: number }>("/api/link-issues/count"); setPendingIssueCount(result.count); } catch { setPendingIssueCount(0); }
+  }, []);
+  useEffect(() => { void refreshPendingIssueCount(); }, [pathname, refreshPendingIssueCount]);
+  useEffect(() => { const refresh = () => { void refreshPendingIssueCount(); }; window.addEventListener("link-issues:changed", refresh); return () => window.removeEventListener("link-issues:changed", refresh); }, [refreshPendingIssueCount]);
   async function logout() { await apiFetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }
   return <ToastProvider><AppDataProvider user={initialUser}>
     <div className="app-shell">
       {sidebarOpen && <button className="sidebar-scrim" aria-label="关闭菜单" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-brand"><div className="brand-mark"><Image src="/brand/huzhanggui-logo.png" alt="" width={42} height={42} priority /></div><div><b>狐掌柜</b><span>直播样品管理系统</span></div><button className="mobile-close icon-button" onClick={() => setSidebarOpen(false)}><X size={20} /></button></div>
-        <div className="sidebar-nav"><NavGroup items={primaryNav} can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /><NavGroup items={manageNav} label="系统管理" can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /></div>
+        <div className="sidebar-nav"><NavGroup items={primaryNav} can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} pendingIssueCount={pendingIssueCount} /><NavGroup items={manageNav} label="系统管理" can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /></div>
         <div className="sidebar-foot"><div className="department-chip"><UsersRound size={16} /><span>{initialUser.departmentName}</span></div><small>数据持续自动保存</small></div>
       </aside>
       <div className="app-main">

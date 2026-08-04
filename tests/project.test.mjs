@@ -110,6 +110,24 @@ test("批量扫码支持部分成功、统一权限、重复提交保护和本�
   assert.match(migration, /sample_movements_batch_sample_unique/);
 });
 
+test("链接报障支持公共待办、商务处理、历史提醒和重新提交", async () => {
+  const migration = await readFile(new URL("../migrations/007_link_issues.sql", import.meta.url), "utf8");
+  assert.match(migration, /CREATE TABLE link_issues/);
+  assert.match(migration, /previous_issue_id/);
+  assert.match(migration, /WHERE status = 'pending'/);
+  const listRoute = await readFile(new URL("../app/api/link-issues/route.ts", import.meta.url), "utf8");
+  assert.match(listRoute, /previousIssueId/);
+  assert.match(listRoute, /CASE WHEN li\.id = \$\{focusId\}/);
+  const actionRoute = await readFile(new URL("../app/api/link-issues/[id]/route.ts", import.meta.url), "utf8");
+  assert.match(actionRoute, /departmentKind !== "business"/);
+  assert.match(actionRoute, /link_issue\.update_result/);
+  assert.match(actionRoute, /UPDATE products SET product_url/);
+  const view = await readFile(new URL("../components/views/link-issues-view.tsx", import.meta.url), "utf8");
+  assert.match(view, /此问题已在\{handledAgo/);
+  assert.match(view, /重新提交报障/);
+  assert.match(view, /一键复制/);
+});
+
 test("自动货号使用 HZG 两级编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
   assert.equal(formatProductSku("2026-08-02", 7), "HZG-2026-0007");
@@ -216,6 +234,19 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(emptyStatusFilter.rows[0].count, 2);
     const batchIndex = await database.query("SELECT indexname FROM pg_indexes WHERE indexname='sample_movements_batch_sample_unique'");
     assert.equal(batchIndex.rows[0].indexname, "sample_movements_batch_sample_unique");
+    const product = await database.query("SELECT id FROM products WHERE name='升级前商品'");
+    const department = await database.query("SELECT id FROM departments WHERE name='商务部'");
+    const firstIssue = await database.query(`INSERT INTO link_issues(product_id,reported_department_id,report_note)
+      VALUES($1,$2,'链接已下架') RETURNING id`, [product.rows[0].id, department.rows[0].id]);
+    await assert.rejects(database.query(`INSERT INTO link_issues(product_id,reported_department_id,report_note)
+      VALUES($1,$2,'重复报障')`, [product.rows[0].id, department.rows[0].id]), /unique|duplicate/i);
+    await database.query("UPDATE link_issues SET status='replaced',new_product_url='weixinstorehs/200',resolved_at=now() WHERE id=$1", [firstIssue.rows[0].id]);
+    await database.query(`INSERT INTO link_issues(product_id,previous_issue_id,reported_department_id,old_product_url,report_note)
+      VALUES($1,$2,$3,'weixinstorehs/200','最新链接仍不可用')`, [product.rows[0].id, firstIssue.rows[0].id, department.rows[0].id]);
+    const issues = await database.query("SELECT status,previous_issue_id FROM link_issues ORDER BY created_at,id");
+    assert.equal(issues.rows.length, 2);
+    assert.equal(issues.rows[0].status, "replaced");
+    assert.equal(issues.rows[1].previous_issue_id, firstIssue.rows[0].id);
   } finally {
     await database.close();
   }

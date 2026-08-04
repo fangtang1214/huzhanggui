@@ -43,7 +43,12 @@ export async function GET(request: Request) {
       SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.image_urls, p.created_at, p.updated_at,
              c.name AS category_name, u.name AS business_contact_name, count(DISTINCT s.id)::int AS sample_count,
              count(DISTINCT s.id) FILTER (WHERE s.status = 'active')::int AS active_count,
-             string_agg(DISTINCT d.name, '、') AS selected_departments, string_agg(DISTINCT t.name, '、') AS tags
+             string_agg(DISTINCT d.name, '、') AS selected_departments, string_agg(DISTINCT t.name, '、') AS tags,
+             (SELECT li.id FROM link_issues li WHERE li.product_id = p.id AND li.status = 'pending' LIMIT 1) AS pending_issue_id,
+             (SELECT li.id FROM link_issues li WHERE li.product_id = p.id AND li.status IN ('replaced', 'no_change', 'unresolved')
+              ORDER BY li.resolved_at DESC NULLS LAST, li.created_at DESC LIMIT 1) AS latest_resolved_issue_id,
+             (SELECT li.resolved_at FROM link_issues li WHERE li.product_id = p.id AND li.status IN ('replaced', 'no_change', 'unresolved')
+              ORDER BY li.resolved_at DESC NULLS LAST, li.created_at DESC LIMIT 1) AS latest_resolved_at
       FROM products p LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users u ON u.id = p.business_contact_id
       LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
