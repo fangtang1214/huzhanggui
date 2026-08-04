@@ -64,8 +64,7 @@ export async function GET(request: Request) {
         { header: "到样日期", key: "arrivedAt", width: 14 }, { header: "状态", key: "statusText", width: 14 }, { header: "当前位置", key: "place", width: 24 }, { header: "备注", key: "note", width: 24 }, { header: "最后更新", key: "updatedAt", width: 21 },
       ], formatted as unknown as Record<string, unknown>[]);
     }
-    const date = new Date().toISOString().slice(0, 10); const filename = encodeURIComponent(`斯源样品-${type}-${date}.xlsx`);
+    const date = new Date().toISOString().slice(0, 10); const filename = encodeURIComponent(`狐掌柜样品-${type}-${date}.xlsx`);
     return new Response(Buffer.from(workbook), { headers: { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename*=UTF-8''${filename}` } });
   } catch (error) { return apiError(error); }
 }
-

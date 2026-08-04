@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { ArrowRight, Boxes, Eye, EyeOff, LockKeyhole, UserRound } from "lucide-react";
+import Image from "next/image";
+import { ArrowRight, Eye, EyeOff, LockKeyhole, UserRound } from "lucide-react";
 
 export function LoginForm({ returnTo }: { returnTo: string }) {
   const [username, setUsername] = useState("");
@@ -24,9 +25,9 @@ export function LoginForm({ returnTo }: { returnTo: string }) {
   return (
     <main className="login-page">
       <section className="login-brand">
-        <div className="brand-mark brand-mark-large"><Boxes size={29} /></div>
+        <div className="brand-mark brand-mark-large"><Image src="/brand/huzhanggui-logo.png" alt="" width={56} height={56} priority /></div>
         <div>
-          <p className="eyebrow">SIYUAN LIVE COMMERCE</p>
+          <p className="eyebrow">HUZHANGGUI LIVE COMMERCE</p>
           <h1>每一件样品，<br />现在都清楚在哪里。</h1>
           <p className="login-intro">从商务部到直播间，从到样到退样，完整记录每一次流转。</p>
         </div>
@@ -36,7 +37,7 @@ export function LoginForm({ returnTo }: { returnTo: string }) {
       </section>
       <section className="login-panel">
         <form className="login-card" onSubmit={submit}>
-          <div className="mobile-login-logo"><div className="brand-mark"><Boxes size={22} /></div><b>斯源直播</b></div>
+          <div className="mobile-login-logo"><div className="brand-mark"><Image src="/brand/huzhanggui-logo.png" alt="" width={38} height={38} priority /></div><b>狐掌柜</b></div>
           <p className="eyebrow">欢迎回来</p>
           <h2>登录样品管理系统</h2>
           <p className="muted">请输入管理员为你创建的账号和密码</p>
@@ -52,4 +53,3 @@ export function LoginForm({ returnTo }: { returnTo: string }) {
     </main>
   );
 }
-

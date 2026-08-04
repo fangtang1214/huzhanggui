@@ -31,7 +31,7 @@ async function downloadImage(value, redirects = 0) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await fetch(url, { redirect: "manual", signal: controller.signal, headers: { "user-agent": "SiyuanSampleImageMatcher/1.0", accept: "image/*" } });
+    const response = await fetch(url, { redirect: "manual", signal: controller.signal, headers: { "user-agent": "HuZhangGuiSampleImageMatcher/1.0", accept: "image/*" } });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
       if (!location) throw new Error("图片跳转地址无效");

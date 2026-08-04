@@ -41,7 +41,7 @@ try {
     }
     await tx`
       INSERT INTO app_settings (key, value)
-      VALUES ('company', ${tx.json({ name: "斯源直播样品管理系统" })})
+      VALUES ('company', ${tx.json({ name: "狐掌柜-直播样品管理系统" })})
       ON CONFLICT (key) DO NOTHING
     `;
   });

@@ -1,4 +1,4 @@
-# 斯源直播样品管理系统
+# 狐掌柜-直播样品管理系统
 
 面向直播带货公司的内部样品管理系统。它把“商品款式”和“实物样品”分开管理：同一货号可以有多件实物，每件实物都有独立编号、二维码、当前位置和完整流转记录。
 
@@ -31,7 +31,7 @@
 在已经解析好域名的 Ubuntu 服务器上执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fangtang1214/siyuan/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/fangtang1214/huzhanggui/main/install.sh | sudo bash
 ```
 
 安装过程会询问：
@@ -48,10 +48,18 @@ curl -fsSL https://raw.githubusercontent.com/fangtang1214/siyuan/main/install.sh
 登录服务器后运行：
 
 ```bash
-sudo bash /opt/siyuan/update.sh
+sudo bash /opt/huzhanggui/update.sh
 ```
 
 更新不会删除已有数据库、样品记录和备份。
+
+从旧版“斯源直播样品管理系统”首次升级时，请直接运行最新版迁移脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fangtang1214/huzhanggui/main/update.sh | sudo bash
+```
+
+迁移脚本会先自动创建数据库备份，然后将安装目录、数据库、数据库账号、Docker 数据卷和项目标识迁移为 `huzhanggui`。原有账号、权限、商品、样品、流转记录、备份与图片识别模型都会保留。升级完成后，旧路径 `/opt/siyuan` 会作为兼容入口继续可用。旧版的本地更新命令也不会连接到新空数据卷；如果先使用了旧命令，再运行一次上面的最新版迁移脚本即可完成技术标识迁移。
 
 首次使用图片识别时，服务器会自动下载并缓存本地模型，因此第一次可能需要等待几分钟；后续更新会复用模型缓存。历史商品图片会在后台逐步建立索引，不影响正常登记。
 
@@ -73,11 +81,11 @@ sudo bash /opt/siyuan/update.sh
 恢复数据库属于高风险操作。需要恢复时，请先停止录入，并由服务器维护人员按以下方式处理：
 
 ```bash
-cd /opt/siyuan
+cd /opt/huzhanggui
 docker compose stop app backup indexer
-docker compose exec -T database dropdb -U siyuan --if-exists siyuan
-docker compose exec -T database createdb -U siyuan siyuan
-docker compose exec -T database pg_restore -U siyuan -d siyuan --clean --if-exists < 你的备份.dump
+docker compose exec -T database dropdb -U huzhanggui --if-exists huzhanggui
+docker compose exec -T database createdb -U huzhanggui huzhanggui
+docker compose exec -T database pg_restore -U huzhanggui -d huzhanggui --clean --if-exists < 你的备份.dump
 docker compose start app backup indexer
 ```
 

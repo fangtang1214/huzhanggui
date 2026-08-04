@@ -20,9 +20,9 @@ test("系统包含核心样品流转数据结构", async () => {
 
 test("系统使用中文名称并提供一键部署文件", async () => {
   const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
-  assert.match(layout, /斯源直播样品管理系统/);
+  assert.match(layout, /狐掌柜-直播样品管理系统/);
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  assert.equal(packageJson.name, "siyuan-sample-management");
+  assert.equal(packageJson.name, "huzhanggui-sample-management");
   const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /production-dependencies/);
   assert.match(dockerfile, /node_modules/);
@@ -30,11 +30,21 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   assert.match(updateScript, /ADMIN_PASSWORD=.*BOOTSTRAP_PLACEHOLDER/);
   assert.match(updateScript, /8800 8000 8080 8008/);
   assert.match(updateScript, /model-init vision indexer app backup/);
+  assert.match(updateScript, /ALTER DATABASE siyuan RENAME TO huzhanggui/);
+  assert.match(updateScript, /ALTER ROLE siyuan RENAME TO huzhanggui/);
+  assert.match(updateScript, /copy_volume .*huzhanggui_database_data/);
+  assert.match(updateScript, /ln -s "\$INSTALL_DIR" "\$LEGACY_DIR"/);
   const installScript = await readFile(new URL("../install.sh", import.meta.url), "utf8");
   assert.match(installScript, /8800 8000 8080 8008/);
   assert.match(installScript, /systemctl is-active --quiet nginx/);
+  assert.match(installScript, /POSTGRES_DB=huzhanggui/);
+  assert.match(installScript, /fangtang1214\/huzhanggui/);
   const nginxCompose = await readFile(new URL("../docker-compose.nginx.yml", import.meta.url), "utf8");
   assert.match(nginxCompose, /127\.0\.0\.1:\$\{APP_PORT:-8800\}:3000/);
+  const manifest = await readFile(new URL("../app/manifest.ts", import.meta.url), "utf8");
+  assert.match(manifest, /short_name: "狐掌柜"/);
+  await readFile(new URL("../public/brand/huzhanggui-logo.png", import.meta.url));
+  await readFile(new URL("../app/favicon.ico", import.meta.url));
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {

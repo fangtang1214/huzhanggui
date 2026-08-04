@@ -1,8 +1,8 @@
 type Attempt = { count: number; firstAt: number; blockedUntil: number };
 
-const globalAttempts = globalThis as unknown as { siyuanLoginAttempts?: Map<string, Attempt> };
-const attempts = globalAttempts.siyuanLoginAttempts || new Map<string, Attempt>();
-globalAttempts.siyuanLoginAttempts = attempts;
+const globalAttempts = globalThis as unknown as { huzhangguiLoginAttempts?: Map<string, Attempt> };
+const attempts = globalAttempts.huzhangguiLoginAttempts || new Map<string, Attempt>();
+globalAttempts.huzhangguiLoginAttempts = attempts;
 
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -29,4 +29,3 @@ export function recordLoginFailure(key: string) {
 export function clearLoginFailures(key: string) {
   attempts.delete(key);
 }
-

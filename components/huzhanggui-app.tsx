@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import type { CurrentUser } from "@/lib/auth";
@@ -43,7 +44,7 @@ function viewTitle(path: string[]) {
   if (path[0] === "products" && path[1] === "new") return "登记新商品";
   if (path[0] === "products" && path[1]) return "商品详情";
   if (path[0] === "samples" && path[1]) return "样品详情";
-  return [...primaryNav, ...manageNav].find((item) => item.key === (path[0] || "dashboard"))?.label || "斯源样品";
+  return [...primaryNav, ...manageNav].find((item) => item.key === (path[0] || "dashboard"))?.label || "狐掌柜";
 }
 
 function ViewRouter({ path }: { path: string[] }) {
@@ -67,7 +68,7 @@ function ViewRouter({ path }: { path: string[] }) {
   return <DashboardView />;
 }
 
-export function SiyuanApp({ initialUser, path }: { initialUser: CurrentUser; path: string[] }) {
+export function HuZhangGuiApp({ initialUser, path }: { initialUser: CurrentUser; path: string[] }) {
   const [sidebarOpen, setSidebarOpen] = useState(false); const [userOpen, setUserOpen] = useState(false); const pathname = usePathname();
   const can = (permission: string) => initialUser.permissions.includes("*") || initialUser.permissions.includes(permission);
   async function logout() { await apiFetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }
@@ -75,7 +76,7 @@ export function SiyuanApp({ initialUser, path }: { initialUser: CurrentUser; pat
     <div className="app-shell">
       {sidebarOpen && <button className="sidebar-scrim" aria-label="关闭菜单" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
-        <div className="sidebar-brand"><div className="brand-mark"><Boxes size={22} /></div><div><b>斯源直播</b><span>样品管理系统</span></div><button className="mobile-close icon-button" onClick={() => setSidebarOpen(false)}><X size={20} /></button></div>
+        <div className="sidebar-brand"><div className="brand-mark"><Image src="/brand/huzhanggui-logo.png" alt="" width={42} height={42} priority /></div><div><b>狐掌柜</b><span>直播样品管理系统</span></div><button className="mobile-close icon-button" onClick={() => setSidebarOpen(false)}><X size={20} /></button></div>
         <div className="sidebar-nav"><NavGroup items={primaryNav} can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /><NavGroup items={manageNav} label="系统管理" can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /></div>
         <div className="sidebar-foot"><div className="department-chip"><UsersRound size={16} /><span>{initialUser.departmentName}</span></div><small>数据持续自动保存</small></div>
       </aside>

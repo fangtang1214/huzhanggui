@@ -5,7 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 
 function safePath(name: string) {
-  if (!/^siyuan-\d{8}-\d{6}\.dump$/.test(name)) throw new Error("备份文件名不正确");
+  if (!/^(?:huzhanggui|siyuan)-\d{8}-\d{6}\.dump$/.test(name)) throw new Error("备份文件名不正确");
   const root = process.env.NODE_ENV === "production" ? "/backups" : path.join(process.cwd(), ".local-backups");
   return path.join(root, name);
 }

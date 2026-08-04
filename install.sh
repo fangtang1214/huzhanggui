@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${SIYUAN_REPO_URL:-https://github.com/fangtang1214/siyuan.git}"
-INSTALL_DIR="/opt/siyuan"
+REPO_URL="${HUZHANGGUI_REPO_URL:-https://github.com/fangtang1214/huzhanggui.git}"
+INSTALL_DIR="/opt/huzhanggui"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "请使用 sudo 运行安装命令。"
@@ -16,7 +16,7 @@ else
 fi
 
 echo "======================================"
-echo "  斯源直播样品管理系统 · 一键安装"
+echo "  狐掌柜-直播样品管理系统 · 一键安装"
 echo "======================================"
 echo
 
@@ -106,15 +106,16 @@ POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 SESSION_SECRET="$(openssl rand -hex 48)"
 cat > .env <<EOF
 DOMAIN=$DOMAIN
-POSTGRES_DB=siyuan
-POSTGRES_USER=siyuan
+POSTGRES_DB=huzhanggui
+POSTGRES_USER=huzhanggui
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-DATABASE_URL=postgres://siyuan:$POSTGRES_PASSWORD@database:5432/siyuan
+DATABASE_URL=postgres://huzhanggui:$POSTGRES_PASSWORD@database:5432/huzhanggui
 SESSION_SECRET=$SESSION_SECRET
 ADMIN_USERNAME=$ADMIN_USERNAME
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 ADMIN_NAME=$ADMIN_NAME
 DEPLOY_MODE=$DEPLOY_MODE
+COMPOSE_PROJECT_NAME=huzhanggui
 TZ=Asia/Shanghai
 EOF
 if [ "$DEPLOY_MODE" = "nginx" ]; then
@@ -137,7 +138,7 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 if [ "$READY" -ne 1 ]; then
-  echo "系统未能按时启动，请运行：cd /opt/siyuan && docker compose logs app"
+  echo "系统未能按时启动，请运行：cd /opt/huzhanggui && docker compose logs app"
   exit 1
 fi
 
