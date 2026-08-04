@@ -33,8 +33,12 @@ export async function GET(request: Request) {
     const user = await requireUser("products:view"); const sql = getDb(); const url = new URL(request.url);
     const search = (url.searchParams.get("search") || "").trim(); const like = `%${search}%`;
     const departmentId = url.searchParams.get("departmentId") || null; const categoryId = url.searchParams.get("categoryId") || null;
+    const selectedPrices = Array.from(new Set(url.searchParams.getAll("price").filter((value) => /^\d+(?:\.\d{1,2})?$/.test(value)))).slice(0, 10000);
+    const priceOrder = url.searchParams.get("priceOrder");
     const page = Math.max(1, Number(url.searchParams.get("page") || 1)); const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize") || 20))); const offset = (page - 1) * pageSize;
     const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
+    const priceFilter = selectedPrices.length ? sql`AND p.price = ANY(${selectedPrices}::numeric[])` : sql``;
+    const orderBy = priceOrder === "asc" ? sql`p.price ASC NULLS LAST, p.created_at DESC` : priceOrder === "desc" ? sql`p.price DESC NULLS LAST, p.created_at DESC` : sql`p.created_at DESC`;
     const rows = await sql`
       SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.image_urls, p.created_at, p.updated_at,
              c.name AS category_name, u.name AS business_contact_name, count(DISTINCT s.id)::int AS sample_count,
@@ -46,14 +50,26 @@ export async function GET(request: Request) {
       WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
         OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
+        ${priceFilter}
         AND (${scopedDepartment}::uuid IS NULL OR pd.department_id = ${scopedDepartment} OR EXISTS (SELECT 1 FROM samples sx WHERE sx.product_id = p.id AND sx.current_department_id = ${scopedDepartment}))
-      GROUP BY p.id, c.name, u.name ORDER BY p.created_at DESC LIMIT ${pageSize} OFFSET ${offset}`;
+      GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
         OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
+      ${priceFilter}
       AND (${scopedDepartment}::uuid IS NULL OR pd.department_id = ${scopedDepartment} OR EXISTS (SELECT 1 FROM samples sx WHERE sx.product_id = p.id AND sx.current_department_id = ${scopedDepartment}))`;
-    return ok({ rows, total: countRow.total, page, pageSize });
+    const priceOptions = await sql`
+      SELECT p.price::text AS price, count(DISTINCT p.id)::int AS count
+      FROM products p
+      LEFT JOIN product_departments pd ON pd.product_id = p.id
+      WHERE p.archived = false AND p.price IS NOT NULL
+        AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+          OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
+        AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
+        AND (${scopedDepartment}::uuid IS NULL OR pd.department_id = ${scopedDepartment} OR EXISTS (SELECT 1 FROM samples sx WHERE sx.product_id = p.id AND sx.current_department_id = ${scopedDepartment}))
+      GROUP BY p.price ORDER BY p.price ASC`;
+    return ok({ rows, total: countRow.total, page, pageSize, priceOptions });
   } catch (error) { return apiError(error); }
 }
 

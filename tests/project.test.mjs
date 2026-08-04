@@ -52,7 +52,7 @@ test("系统使用中文名称并提供一键部署文件", async () => {
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {
-  const archive = createXlsx("实物样品", [{ header: "货号", key: "sku" }, { header: "当前位置", key: "location" }], [{ sku: "HZG-20260804-001", location: "商务部 · A 货架" }]);
+  const archive = createXlsx("实物样品", [{ header: "货号", key: "sku" }, { header: "当前位置", key: "location" }], [{ sku: "HZG-2026-0001", location: "商务部 · A 货架" }]);
   const files = unzipSync(archive);
   assert.ok(files["xl/workbook.xml"]);
   const sheet = strFromU8(files["xl/worksheets/sheet1.xml"]);
@@ -69,22 +69,40 @@ test("商品链接支持标准网址和视频号内部格式", () => {
 
 test("自动货号使用 HZG 两级编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
-  assert.equal(formatProductSku("2026-08-02", 7), "HZG-20260802-007");
-  assert.equal(formatSampleCode("HZG-20260802-007", 2), "HZG-20260802-007-002");
+  assert.equal(formatProductSku("2026-08-02", 7), "HZG-2026-0007");
+  assert.equal(formatProductSku("2026-12-31", 9999), "HZG-2026-9999");
+  assert.throws(() => formatProductSku("2026-12-31", 10000), /9999/);
+  assert.equal(formatSampleCode("HZG-2026-0007", 2), "HZG-2026-0007-002");
   assert.throws(() => formatProductSku("2026-08-02", Number.NaN), SkuGenerationError);
   assert.throws(() => formatSampleCode("SP-20260802-007", 1), SkuGenerationError);
 
-  let productSequence = 0; let sampleSequence = 0;
-  const tx = { unsafe: async (query) => {
+  let productSequence = 0; let sampleSequence = 0; const sequenceDates = [];
+  const tx = { unsafe: async (query, params) => {
+    if (query.includes("product_sku_sequences")) sequenceDates.push(params[0]);
     if (query.includes("product_sku_sequences")) return [{ sequence: ++productSequence }];
     if (query.includes("product_sample_sequences")) return [{ sequence: ++sampleSequence }];
     return [];
   } };
-  assert.equal(await nextProductSku(tx, "2026-08-04"), "HZG-20260804-001");
-  assert.equal(await nextProductSku(tx, "2026-08-04"), "HZG-20260804-002");
-  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-20260804-001"), "HZG-20260804-001-001");
-  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-20260804-001"), "HZG-20260804-001-002");
+  assert.equal(await nextProductSku(tx, "2026-08-04"), "HZG-2026-0001");
+  assert.equal(await nextProductSku(tx, "2026-12-31"), "HZG-2026-0002");
+  assert.deepEqual(sequenceDates, ["2026-01-01", "2026-01-01"]);
+  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-2026-0001"), "HZG-2026-0001-001");
+  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-2026-0001"), "HZG-2026-0001-002");
   await assert.rejects(nextProductSku({ unsafe: async () => [{ lastValue: 1 }] }, "2026-08-04"), SkuGenerationError);
+});
+
+test("样品列表空筛选可安全加载，商品档案提供价格多选和排序", async () => {
+  const samplesRoute = await readFile(new URL("../app/api/samples/route.ts", import.meta.url), "utf8");
+  assert.equal((samplesRoute.match(/\$\{status\}::text IS NULL/g) || []).length, 2);
+  const productsRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
+  assert.match(productsRoute, /getAll\("price"\)/);
+  assert.match(productsRoute, /priceOptions/);
+  assert.match(productsRoute, /p\.price ASC NULLS LAST/);
+  assert.match(productsRoute, /p\.price DESC NULLS LAST/);
+  const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  for (const step of ["01", "02", "03", "04"]) assert.match(productsView, new RegExp(`section-number">${step}`));
+  assert.match(productsView, /className="arrival-submit"/);
+  assert.match(productsView, /已选 \$\{prices\.length\} 个价格/);
 });
 
 test("图片特征使用余弦相似度比较", () => {
@@ -142,15 +160,17 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(upgradedFeature.rows[0].embedding, null);
     assert.equal(upgradedFeature.rows[0].embedding_vector, null);
     const repairedProduct = await database.query("SELECT sku FROM products WHERE name='升级前商品'");
-    assert.equal(repairedProduct.rows[0].sku, "HZG-20260804-001");
+    assert.equal(repairedProduct.rows[0].sku, "HZG-2026-0001");
     const repairedSamples = await database.query("SELECT code FROM samples ORDER BY created_at");
-    assert.deepEqual(repairedSamples.rows.map((row) => row.code), ["HZG-20260804-001-001", "HZG-20260804-001-002"]);
+    assert.deepEqual(repairedSamples.rows.map((row) => row.code), ["HZG-2026-0001-001", "HZG-2026-0001-002"]);
     const oldCodeAlias = await database.query("SELECT count(*)::int AS count FROM sample_code_aliases");
-    assert.equal(oldCodeAlias.rows[0].count, 2);
-    const oldSkuAlias = await database.query("SELECT alias FROM product_sku_aliases");
-    assert.equal(oldSkuAlias.rows[0].alias, "SP-20260804-NaN");
+    assert.equal(oldCodeAlias.rows[0].count, 4);
+    const oldSkuAliases = await database.query("SELECT alias FROM product_sku_aliases ORDER BY alias");
+    assert.deepEqual(oldSkuAliases.rows.map((row) => row.alias), ["HZG-20260804-001", "SP-20260804-NaN"]);
     const sampleSequence = await database.query("SELECT last_value FROM product_sample_sequences");
     assert.equal(sampleSequence.rows[0].last_value, 2);
+    const emptyStatusFilter = await database.query("SELECT count(*)::int AS count FROM samples s WHERE ($1::text IS NULL OR s.status=$2)", [null, null]);
+    assert.equal(emptyStatusFilter.rows[0].count, 2);
   } finally {
     await database.close();
   }
