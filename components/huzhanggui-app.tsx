@@ -14,7 +14,7 @@ import { OrganizationView } from "./views/organization-view";
 import { UsersView, RolesView } from "./views/access-view";
 import { AuditsView, BackupsView, ProfileView } from "./views/system-view";
 import { RecognitionView } from "./views/recognition-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, QrCode, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
@@ -81,7 +81,7 @@ export function HuZhangGuiApp({ initialUser, path }: { initialUser: CurrentUser;
         <div className="sidebar-foot"><div className="department-chip"><UsersRound size={16} /><span>{initialUser.departmentName}</span></div><small>数据持续自动保存</small></div>
       </aside>
       <div className="app-main">
-        <header className="topbar"><div className="topbar-title"><button className="mobile-menu icon-button" onClick={() => setSidebarOpen(true)}><Menu size={21} /></button><h2>{viewTitle(path)}</h2></div><div className="topbar-actions">{can("products:create") && <Link href="/products/new" className="button button-primary button-compact"><PackagePlus size={17} /><span>登记到样</span></Link>}{can("samples:view") && <Link href="/scan" className="icon-button qr-shortcut" aria-label="扫码"><QrCode size={20} /></Link>}<div className="user-menu"><button className="user-button" onClick={() => setUserOpen((value) => !value)}><span className="avatar">{initialUser.name.slice(0, 1)}</span><span className="user-copy"><b>{initialUser.name}</b><small>{initialUser.roleName}</small></span><ChevronDown size={16} /></button>{userOpen && <div className="user-dropdown"><Link href="/profile" onClick={() => setUserOpen(false)}><Settings2 size={17} />账号设置</Link><button onClick={logout}><LogOut size={17} />退出登录</button></div>}</div></div></header>
+        <header className="topbar"><div className="topbar-title"><button className="mobile-menu icon-button" onClick={() => setSidebarOpen(true)}><Menu size={21} /></button><h2>{viewTitle(path)}</h2></div><div className="topbar-actions">{can("products:create") && <Link href="/products/new" className="button button-primary button-compact"><PackagePlus size={17} /><span>登记到样</span></Link>}{can("samples:view") && <Link href="/scan" className="icon-button scan-shortcut" aria-label="扫码"><ScanLine size={20} /></Link>}<div className="user-menu"><button className="user-button" onClick={() => setUserOpen((value) => !value)}><span className="avatar">{initialUser.name.slice(0, 1)}</span><span className="user-copy"><b>{initialUser.name}</b><small>{initialUser.roleName}</small></span><ChevronDown size={16} /></button>{userOpen && <div className="user-dropdown"><Link href="/profile" onClick={() => setUserOpen(false)}><Settings2 size={17} />账号设置</Link><button onClick={logout}><LogOut size={17} />退出登录</button></div>}</div></div></header>
         <main className="page-content"><ViewRouter path={path} /></main>
       </div>
     </div>

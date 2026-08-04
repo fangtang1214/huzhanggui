@@ -1,4 +1,4 @@
-import QRCode from "qrcode";
+import bwipjs from "bwip-js/node";
 import { z } from "zod";
 import { apiError, ok, readJson, requestIp } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
@@ -56,9 +56,22 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       LEFT JOIN users u ON u.id = m.operator_id
       WHERE m.sample_id = ${sample.id} ORDER BY m.created_at DESC
     `;
-    const baseUrl = process.env.APP_URL || new URL(request.url).origin;
-    const qrCode = await QRCode.toDataURL(`${baseUrl}/s/${sample.code}`, { width: 360, margin: 2, color: { dark: "#183e35", light: "#ffffff" } });
-    return ok({ sample, movements, qrCode });
+    const barcodeImage = await bwipjs.toBuffer({
+      bcid: "code128",
+      text: sample.code,
+      scale: 3,
+      height: 14,
+      includetext: true,
+      textxalign: "center",
+      textsize: 10,
+      paddingwidth: 10,
+      paddingheight: 8,
+      backgroundcolor: "FFFFFF",
+      barcolor: "183E35",
+      textcolor: "183E35",
+    });
+    const barcode = `data:image/png;base64,${barcodeImage.toString("base64")}`;
+    return ok({ sample, movements, barcode });
   } catch (error) {
     return apiError(error);
   }

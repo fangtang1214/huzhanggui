@@ -425,10 +425,10 @@ select { cursor: pointer; }
 .sample-identity-copy dl { margin: 17px 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; }
 .sample-identity-copy dt { color: var(--muted); font-size: 11px; }
 .sample-identity-copy dd { margin: 2px 0 0; }
-.qr-card { padding: 22px; text-align: center; }
-.qr-card h2 { margin: 0; }
-.qr-card img { width: 190px; margin: 9px auto; display: block; }
-.qr-card > p:last-child { margin: 0; color: var(--muted); font-size: 11px; }
+.barcode-card { padding: 22px; text-align: center; }
+.barcode-card h2 { margin: 0; }
+.barcode-card img { width: 100%; max-width: 270px; margin: 14px auto; display: block; }
+.barcode-card > p:last-child { margin: 0; color: var(--muted); font-size: 11px; }
 .timeline-panel { overflow: hidden; }
 .timeline { padding: 22px; }
 .timeline-item { display: grid; grid-template-columns: 33px 1fr; }
@@ -446,12 +446,12 @@ select { cursor: pointer; }
 /* 扫码 */
 .scanner-layout { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: minmax(350px, 1fr) minmax(300px, .72fr); gap: 16px; }
 .scanner-card { padding: 20px; }
-.camera-frame { aspect-ratio: 1; position: relative; overflow: hidden; border-radius: 14px; background: #142d27; }
+.camera-frame { aspect-ratio: 4 / 3; position: relative; overflow: hidden; border-radius: 14px; background: #142d27; }
 .camera-frame video { width: 100%; height: 100%; object-fit: cover; }
 .camera-placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #c9dad5; }
 .camera-placeholder h2 { margin: 12px 0 2px; color: #fff; }
 .camera-placeholder p { margin: 0; color: #8fa8a1; }
-.scan-corners { position: absolute; inset: 19%; }
+.scan-corners { position: absolute; inset: 31% 8%; }
 .scan-corners i { width: 37px; height: 37px; position: absolute; border-color: #e1ad73; border-style: solid; }
 .scan-corners i:nth-child(1) { left: 0; top: 0; border-width: 3px 0 0 3px; }
 .scan-corners i:nth-child(2) { right: 0; top: 0; border-width: 3px 3px 0 0; }
@@ -459,7 +459,9 @@ select { cursor: pointer; }
 .scan-corners i:nth-child(4) { left: 0; bottom: 0; border-width: 0 0 3px 3px; }
 .camera-frame.running .scan-corners::after { content: ""; height: 2px; position: absolute; left: 0; right: 0; top: 0; background: #e1ad73; box-shadow: 0 0 12px #e1ad73; animation: scan 2.2s ease-in-out infinite; }
 @keyframes scan { 0%, 100% { top: 2%; } 50% { top: 96%; } }
-.scanner-actions { margin-top: 14px; text-align: center; }
+.scanner-actions { margin-top: 14px; display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; text-align: center; }
+.scan-file-input { display: none; }
+.scanner-error { width: 100%; margin: 2px 0 0; color: var(--danger); }
 .scanner-manual { padding: 30px; align-self: center; }
 .scanner-icon { width: 48px; height: 48px; margin-bottom: 18px; display: grid; place-items: center; border-radius: 13px; color: var(--green); background: var(--green-pale); }
 .scanner-manual h2 { margin: 3px 0; font-size: 24px; }
@@ -616,7 +618,7 @@ select { cursor: pointer; }
   .mobile-login-logo { margin-bottom: 25px; display: flex; align-items: center; gap: 10px; }
   .mobile-login-logo .brand-mark { width: 38px; height: 38px; flex-basis: 38px; }
   .topbar { height: 62px; }
-  .topbar-title h2, .user-copy, .user-button > svg, .qr-shortcut { display: none; }
+  .topbar-title h2, .user-copy, .user-button > svg, .scan-shortcut { display: none; }
   .topbar-actions { gap: 5px; }
   .topbar-actions .button-compact span { display: none; }
   .topbar-actions .button-compact { width: 40px; padding: 0; }
@@ -663,10 +665,9 @@ select { cursor: pointer; }
   .image-large { width: 100%; height: 250px; }
   .product-meta-grid, .sample-identity-copy dl { grid-template-columns: 1fr; }
   .sample-focus-grid { grid-template-columns: 1fr; }
-  .qr-card { display: grid; grid-template-columns: 1fr 120px; align-items: center; text-align: left; }
-  .qr-card .eyebrow { display: none; }
-  .qr-card img { width: 120px; grid-column: 2; grid-row: 1 / span 2; }
-  .qr-card > p:last-child { grid-column: 1 / -1; }
+  .barcode-card { text-align: center; }
+  .barcode-card .eyebrow { display: none; }
+  .barcode-card img { max-width: 310px; }
   .timeline { padding: 17px; }
   .scanner-layout { grid-template-columns: 1fr; }
   .scanner-manual { padding: 22px; }

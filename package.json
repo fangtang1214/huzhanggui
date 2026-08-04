@@ -17,12 +17,14 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
+    "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
     "bcryptjs": "3.0.3",
+    "bwip-js": "^4.11.2",
     "fflate": "^0.8.2",
     "lucide-react": "1.28.0",
     "next": "^16.2.12",
     "postgres": "3.4.9",
-    "qrcode": "1.5.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "zod": "4.4.3"
@@ -32,7 +34,6 @@
     "@electric-sql/pglite-pgvector": "^0.0.5",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
-    "@types/qrcode": "1.5.6",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.4",

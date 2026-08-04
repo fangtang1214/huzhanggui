@@ -8,6 +8,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
 import { beijingDate, formatProductSku, formatSampleCode, nextProductSampleCode, nextProductSku, SkuGenerationError } from "../lib/sku.ts";
 import { cosineSimilarity } from "../lib/cosine.ts";
+import { extractSampleCode } from "../lib/scan-code.ts";
 
 test("系统包含核心样品流转数据结构", async () => {
   const migration = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
@@ -65,6 +66,13 @@ test("商品链接支持标准网址和视频号内部格式", () => {
   assert.equal(productLinkSchema.parse("https://example.com/product/1"), "https://example.com/product/1");
   assert.equal(isSupportedProductLink("javascript:alert(1)"), false);
   assert.equal(isWebProductLink("weixinstorehs/28512353738164"), false);
+});
+
+test("扫码可读取条形码编号并兼容旧二维码网址", () => {
+  assert.equal(extractSampleCode("HZG-2026-0001-001"), "HZG-2026-0001-001");
+  assert.equal(extractSampleCode("https://example.com/s/HZG-2026-0001-001?from=label"), "HZG-2026-0001-001");
+  assert.equal(extractSampleCode("https://example.com/s/OLD%2D001"), "OLD-001");
+  assert.equal(extractSampleCode("  "), "");
 });
 
 test("自动货号使用 HZG 两级编号", async () => {
