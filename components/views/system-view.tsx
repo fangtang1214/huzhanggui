@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { ClipboardList, Database, Download, HardDrive, KeyRound, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import { CheckCircle2, CircleAlert, ClipboardList, Database, Download, HardDrive, KeyRound, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
 import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, PageHeader, Pagination } from "../ui";
 
@@ -27,6 +27,40 @@ export function BackupsView() {
     <section className="backup-summary"><article className="panel"><span className="summary-icon icon-green"><ShieldCheck size={22} /></span><div><b>每日自动备份</b><p>每天凌晨 03:00（北京时间）执行</p></div></article><article className="panel"><span className="summary-icon icon-blue"><HardDrive size={22} /></span><div><b>保留最近 30 天</b><p>图片使用外链，不进入数据库备份</p></div></article><article className="panel"><span className="summary-icon icon-amber"><Database size={22} /></span><div><b>{data?.length || 0} 个备份</b><p>可下载到本地长期保存</p></div></article></section>
     <section className="panel table-panel">{loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.length ? <EmptyState title="还没有备份文件" description="部署后自动备份服务会每天生成，也可点击立即备份。" /> : <div className="backup-list">{data.map((item) => <article key={item.name}><span className="backup-file"><Database size={20} /></span><div><b>{item.name}</b><small>{formatDate(item.createdAt, true)} · {fileSize(item.size)}</small></div>{can("backups:manage") && <div><a className="icon-button" href={`/api/backups/${item.name}`} title="下载"><Download size={17} /></a><button className="icon-button danger" onClick={() => remove(item)} title="删除"><Trash2 size={17} /></button></div>}</article>)}</div>}</section>
   </>;
+}
+
+type UpdateStatus = { available: boolean; state: "idle" | "queued" | "running" | "succeeded" | "failed"; requestedAt?: string; startedAt?: string; finishedAt?: string; versionBefore?: string; versionAfter?: string };
+const UPDATE_COPY: Record<UpdateStatus["state"], { label: string; description: string }> = {
+  idle: { label: "可以更新", description: "系统已准备好接收更新请求。" },
+  queued: { label: "等待执行", description: "更新请求已提交，服务器即将开始处理。" },
+  running: { label: "正在更新", description: "服务器正在备份数据、下载代码并重新构建网站，期间可能短暂无法访问。" },
+  succeeded: { label: "更新完成", description: "网站已经更新并恢复运行，可以刷新页面使用新版本。" },
+  failed: { label: "更新失败", description: "服务器未能完成更新，原有数据不会因此删除，请登录服务器查看更新日志。" },
+};
+
+export function SystemUpdateView() {
+  const { user } = useAppData(); const toast = useToast(); const { data, loading, error, reload, setData } = useRemote<UpdateStatus>("/api/system/update"); const [submitting, setSubmitting] = useState(false);
+  const active = data?.state === "queued" || data?.state === "running";
+  useEffect(() => { if (!active) return; let cancelled = false; let timer: number; const poll = async () => { await reload(); if (!cancelled) timer = window.setTimeout(poll, 3000); }; timer = window.setTimeout(poll, 3000); return () => { cancelled = true; window.clearTimeout(timer); }; }, [active, reload]);
+  if (!user.permissions.includes("*")) return <ErrorState message="仅超级管理员可以使用系统更新" />;
+  if (loading && !data) return <LoadingState />;
+  if (error && !data) return <ErrorState message={error} retry={reload} />;
+  const status = data || { available: false, state: "idle" as const }; const copy = UPDATE_COPY[status.state];
+  async function update() {
+    if (!confirm("更新期间网站可能有几分钟无法访问。系统会先自动备份数据库，确定立即更新吗？")) return;
+    setSubmitting(true);
+    try { const next = await apiFetch<UpdateStatus>("/api/system/update", { method: "POST" }); setData(next); toast("更新请求已提交，请保持此页面打开"); }
+    catch (reason) { toast(reason instanceof Error ? reason.message : "更新请求提交失败", "error"); }
+    finally { setSubmitting(false); }
+  }
+  return <><PageHeader eyebrow="仅超级管理员" title="系统更新" description="从 GitHub 获取最新版本，自动备份数据库并重新部署网站。" />
+    <section className="panel system-update-card"><div className={`update-state state-${status.state}`}><span>{status.state === "succeeded" ? <CheckCircle2 size={27} /> : status.state === "failed" ? <CircleAlert size={27} /> : <ServerCog size={27} />}</span><div><p className="eyebrow">当前状态</p><h2>{copy.label}</h2><p>{copy.description}</p></div>{active && <RefreshCw className="spin" size={24} />}</div>
+      <dl className="update-details"><div><dt>更新前版本</dt><dd>{status.versionBefore || "—"}</dd></div><div><dt>更新后版本</dt><dd>{status.versionAfter || "—"}</dd></div><div><dt>请求时间</dt><dd>{formatDate(status.requestedAt, true)}</dd></div><div><dt>完成时间</dt><dd>{formatDate(status.finishedAt, true)}</dd></div></dl>
+      {error && data && <p className="update-reconnecting">网站正在重启，暂时无法读取进度，系统会自动重试连接。</p>}
+      {!status.available && <p className="update-unavailable"><TriangleAlert size={18} />网页更新服务尚未安装，请在服务器手动运行一次更新脚本后再使用。</p>}
+      <div className="update-actions"><button className="button button-primary" onClick={update} disabled={!status.available || active || submitting}><RefreshCw size={17} />{submitting ? "正在提交…" : active ? "更新进行中…" : "立即更新"}</button>{status.state === "succeeded" && <button className="button button-secondary" onClick={() => window.location.reload()}>刷新页面</button>}</div>
+      <p className="update-safety"><ShieldCheck size={18} /><span><b>安全更新</b> 更新请求只能由超级管理员提交；执行更新的宿主机服务不会向网站开放 Docker 或系统命令权限。</span></p>
+    </section></>;
 }
 
 export function ProfileView() {

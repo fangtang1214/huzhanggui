@@ -86,9 +86,12 @@ services:
       APP_URL: https://${DOMAIN}
       VISION_URL: http://vision:3100
       IMAGE_MODEL: Xenova/clip-vit-base-patch32:q8
+      SYSTEM_UPDATE_ENABLED: "true"
+      SYSTEM_UPDATE_DIR: /updates
       TZ: Asia/Shanghai
     volumes:
       - backup_data:/backups
+      - /var/lib/huzhanggui-updater:/updates
     depends_on:
       database:
         condition: service_healthy

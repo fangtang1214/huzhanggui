@@ -53,6 +53,14 @@ sudo bash /opt/huzhanggui/update.sh
 
 更新不会删除已有数据库、样品记录和备份。
 
+首次升级到支持网页更新的版本时，请执行一次最新版更新脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fangtang1214/huzhanggui/main/update.sh | sudo bash
+```
+
+完成后，超级管理员可在网站的“系统管理 → 系统更新”中直接更新；普通角色不会显示入口，服务端也会拒绝非超级管理员请求。每次更新前会自动创建数据库备份。
+
 从旧版“斯源直播样品管理系统”首次升级时，请直接运行最新版迁移脚本：
 
 ```bash

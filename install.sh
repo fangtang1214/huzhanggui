@@ -125,6 +125,7 @@ else
   COMPOSE=(docker compose --profile caddy)
 fi
 chmod 600 .env
+bash scripts/install-web-updater.sh
 
 "${COMPOSE[@]}" up -d --build
 

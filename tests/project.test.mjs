@@ -36,6 +36,8 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   assert.match(updateScript, /ALTER ROLE siyuan RENAME TO huzhanggui/);
   assert.match(updateScript, /copy_volume .*huzhanggui_database_data/);
   assert.match(updateScript, /ln -s "\$INSTALL_DIR" "\$LEGACY_DIR"/);
+  assert.match(updateScript, /HUZHANGGUI_UPDATE_REEXEC/);
+  assert.match(updateScript, /升级前数据库备份已创建/);
   const installScript = await readFile(new URL("../install.sh", import.meta.url), "utf8");
   assert.match(installScript, /8800 8000 8080 8008/);
   assert.match(installScript, /systemctl is-active --quiet nginx/);
@@ -46,10 +48,23 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
   assert.match(compose, /pgvector\/pgvector:0\.8\.2-pg15/);
   assert.match(compose, /VISION_DTYPE: q8/);
+  assert.match(compose, /SYSTEM_UPDATE_ENABLED: "true"/);
+  assert.match(compose, /\/var\/lib\/huzhanggui-updater:\/updates/);
   const manifest = await readFile(new URL("../app/manifest.ts", import.meta.url), "utf8");
   assert.match(manifest, /short_name: "狐掌柜"/);
   await readFile(new URL("../public/brand/huzhanggui-logo.png", import.meta.url));
   await readFile(new URL("../app/favicon.ico", import.meta.url));
+});
+
+test("网页更新仅允许超级管理员并由宿主机受控执行", async () => {
+  const route = await readFile(new URL("../app/api/system/update/route.ts", import.meta.url), "utf8");
+  assert.match(route, /requireSuperAdmin/);
+  assert.match(route, /system\.update_requested/);
+  const installer = await readFile(new URL("../scripts/install-web-updater.sh", import.meta.url), "utf8");
+  assert.match(installer, /PathExists=\/var\/lib\/huzhanggui-updater\/request/);
+  const worker = await readFile(new URL("../scripts/web-update-worker.sh", import.meta.url), "utf8");
+  assert.match(worker, /flock -n/);
+  assert.match(worker, /"\$INSTALL_DIR\/update\.sh"/);
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {

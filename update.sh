@@ -44,8 +44,12 @@ set_env() {
 }
 
 cd "$CURRENT_DIR"
-git pull --ff-only
 git remote set-url origin "$REPO_URL"
+git pull --ff-only
+if [ "${HUZHANGGUI_UPDATE_REEXEC:-0}" != "1" ]; then
+  export HUZHANGGUI_UPDATE_REEXEC=1
+  exec bash "$CURRENT_DIR/update.sh"
+fi
 
 DEPLOY_MODE="$(read_env DEPLOY_MODE)"
 if [ -z "$DEPLOY_MODE" ]; then
@@ -231,12 +235,35 @@ SQL
 fi
 
 cd "$CURRENT_DIR"
+bash scripts/install-web-updater.sh
 if [ "$DEPLOY_MODE" = "nginx" ]; then
   COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.nginx.yml)
   docker compose --profile caddy rm -sf caddy >/dev/null 2>&1 || true
-  "${COMPOSE[@]}" up -d --build --remove-orphans database backup-init model-init vision indexer app backup
 else
   COMPOSE=(docker compose --profile caddy)
+fi
+
+"${COMPOSE[@]}" up -d database backup-init >/dev/null
+DATABASE_READY=0
+for _ in $(seq 1 60); do
+  if "${COMPOSE[@]}" exec -T database sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null 2>&1; then
+    DATABASE_READY=1
+    break
+  fi
+  sleep 2
+done
+if [ "$DATABASE_READY" -ne 1 ]; then
+  echo "数据库未能就绪，已停止更新。"
+  exit 1
+fi
+BACKUP_STAMP="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)"
+"${COMPOSE[@]}" run --rm --no-deps --entrypoint /bin/sh backup -c \
+  "pg_dump --format=custom --compress=9 --file=/backups/huzhanggui-$BACKUP_STAMP.dump" >/dev/null
+echo "升级前数据库备份已创建。"
+
+if [ "$DEPLOY_MODE" = "nginx" ]; then
+  "${COMPOSE[@]}" up -d --build --remove-orphans database backup-init model-init vision indexer app backup
+else
   "${COMPOSE[@]}" up -d --build --remove-orphans
 fi
 

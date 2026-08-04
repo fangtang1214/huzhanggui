@@ -124,6 +124,14 @@ export async function requireUser(permission?: string) {
   return user;
 }
 
+export async function requireSuperAdmin() {
+  const user = await requireUser();
+  if (!user.permissions.includes("*")) {
+    throw new AuthError("仅超级管理员可以执行系统更新", 403);
+  }
+  return user;
+}
+
 export class AuthError extends Error {
   constructor(message: string, public status: number) {
     super(message);

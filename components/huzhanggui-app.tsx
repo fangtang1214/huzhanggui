@@ -12,9 +12,9 @@ import { SamplesView, SampleDetailView, ScannerView } from "./views/samples-view
 import { MovementsView } from "./views/movements-view";
 import { OrganizationView } from "./views/organization-view";
 import { UsersView, RolesView } from "./views/access-view";
-import { AuditsView, BackupsView, ProfileView } from "./views/system-view";
+import { AuditsView, BackupsView, ProfileView, SystemUpdateView } from "./views/system-view";
 import { RecognitionView } from "./views/recognition-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
@@ -32,6 +32,7 @@ const manageNav = [
   { href: "/recognition", key: "recognition", label: "图片识别", permission: "image_matching:manage|products:correct_merge", icon: BrainCircuit },
   { href: "/audits", key: "audits", label: "操作日志", permission: "audits:view", icon: ClipboardList },
   { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
+  { href: "/system-update", key: "system-update", label: "系统更新", permission: "*", icon: RefreshCw },
 ];
 
 type NavEntry = (typeof primaryNav)[number] | (typeof manageNav)[number];
@@ -64,6 +65,7 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "recognition") return <RecognitionView />;
   if (view === "audits") return <AuditsView />;
   if (view === "backups") return <BackupsView />;
+  if (view === "system-update") return <SystemUpdateView />;
   if (view === "profile") return <ProfileView />;
   return <DashboardView />;
 }
