@@ -19,7 +19,6 @@ export const PERMISSION_GROUPS = [
     items: [
       { key: "samples:view", label: "查看样品与条形码" },
       { key: "samples:move", label: "修改位置或状态" },
-      { key: "samples:batch", label: "批量修改样品" },
       { key: "samples:archive", label: "归档样品" },
       { key: "samples:export", label: "导出样品" },
       { key: "movements:view", label: "查看流转记录" },

@@ -90,6 +90,26 @@ test("扫码可读取条形码编号并兼容旧二维码网址", () => {
   assert.equal(extractSampleCode("  "), "");
 });
 
+test("批量扫码支持部分成功、统一权限、重复提交保护和本地草稿", async () => {
+  const batchRoute = await readFile(new URL("../app/api/samples/batch/route.ts", import.meta.url), "utf8");
+  assert.match(batchRoute, /requireUser\("samples:move"\)/);
+  assert.match(batchRoute, /max\(100/);
+  assert.match(batchRoute, /batchId/);
+  assert.match(batchRoute, /results/);
+  const scanRoute = await readFile(new URL("../app/api/samples/scan/route.ts", import.meta.url), "utf8");
+  assert.match(scanRoute, /sample_code_aliases/);
+  const scanner = await readFile(new URL("../components/views/batch-scanner.tsx", import.meta.url), "utf8");
+  assert.match(scanner, /huzhanggui:batch-scan:/);
+  assert.match(scanner, /navigator\.vibrate/);
+  assert.match(scanner, /本批已达到 100 件上限/);
+  const productForm = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(productForm, /huzhanggui:product-draft:/);
+  assert.match(productForm, /PRODUCT_DRAFT_LIFETIME/);
+  const migration = await readFile(new URL("../migrations/006_batch_scan.sql", import.meta.url), "utf8");
+  assert.match(migration, /permissions - 'samples:batch'/);
+  assert.match(migration, /sample_movements_batch_sample_unique/);
+});
+
 test("自动货号使用 HZG 两级编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
   assert.equal(formatProductSku("2026-08-02", 7), "HZG-2026-0007");
@@ -194,6 +214,8 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(sampleSequence.rows[0].last_value, 2);
     const emptyStatusFilter = await database.query("SELECT count(*)::int AS count FROM samples s WHERE ($1::text IS NULL OR s.status=$2)", [null, null]);
     assert.equal(emptyStatusFilter.rows[0].count, 2);
+    const batchIndex = await database.query("SELECT indexname FROM pg_indexes WHERE indexname='sample_movements_batch_sample_unique'");
+    assert.equal(batchIndex.rows[0].indexname, "sample_movements_batch_sample_unique");
   } finally {
     await database.close();
   }
