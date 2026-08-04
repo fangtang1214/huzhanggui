@@ -1,6 +1,6 @@
 services:
   database:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:0.8.2-pg15
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -40,6 +40,8 @@ services:
     environment:
       HF_HOME: /models
       VISION_PORT: 3100
+      VISION_MODEL: Xenova/clip-vit-base-patch32
+      VISION_DTYPE: q8
       TZ: Asia/Shanghai
     volumes:
       - model_cache:/models
@@ -50,7 +52,8 @@ services:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 20
+      start_period: 10m
     networks:
       - internal
 
@@ -61,6 +64,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       VISION_URL: http://vision:3100
+      IMAGE_MODEL: Xenova/clip-vit-base-patch32:q8
       TZ: Asia/Shanghai
     depends_on:
       database:
@@ -81,6 +85,7 @@ services:
       ADMIN_NAME: ${ADMIN_NAME}
       APP_URL: https://${DOMAIN}
       VISION_URL: http://vision:3100
+      IMAGE_MODEL: Xenova/clip-vit-base-patch32:q8
       TZ: Asia/Shanghai
     volumes:
       - backup_data:/backups

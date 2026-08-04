@@ -130,7 +130,7 @@ chmod 600 .env
 
 echo "正在等待系统完成首次初始化..."
 READY=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 200); do
   if docker compose exec -T app node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
     READY=1
     break

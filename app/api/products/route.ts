@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { productLinkSchema } from "@/lib/product-link";
-import { nextProductSku } from "@/lib/sku";
+import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
 import { syncProductImageQueue, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 
@@ -26,7 +26,6 @@ const productSchema = z.object({
   if (input.matchDecision === "matched" && !input.matchedProductId) context.addIssue({ code: "custom", path: ["matchedProductId"], message: "请选择确认的同款商品" });
 });
 
-function sampleCode(date: string, seq: string | number | bigint) { return `SY-${date.replaceAll("-", "")}-${String(seq).padStart(6, "0")}`; }
 function nullable(value: string | null | undefined): string | null { return value === "" || value === undefined ? null : value; }
 
 export async function GET(request: Request) {
@@ -44,12 +43,14 @@ export async function GET(request: Request) {
       FROM products p LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users u ON u.id = p.business_contact_id
       LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
-      WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like})
+      WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
         AND (${scopedDepartment}::uuid IS NULL OR pd.department_id = ${scopedDepartment} OR EXISTS (SELECT 1 FROM samples sx WHERE sx.product_id = p.id AND sx.current_department_id = ${scopedDepartment}))
       GROUP BY p.id, c.name, u.name ORDER BY p.created_at DESC LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
-      WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like})
+      WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
       AND (${scopedDepartment}::uuid IS NULL OR pd.department_id = ${scopedDepartment} OR EXISTS (SELECT 1 FROM samples sx WHERE sx.product_id = p.id AND sx.current_department_id = ${scopedDepartment}))`;
     return ok({ rows, total: countRow.total, page, pageSize });
@@ -93,7 +94,7 @@ export async function POST(request: Request) {
       for (const tagId of input.tagIds) await tx`INSERT INTO product_tags(product_id,tag_id) VALUES(${product.id},${tagId})`;
       const codes: string[] = []; const sampleIds: string[] = [];
       for (let index = 0; index < input.quantity; index += 1) {
-        const [sequence] = await tx`SELECT nextval('sample_code_seq') AS seq`; const code = sampleCode(input.arrivedAt, sequence.seq);
+        const code = await nextProductSampleCode(tx as never, String(product.id), String(product.sku));
         const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,created_by)
           VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id}) RETURNING id`;
         await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)

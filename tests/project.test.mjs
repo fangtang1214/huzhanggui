@@ -5,7 +5,8 @@ import { strFromU8, unzipSync } from "fflate";
 import { createXlsx } from "../lib/xlsx.ts";
 import { isSupportedProductLink, isWebProductLink, productLinkSchema } from "../lib/product-link.ts";
 import { PGlite } from "@electric-sql/pglite";
-import { beijingDate, formatProductSku } from "../lib/sku.ts";
+import { vector } from "@electric-sql/pglite-pgvector";
+import { beijingDate, formatProductSku, formatSampleCode, nextProductSampleCode, nextProductSku, SkuGenerationError } from "../lib/sku.ts";
 import { cosineSimilarity } from "../lib/cosine.ts";
 
 test("系统包含核心样品流转数据结构", async () => {
@@ -41,6 +42,9 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   assert.match(installScript, /fangtang1214\/huzhanggui/);
   const nginxCompose = await readFile(new URL("../docker-compose.nginx.yml", import.meta.url), "utf8");
   assert.match(nginxCompose, /127\.0\.0\.1:\$\{APP_PORT:-8800\}:3000/);
+  const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  assert.match(compose, /pgvector\/pgvector:0\.8\.2-pg15/);
+  assert.match(compose, /VISION_DTYPE: q8/);
   const manifest = await readFile(new URL("../app/manifest.ts", import.meta.url), "utf8");
   assert.match(manifest, /short_name: "狐掌柜"/);
   await readFile(new URL("../public/brand/huzhanggui-logo.png", import.meta.url));
@@ -48,7 +52,7 @@ test("系统使用中文名称并提供一键部署文件", async () => {
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {
-  const archive = createXlsx("实物样品", [{ header: "货号", key: "sku" }, { header: "当前位置", key: "location" }], [{ sku: "SY-001", location: "商务部 · A 货架" }]);
+  const archive = createXlsx("实物样品", [{ header: "货号", key: "sku" }, { header: "当前位置", key: "location" }], [{ sku: "HZG-20260804-001", location: "商务部 · A 货架" }]);
   const files = unzipSync(archive);
   assert.ok(files["xl/workbook.xml"]);
   const sheet = strFromU8(files["xl/worksheets/sheet1.xml"]);
@@ -63,9 +67,24 @@ test("商品链接支持标准网址和视频号内部格式", () => {
   assert.equal(isWebProductLink("weixinstorehs/28512353738164"), false);
 });
 
-test("自动货号使用北京时间日期和每日序号", () => {
+test("自动货号使用 HZG 两级编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
-  assert.equal(formatProductSku("2026-08-02", 7), "SP-20260802-007");
+  assert.equal(formatProductSku("2026-08-02", 7), "HZG-20260802-007");
+  assert.equal(formatSampleCode("HZG-20260802-007", 2), "HZG-20260802-007-002");
+  assert.throws(() => formatProductSku("2026-08-02", Number.NaN), SkuGenerationError);
+  assert.throws(() => formatSampleCode("SP-20260802-007", 1), SkuGenerationError);
+
+  let productSequence = 0; let sampleSequence = 0;
+  const tx = { unsafe: async (query) => {
+    if (query.includes("product_sku_sequences")) return [{ sequence: ++productSequence }];
+    if (query.includes("product_sample_sequences")) return [{ sequence: ++sampleSequence }];
+    return [];
+  } };
+  assert.equal(await nextProductSku(tx, "2026-08-04"), "HZG-20260804-001");
+  assert.equal(await nextProductSku(tx, "2026-08-04"), "HZG-20260804-002");
+  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-20260804-001"), "HZG-20260804-001-001");
+  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-20260804-001"), "HZG-20260804-001-002");
+  await assert.rejects(nextProductSku({ unsafe: async () => [{ lastValue: 1 }] }, "2026-08-04"), SkuGenerationError);
 });
 
 test("图片特征使用余弦相似度比较", () => {
@@ -73,12 +92,34 @@ test("图片特征使用余弦相似度比较", () => {
   assert.equal(cosineSimilarity([1, 0], [0, 1]), 0);
 });
 
+test("图片识别使用预热的 Q8 模型与前后台优先队列", async () => {
+  const vision = await readFile(new URL("../scripts/vision-server.mjs", import.meta.url), "utf8");
+  assert.match(vision, /dtype: modelDtype/);
+  assert.match(vision, /warmModel/);
+  assert.match(vision, /interactiveQueue\.shift\(\) \|\| backgroundQueue\.shift\(\)/);
+  const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
+  assert.match(route, /image_embedding_cache/);
+  assert.match(route, /embedding_vector <=>/);
+});
+
 test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
-  const database = new PGlite();
+  const database = new PGlite({ extensions: { vector } });
   try {
     const directory = new URL("../migrations/", import.meta.url);
     const files = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort();
-    for (const file of files) await database.exec(await readFile(new URL(file, directory), "utf8"));
+    for (const file of files) {
+      if (file === "003_image_matching_performance.sql") await database.exec(`
+        INSERT INTO products (sku, name, image_urls, created_at) VALUES ('SP-20260804-NaN', '升级前商品', '["https://example.com/old.jpg"]', '2026-08-04T02:00:00Z');
+        INSERT INTO product_sku_sequences(sku_date,last_value) VALUES ('2026-08-04',1);
+        INSERT INTO product_image_features (product_id, image_url, url_hash, embedding, status)
+        SELECT id, 'https://example.com/old.jpg', repeat('a', 64), ARRAY[1,0]::real[], 'ready' FROM products WHERE sku='SP-20260804-NaN';
+        INSERT INTO samples(code,product_id,arrived_at,created_at)
+        SELECT 'SY-20260804-000001',id,'2026-08-04','2026-08-04T02:01:00Z' FROM products WHERE sku='SP-20260804-NaN';
+        INSERT INTO samples(code,product_id,arrived_at,created_at)
+        SELECT 'SY-20260804-000002',id,'2026-08-04','2026-08-04T02:02:00Z' FROM products WHERE sku='SP-20260804-NaN';
+      `);
+      await database.exec(await readFile(new URL(file, directory), "utf8"));
+    }
     await database.exec(`
       INSERT INTO departments (name, kind) VALUES ('商务部', 'business')
       ON CONFLICT ((lower(name))) DO UPDATE SET active = true;
@@ -89,6 +130,27 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(result.rows[0].count, 1);
     const settings = await database.query("SELECT value->>'mode' AS mode FROM app_settings WHERE key = 'image_matching'");
     assert.equal(settings.rows[0].mode, "standard");
+    const model = await database.query("SELECT value->>'model' AS model FROM app_settings WHERE key = 'image_matching'");
+    assert.equal(model.rows[0].model, "Xenova/clip-vit-base-patch32:q8");
+    const vectorColumn = await database.query("SELECT data_type FROM information_schema.columns WHERE table_name='product_image_features' AND column_name='embedding_vector'");
+    assert.equal(vectorColumn.rows[0].data_type, "USER-DEFINED");
+    const vectorIndex = await database.query("SELECT indexname FROM pg_indexes WHERE indexname='product_image_features_embedding_hnsw_idx'");
+    assert.equal(vectorIndex.rows[0].indexname, "product_image_features_embedding_hnsw_idx");
+    const upgradedFeature = await database.query("SELECT model,status,embedding,embedding_vector FROM product_image_features LIMIT 1");
+    assert.equal(upgradedFeature.rows[0].model, "Xenova/clip-vit-base-patch32:q8");
+    assert.equal(upgradedFeature.rows[0].status, "pending");
+    assert.equal(upgradedFeature.rows[0].embedding, null);
+    assert.equal(upgradedFeature.rows[0].embedding_vector, null);
+    const repairedProduct = await database.query("SELECT sku FROM products WHERE name='升级前商品'");
+    assert.equal(repairedProduct.rows[0].sku, "HZG-20260804-001");
+    const repairedSamples = await database.query("SELECT code FROM samples ORDER BY created_at");
+    assert.deepEqual(repairedSamples.rows.map((row) => row.code), ["HZG-20260804-001-001", "HZG-20260804-001-002"]);
+    const oldCodeAlias = await database.query("SELECT count(*)::int AS count FROM sample_code_aliases");
+    assert.equal(oldCodeAlias.rows[0].count, 2);
+    const oldSkuAlias = await database.query("SELECT alias FROM product_sku_aliases");
+    assert.equal(oldSkuAlias.rows[0].alias, "SP-20260804-NaN");
+    const sampleSequence = await database.query("SELECT last_value FROM product_sample_sequences");
+    assert.equal(sampleSequence.rows[0].last_value, 2);
   } finally {
     await database.close();
   }

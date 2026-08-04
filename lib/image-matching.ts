@@ -2,9 +2,27 @@ import { createHash } from "node:crypto";
 import { getDb } from "./db";
 export { cosineSimilarity } from "./cosine";
 
-export const IMAGE_MODEL = "Xenova/clip-vit-base-patch32";
+export const IMAGE_MODEL = process.env.IMAGE_MODEL || "Xenova/clip-vit-base-patch32:q8";
 export const MATCH_THRESHOLDS = { strict: 0.9, standard: 0.82, relaxed: 0.74 } as const;
 export type MatchMode = keyof typeof MATCH_THRESHOLDS;
+
+export type RecognitionTimings = {
+  cacheHit?: boolean;
+  cacheMs?: number;
+  queueMs?: number;
+  downloadMs?: number;
+  decodeMs?: number;
+  inferenceMs?: number;
+  lookupMs?: number;
+  totalMs?: number;
+};
+
+type VisionPayload = {
+  embedding?: number[];
+  message?: string;
+  model?: string;
+  timings?: RecognitionTimings;
+};
 
 export function urlHash(value: string) {
   return createHash("sha256").update(value.trim()).digest("hex");
@@ -28,9 +46,13 @@ export async function embedImage(imageUrl: string) {
       body: JSON.stringify({ imageUrl }),
       signal: controller.signal,
     });
-    const payload = await response.json() as { embedding?: number[]; message?: string };
-    if (!response.ok || !Array.isArray(payload.embedding)) throw new Error(payload.message || "图片识别服务暂时不可用");
-    return payload.embedding;
+    const payload = await response.json() as VisionPayload;
+    if (!response.ok || !Array.isArray(payload.embedding)) {
+      const error = new Error(payload.message || "图片识别服务暂时不可用") as Error & { timings?: RecognitionTimings };
+      error.timings = payload.timings;
+      throw error;
+    }
+    return { embedding: payload.embedding, timings: payload.timings || {}, model: payload.model || IMAGE_MODEL };
   } finally {
     clearTimeout(timeout);
   }
@@ -44,7 +66,15 @@ export async function syncProductImageQueue(productId: string, imageUrls: string
       await tx`
         INSERT INTO product_image_features(product_id, image_url, url_hash, model)
         VALUES (${productId}, ${imageUrl}, ${urlHash(imageUrl)}, ${IMAGE_MODEL})
-        ON CONFLICT(product_id, url_hash) DO UPDATE SET image_url = excluded.image_url
+        ON CONFLICT(product_id, url_hash) DO UPDATE SET
+          image_url = excluded.image_url,
+          status = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.status ELSE 'pending' END,
+          embedding = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.embedding ELSE NULL END,
+          embedding_vector = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.embedding_vector ELSE NULL END,
+          error = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.error ELSE NULL END,
+          attempts = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.attempts ELSE 0 END,
+          model = excluded.model,
+          updated_at = now()
       `;
     }
     if (unique.length) {

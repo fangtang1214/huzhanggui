@@ -3,6 +3,7 @@ import { apiError, created, readJson, requestIp } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
+import { nextProductSampleCode } from "@/lib/sku";
 
 const schema = z.object({
   quantity: z.coerce.number().int().min(1).max(500),
@@ -27,8 +28,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const codes = await sql.begin(async (tx) => {
       const values: string[] = [];
       for (let index = 0; index < input.quantity; index += 1) {
-        const [sequence] = await tx`SELECT nextval('sample_code_seq') AS seq`;
-        const code = `SY-${input.arrivedAt.replaceAll("-", "")}-${String(sequence.seq).padStart(6, "0")}`;
+        const code = await nextProductSampleCode(tx as never, String(product.id), String(product.sku));
         const [sample] = await tx`
           INSERT INTO samples (code, product_id, arrived_at, status, current_department_id, current_location_id, note, created_by)
           VALUES (${code}, ${id}, ${input.arrivedAt}, 'active', ${input.departmentId}, ${input.locationId || null}, ${input.note || null}, ${user.id})
@@ -48,4 +48,3 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return apiError(error);
   }
 }
-

@@ -4,7 +4,7 @@ import { AuthError, hasPermission, requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { IMAGE_MODEL, MATCH_THRESHOLDS, syncProductImageQueue } from "@/lib/image-matching";
-import { nextProductSku } from "@/lib/sku";
+import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
 
 function dbValue(value: unknown): string | number | boolean | null {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null;
@@ -20,7 +20,7 @@ export async function GET() {
     const [setting] = await sql`SELECT value FROM app_settings WHERE key='image_matching'`;
     const [progress] = await sql`SELECT count(*)::int AS total, count(*) FILTER(WHERE status='ready')::int AS ready,
       count(*) FILTER(WHERE status='pending' OR status='processing')::int AS pending, count(*) FILTER(WHERE status='failed')::int AS failed FROM product_image_features`;
-    const runs = await sql`SELECT r.id,r.image_url,r.status,r.decision,r.error,r.threshold_mode,r.threshold,r.candidates,r.created_at,r.decided_at,u.name AS user_name
+    const runs = await sql`SELECT r.id,r.image_url,r.status,r.decision,r.error,r.threshold_mode,r.threshold,r.candidates,r.timings,r.created_at,r.decided_at,u.name AS user_name
       FROM image_match_runs r LEFT JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC LIMIT 50`;
     const batches = await sql`SELECT b.id,b.product_id,b.sample_ids,b.status,b.merged_product_version,b.correction_note,b.created_at,b.corrected_at,
       p.sku,p.name,p.version,u.name AS user_name,cp.sku AS corrected_sku
@@ -50,7 +50,10 @@ export async function POST(request: Request) {
     if (input.action === "retry_failed" || input.action === "reindex_all") {
       if (!hasPermission(user, "image_matching:manage")) return Response.json({ ok: false, message: "没有管理图片识别的权限" }, { status: 403 });
       if (input.action === "retry_failed") await sql`UPDATE product_image_features SET status='pending',error=NULL,attempts=0,updated_at=now() WHERE status='failed'`;
-      else await sql`UPDATE product_image_features SET status='pending',embedding=NULL,error=NULL,attempts=0,model=${IMAGE_MODEL},updated_at=now()`;
+      else await sql.begin(async (tx) => {
+        await tx`UPDATE product_image_features SET status='pending',embedding=NULL,embedding_vector=NULL,error=NULL,attempts=0,model=${IMAGE_MODEL},updated_at=now()`;
+        await tx`DELETE FROM image_embedding_cache WHERE model=${IMAGE_MODEL}`;
+      });
       await writeAudit(user, `image.${input.action}`, "image_index", null, input.action === "retry_failed" ? "重新尝试失败的历史图片" : "重新建立全部图片索引", undefined, requestIp(request));
       return ok({ queued: true });
     }
@@ -68,7 +71,16 @@ export async function POST(request: Request) {
       for (const departmentId of (submitted.departmentIds as string[] || [])) await tx`INSERT INTO product_departments(product_id,department_id) VALUES(${newProduct.id},${departmentId})`;
       for (const tagId of (submitted.tagIds as string[] || [])) await tx`INSERT INTO product_tags(product_id,tag_id) VALUES(${newProduct.id},${tagId})`;
       const sampleIds = (batch.sampleIds as string[] || []);
-      if (sampleIds.length) await tx`UPDATE samples SET product_id=${newProduct.id},updated_at=now() WHERE id=ANY(${sampleIds}::uuid[]) AND product_id=${current.id}`;
+      if (sampleIds.length) {
+        const movedSamples = await tx`SELECT id,code FROM samples WHERE id=ANY(${sampleIds}::uuid[]) AND product_id=${current.id}`;
+        const byId = new Map(movedSamples.map((sample) => [String(sample.id), sample]));
+        for (const sampleId of sampleIds) {
+          const sample = byId.get(sampleId); if (!sample) continue;
+          const code = await nextProductSampleCode(tx as never, String(newProduct.id), String(newProduct.sku));
+          await tx`INSERT INTO sample_code_aliases(alias,sample_id) VALUES(${sample.code},${sample.id}) ON CONFLICT DO NOTHING`;
+          await tx`UPDATE samples SET product_id=${newProduct.id},code=${code},updated_at=now() WHERE id=${sample.id}`;
+        }
+      }
       const canRestore = Number(current.version) === Number(batch.mergedProductVersion) && previous?.product;
       if (canRestore) {
         const p = previous.product as Record<string, unknown>;

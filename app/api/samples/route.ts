@@ -27,7 +27,9 @@ export async function GET(request: Request) {
       LEFT JOIN departments d ON d.id = s.current_department_id
       LEFT JOIN locations l ON l.id = s.current_location_id
       WHERE s.archived = false AND p.archived = false
-        AND (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like})
+        AND (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+          OR EXISTS (SELECT 1 FROM sample_code_aliases sca WHERE sca.sample_id=s.id AND sca.alias ILIKE ${like})
+          OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
         AND (${status} IS NULL OR s.status = ${status})
         AND (${departmentId}::uuid IS NULL OR s.current_department_id = ${departmentId})
         AND (${locationId}::uuid IS NULL OR s.current_location_id = ${locationId})
@@ -40,7 +42,9 @@ export async function GET(request: Request) {
     const [count] = await sql`
       SELECT count(*)::int AS total FROM samples s JOIN products p ON p.id = s.product_id
       WHERE s.archived = false AND p.archived = false
-        AND (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like})
+        AND (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+          OR EXISTS (SELECT 1 FROM sample_code_aliases sca WHERE sca.sample_id=s.id AND sca.alias ILIKE ${like})
+          OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
         AND (${status} IS NULL OR s.status = ${status})
         AND (${departmentId}::uuid IS NULL OR s.current_department_id = ${departmentId})
         AND (${locationId}::uuid IS NULL OR s.current_location_id = ${locationId})
@@ -53,4 +57,3 @@ export async function GET(request: Request) {
     return apiError(error);
   }
 }
-

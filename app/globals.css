@@ -65,6 +65,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 .recognition-status.phase-failed { color: var(--red); background: #fff5f2; border-color: #e9c8c1; flex-wrap: wrap; }
 .recognition-status > div { display: flex; flex-direction: column; flex: 1; }
 .recognition-status > div span { color: var(--ink-soft); font-size: 12px; }
+.recognition-status > div small { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .match-intro { padding: 12px; border-radius: 12px; background: var(--green-pale); display: flex; align-items: center; gap: 14px; }
 .match-intro img { width: 78px; height: 78px; object-fit: cover; border-radius: 9px; background: #fff; }
 .match-intro p { margin: 4px 0 0; color: var(--ink-soft); }

@@ -26,7 +26,8 @@ async function findSample(id: string, scopedDepartment: string | null) {
     LEFT JOIN departments d ON d.id = s.current_department_id
     LEFT JOIN locations l ON l.id = s.current_location_id
     LEFT JOIN categories c ON c.id = p.category_id
-    WHERE (s.id::text = ${id} OR lower(s.code) = ${id.toLowerCase()}) AND s.archived = false
+    WHERE (s.id::text = ${id} OR lower(s.code) = ${id.toLowerCase()}
+      OR EXISTS (SELECT 1 FROM sample_code_aliases sca WHERE sca.sample_id=s.id AND lower(sca.alias)=${id.toLowerCase()})) AND s.archived = false
       AND (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
         OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}))
     LIMIT 1
@@ -118,4 +119,3 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     return apiError(error);
   }
 }
-
