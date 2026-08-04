@@ -64,7 +64,7 @@ test("网页更新仅允许超级管理员并由宿主机受控执行", async ()
   assert.match(installer, /PathExists=\/var\/lib\/huzhanggui-updater\/request/);
   const worker = await readFile(new URL("../scripts/web-update-worker.sh", import.meta.url), "utf8");
   assert.match(worker, /flock -n/);
-  assert.match(worker, /"\$INSTALL_DIR\/update\.sh"/);
+  assert.match(worker, /bash "\$INSTALL_DIR\/update\.sh"/);
 });
 
 test("Excel 导出文件包含中文表头和数据", () => {

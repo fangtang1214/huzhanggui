@@ -39,7 +39,8 @@ write_status "{\"state\":\"running\",\"requestedAt\":\"$REQUESTED_AT\",\"started
 printf '\n===== %s web update started (%s) =====\n' "$STARTED_AT" "$VERSION_BEFORE" >> "$LOG_PATH"
 
 set +e
-"$INSTALL_DIR/update.sh" >> "$LOG_PATH" 2>&1
+# 通过 Bash 调用，避免安装目录从压缩包、旧版 Git 或备份恢复后丢失可执行位而导致退出码 126。
+bash "$INSTALL_DIR/update.sh" >> "$LOG_PATH" 2>&1
 RESULT=$?
 set -e
 
