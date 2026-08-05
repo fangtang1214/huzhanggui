@@ -26,20 +26,23 @@ function validSequence(value: unknown, label: string) {
 
 export function formatProductSku(date: string, sequence: number) {
   const value = validSequence(sequence, "商品货号");
-  if (value > 9999) throw new SkuGenerationError("本年度商品数量已达到 9999 件");
-  const year = date.slice(0, 4);
-  if (!/^\d{4}$/.test(year)) throw new SkuGenerationError("商品货号年份异常");
-  return `HZG-${year}-${String(value).padStart(4, "0")}`;
+  if (value > 9999) throw new SkuGenerationError("本月商品数量已达到 9999 件");
+  const year = date.slice(2, 4);
+  const month = date.slice(5, 7);
+  if (!/^\d{2}$/.test(year) || !/^\d{2}$/.test(month)) throw new SkuGenerationError("商品货号日期异常");
+  return `${year}${month}${String(value).padStart(4, "0")}`;
 }
 
 export function formatSampleCode(productSku: string, sequence: number) {
-  if (!/^HZG-\d{4}-\d{4,}$/.test(productSku)) throw new SkuGenerationError("商品货号格式异常");
+  const isLegacy = /^HZG-\d{4}-\d{4,}$/.test(productSku);
+  const isNew = /^\d{8}$/.test(productSku);
+  if (!isLegacy && !isNew) throw new SkuGenerationError("商品货号格式异常");
   const value = validSequence(sequence, "实物编号");
   return `${productSku}-${String(value).padStart(3, "0")}`;
 }
 
 export async function nextProductSku(tx: Queryable, date = beijingDate()) {
-  const sequenceDate = `${date.slice(0, 4)}-01-01`;
+  const sequenceDate = `${date.slice(0, 4)}-${date.slice(5, 7)}-01`;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const rows = await tx`
       INSERT INTO product_sku_sequences (sku_date, last_value)
@@ -52,7 +55,7 @@ export async function nextProductSku(tx: Queryable, date = beijingDate()) {
     const existing = await tx`SELECT 1 FROM products WHERE lower(sku)=lower(${sku}) LIMIT 1`;
     if (!existing.length) return sku;
   }
-  throw new SkuGenerationError("本年度商品货号序列存在冲突");
+  throw new SkuGenerationError("本月商品货号序列存在冲突");
 }
 
 export async function nextProductSampleCode(tx: Queryable, productId: string, productSku: string) {

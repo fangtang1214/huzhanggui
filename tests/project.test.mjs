@@ -147,12 +147,12 @@ test("账号直接授权并限制普通管理员扩大权限", async () => {
   }
 });
 
-test("自动货号使用 HZG 两级编号", async () => {
+test("自动货号使用年月加流水编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
-  assert.equal(formatProductSku("2026-08-02", 7), "HZG-2026-0007");
-  assert.equal(formatProductSku("2026-12-31", 9999), "HZG-2026-9999");
+  assert.equal(formatProductSku("2026-08-02", 7), "26080007");
+  assert.equal(formatProductSku("2026-12-31", 9999), "26129999");
   assert.throws(() => formatProductSku("2026-12-31", 10000), /9999/);
-  assert.equal(formatSampleCode("HZG-2026-0007", 2), "HZG-2026-0007-002");
+  assert.equal(formatSampleCode("26080007", 2), "26080007-002");
   assert.throws(() => formatProductSku("2026-08-02", Number.NaN), SkuGenerationError);
   assert.throws(() => formatSampleCode("SP-20260802-007", 1), SkuGenerationError);
 
@@ -176,11 +176,11 @@ test("自动货号使用 HZG 两级编号", async () => {
     return txFn;
   }
   const tx = makeTx();
-  assert.equal(await nextProductSku(tx, "2026-08-04"), "HZG-2026-0001");
-  assert.equal(await nextProductSku(tx, "2026-12-31"), "HZG-2026-0002");
-  assert.deepEqual(sequenceDates, ["2026-01-01", "2026-01-01"]);
-  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-2026-0001"), "HZG-2026-0001-001");
-  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-2026-0001"), "HZG-2026-0001-002");
+  assert.equal(await nextProductSku(tx, "2026-08-04"), "26080001");
+  assert.equal(await nextProductSku(tx, "2026-12-31"), "26120002");
+  assert.deepEqual(sequenceDates, ["2026-08-01", "2026-12-01"]);
+  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "26080001"), "26080001-001");
+  assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "26080001"), "26080001-002");
   await assert.rejects(async () => { const badTx = async () => [{ lastValue: 1 }]; await nextProductSku(badTx, "2026-08-04"); }, SkuGenerationError);
 });
 

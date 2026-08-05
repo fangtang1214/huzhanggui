@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiError, ok, readJson, requestIp } from "@/lib/api";
-import { requireUser } from "@/lib/auth";
+import { requireSuperAdmin, requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { productLinkSchema } from "@/lib/product-link";
@@ -116,8 +116,24 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireUser("products:archive");
     const { id } = await context.params;
+    const url = new URL(request.url);
+    if (url.searchParams.get("permanent") === "1") {
+      const user = await requireSuperAdmin();
+      const sql = getDb();
+      const [product] = await sql`SELECT sku, name FROM products WHERE id = ${id}`;
+      if (!product) return Response.json({ ok: false, message: "商品不存在" }, { status: 404 });
+      await sql.begin(async (tx) => {
+        await tx`DELETE FROM sample_movements WHERE sample_id IN (SELECT id FROM samples WHERE product_id = ${id})`;
+        await tx`DELETE FROM samples WHERE product_id = ${id}`;
+        await tx`DELETE FROM link_issues WHERE product_id = ${id}`;
+        await tx`DELETE FROM product_intake_batches WHERE product_id = ${id}`;
+        await tx`DELETE FROM products WHERE id = ${id}`;
+      });
+      await writeAudit(user, "product.delete", "product", id, `永久删除商品 ${product.sku} ${product.name}`, undefined, requestIp(request));
+      return ok({ deleted: true });
+    }
+    const user = await requireUser("products:archive");
     const sql = getDb();
     const [product] = await sql`SELECT sku, name FROM products WHERE id = ${id} AND archived = false`;
     if (!product) return Response.json({ ok: false, message: "商品不存在" }, { status: 404 });
