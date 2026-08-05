@@ -213,7 +213,9 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   assert.match(productsRoute, /right\(p\.sku, 4\)/);
   assert.match(productsRoute, /p\.cooperation_mechanism, p\.notes/);
   const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
-  assert.match(productsView, /一键复制设置/);
+  assert.match(productsView, /设置一键复制内容/);
+  assert.match(productsView, /粘贴后的单元格顺序/);
+  assert.match(productsView, /添加其他内容/);
   assert.match(productsView, /ClipboardItem/);
   assert.match(productsView, /draggable/);
   assert.doesNotMatch(productsView, /className="table-place"><MapPin/);
