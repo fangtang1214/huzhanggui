@@ -84,6 +84,14 @@ export async function POST(request: Request) {
       const canRestore = Number(current.version) === Number(batch.mergedProductVersion) && previous?.product;
       if (canRestore) {
         const p = previous.product as Record<string, unknown>;
+        const previousProductUrl = String(current.productUrl || "");
+        const restoredProductUrl = typeof p.productUrl === "string" ? p.productUrl : "";
+        if (previousProductUrl && previousProductUrl !== restoredProductUrl) {
+          await tx`
+            INSERT INTO product_link_history(product_id, url, replaced_by_url, source, source_entity_id, changed_by)
+            VALUES(${current.id}, ${previousProductUrl}, ${restoredProductUrl || null}, 'recognition_correction', ${batch.id}, ${user.id})
+          `;
+        }
         await tx`UPDATE products SET name=${dbValue(p.name)},business_contact_id=${dbValue(p.businessContactId)},store_name=${dbValue(p.storeName)},price=${dbValue(p.price)},product_url=${dbValue(p.productUrl)},commission=${dbValue(p.commission)},store_rating=${dbValue(p.storeRating)},supply_chain=${dbValue(p.supplyChain)},cooperation_mechanism=${dbValue(p.cooperationMechanism)},category_id=${dbValue(p.categoryId)},image_urls=${tx.json((p.imageUrls as string[]) || [])},notes=${dbValue(p.notes)},archived=${Boolean(p.archived)},version=version+1,updated_at=now() WHERE id=${current.id}`;
         await tx`DELETE FROM product_departments WHERE product_id=${current.id}`;
         for (const departmentId of previous.departmentIds || []) await tx`INSERT INTO product_departments(product_id,department_id) VALUES(${current.id},${departmentId})`;

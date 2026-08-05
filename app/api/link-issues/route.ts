@@ -40,7 +40,8 @@ export async function GET(request: Request) {
       JOIN departments department ON department.id = li.reported_department_id
       LEFT JOIN users reporter ON reporter.id = li.reported_by
       LEFT JOIN users resolver ON resolver.id = li.resolved_by
-      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.supply_chain ILIKE ${like})
+      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.supply_chain ILIKE ${like} OR p.product_url ILIKE ${like}
+        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
         AND (${status}::text IS NULL OR li.status = ${status})
         AND (${departmentId}::uuid IS NULL OR li.reported_department_id = ${departmentId})
       ORDER BY CASE WHEN li.id = ${focusId} THEN 0 WHEN li.status = 'pending' THEN 1 ELSE 2 END, li.created_at DESC
@@ -49,7 +50,8 @@ export async function GET(request: Request) {
       SELECT count(*)::int AS total
       FROM link_issues li
       JOIN products p ON p.id = li.product_id
-      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.supply_chain ILIKE ${like})
+      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.supply_chain ILIKE ${like} OR p.product_url ILIKE ${like}
+        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
         AND (${status}::text IS NULL OR li.status = ${status})
         AND (${departmentId}::uuid IS NULL OR li.reported_department_id = ${departmentId})`;
 

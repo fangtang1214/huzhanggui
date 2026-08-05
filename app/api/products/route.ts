@@ -59,16 +59,18 @@ export async function GET(request: Request) {
       FROM products p LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users u ON u.id = p.business_contact_id
       LEFT JOIN samples s ON s.product_id = p.id AND (p.archived = true OR s.archived = false) LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
-      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.product_url ILIKE ${like}
         OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
-        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
+        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
+        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
         ${priceFilter}
       GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
-      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.product_url ILIKE ${like}
         OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
-        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
+        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
+        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
       ${priceFilter}`;
     const priceOptions = await sql`
@@ -76,9 +78,10 @@ export async function GET(request: Request) {
       FROM products p
       LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = ${archived} AND p.price IS NOT NULL
-        AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+        AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.product_url ILIKE ${like}
           OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
-          OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
+          OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
+          OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
       GROUP BY p.price ORDER BY p.price ASC`;
     return ok({ rows, total: countRow.total, page, pageSize, priceOptions });
@@ -105,6 +108,14 @@ export async function POST(request: Request) {
         const previousDepartments = await tx`SELECT department_id FROM product_departments WHERE product_id = ${product.id}`;
         const previousTags = await tx`SELECT tag_id FROM product_tags WHERE product_id = ${product.id}`;
         previousProductData = { product, departmentIds: previousDepartments.map((row) => row.departmentId), tagIds: previousTags.map((row) => row.tagId) };
+        const previousProductUrl = String(product.productUrl || "");
+        const nextProductUrl = input.productUrl || "";
+        if (previousProductUrl && previousProductUrl !== nextProductUrl) {
+          await tx`
+            INSERT INTO product_link_history(product_id, url, replaced_by_url, source, changed_by)
+            VALUES(${product.id}, ${previousProductUrl}, ${nextProductUrl || null}, 'intake_merge', ${user.id})
+          `;
+        }
         const mergedImages = Array.from(new Set([...(Array.isArray(product.imageUrls) ? product.imageUrls : []), ...input.imageUrls]));
         const updated = await tx`UPDATE products SET name=${input.name}, business_contact_id=${input.businessContactId || null}, store_name=${nullable(input.storeName)},
           price=${input.price ?? null}, product_url=${nullable(input.productUrl)}, commission=${nullable(input.commission)}, store_rating=${input.storeRating ?? null},

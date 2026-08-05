@@ -4,11 +4,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
-import { Archive, ArrowDownUp, ArrowLeft, Boxes, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Clipboard, Download, ExternalLink, FilePenLine, Filter, GripVertical, ImagePlus, LoaderCircle, MapPin, PackagePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Store, TriangleAlert, UserRound, X } from "lucide-react";
+import { Archive, ArrowDownUp, ArrowLeft, Boxes, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Clipboard, Download, ExternalLink, FilePenLine, Filter, GripVertical, History, ImagePlus, LoaderCircle, MapPin, PackagePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Store, TriangleAlert, UserRound, X } from "lucide-react";
 import { activeLocationLabel } from "@/lib/constants";
 import { COMMISSION_INPUT_PATTERN, formatCommission, normalizeCommission } from "@/lib/commission";
 import { isWebProductLink } from "@/lib/product-link";
 import { PRODUCT_COPY_FIELDS, normalizeProductCopyConfig, type ProductCopyConfig, type ProductCopyFieldKey } from "@/lib/product-copy";
+import { copyProductToClipboard } from "@/lib/product-copy-clipboard";
 import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, Modal, PageHeader, Pagination, ProductImage, StatusBadge } from "../ui";
 
@@ -16,47 +17,28 @@ type ProductRow = { id: string; sku: string; name: string; archived?: boolean; s
 type PriceOption = { price: string; count: number };
 type ProductListData = { rows: ProductRow[]; total: number; page: number; pageSize: number; priceOptions: PriceOption[] };
 type SampleRow = { id: string; code: string; arrivedAt: string; status: string; archived?: boolean; note?: string; departmentName?: string; locationName?: string; updatedAt: string };
-type ProductDetailData = { product: ProductRow & { businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> }; samples: SampleRow[] };
+type LinkHistoryRow = { id: string; url: string; replacedByUrl?: string; source: "product_edit" | "link_issue" | "intake_merge" | "recognition_correction"; sourceEntityId?: string; changedByName?: string; changedAt: string };
+type ProductDetailData = { product: ProductRow & { businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> }; samples: SampleRow[]; linkHistory: LinkHistoryRow[] };
 type MatchCandidate = ProductRow & { archived?: boolean; similarity: number; businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> };
 type MatchTimings = { cacheHit?: boolean; totalMs?: number };
 type MatchResult = { runId: string; status: "matched" | "no_match" | "failed"; candidates: MatchCandidate[]; message?: string; timings?: MatchTimings };
 
 const recognitionTiming = (timings?: MatchTimings) => timings?.totalMs === undefined ? "" : `${timings.cacheHit ? "已复用图片特征 · " : ""}用时 ${timings.totalMs >= 1000 ? `${(timings.totalMs / 1000).toFixed(1)} 秒` : `${Math.round(timings.totalMs)} 毫秒`}`;
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] || character);
-}
+const LINK_HISTORY_SOURCE_LABELS: Record<LinkHistoryRow["source"], string> = {
+  product_edit: "编辑商品",
+  link_issue: "问题处理",
+  intake_merge: "同款追加到样",
+  recognition_correction: "同款纠正",
+};
 
-function blobAsDataUrl(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("商品主图读取失败"));
-    reader.readAsDataURL(blob);
-  });
-}
-
-function copyFieldText(product: ProductRow, key: ProductCopyFieldKey) {
-  const values: Record<ProductCopyFieldKey, string> = {
-    image: "",
-    sku: product.sku,
-    name: product.name,
-    departments: product.selectedDepartments || "",
-    businessContact: product.businessContactName || "",
-    storeName: product.storeName || "",
-    price: product.price || "",
-    commission: product.commission ? formatCommission(product.commission) : "",
-    storeRating: product.storeRating || "",
-    productUrl: product.productUrl || "",
-    supplyChain: product.supplyChain || "",
-    cooperationMechanism: product.cooperationMechanism || "",
-    category: product.categoryName || "",
-    tags: product.tags || "",
-    notes: product.notes || "",
-    createdAt: formatDate(product.createdAt, true),
-    updatedAt: formatDate(product.updatedAt || product.createdAt, true),
-  };
-  return values[key];
+function ProductLinkHistory({ rows }: { rows: LinkHistoryRow[] }) {
+  const toast = useToast();
+  async function copyLink(url: string) {
+    try { await navigator.clipboard.writeText(url); toast("历史链接已复制"); }
+    catch { toast("复制失败，请手动选择链接", "error"); }
+  }
+  return <section className="panel product-link-history"><header className="panel-header padded"><div><p className="eyebrow">链接追溯</p><h2>历史链接记录（{rows.length}）</h2></div><small>搜索任意历史链接仍可找到此商品，实际使用以当前商品链接为准。</small></header>{rows.length ? <div className="product-link-history-list">{rows.map((row) => <article key={row.id}><History size={17} /><div><code title={row.url}>{row.url}</code>{row.replacedByUrl && <span>更换为：<code title={row.replacedByUrl}>{row.replacedByUrl}</code></span>}<small>{LINK_HISTORY_SOURCE_LABELS[row.source]} · {row.changedByName || "系统"} · {formatDate(row.changedAt, true)}</small></div><div className="product-link-history-actions">{isWebProductLink(row.url) && <a className="icon-button" href={row.url} target="_blank" rel="noreferrer" aria-label="打开历史链接" title="打开历史链接"><ExternalLink size={16} /></a>}<button type="button" className="icon-button" onClick={() => copyLink(row.url)} aria-label="复制历史链接" title="复制历史链接"><Clipboard size={16} /></button></div></article>)}</div> : <EmptyState title="暂无历史链接" description="以后更换商品链接时，旧链接会自动记录在这里。" />}</section>;
 }
 
 export function ProductsView() {
@@ -119,21 +101,8 @@ export function ProductsView() {
   async function copyProduct(product: ProductRow) {
     setCopyingId(product.id);
     try {
-      const fields = copyConfig.order.filter((key) => copyConfig.enabled.includes(key));
-      let imageDataUrl = "";
-      if (fields.includes("image")) {
-        const response = await fetch(`/api/products/${product.id}/copy-image`);
-        if (!response.ok) { const payload = await response.json().catch(() => null); throw new Error(payload?.message || "商品主图复制失败"); }
-        imageDataUrl = await blobAsDataUrl(await response.blob());
-      }
-      if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") throw new Error("当前浏览器不支持带图片复制，请升级浏览器后重试");
-      const cells = fields.map((key) => key === "image"
-        ? `<td style="padding:4px"><img src="${imageDataUrl}" alt="商品主图" width="120" height="120" style="display:block;object-fit:cover" /></td>`
-        : `<td>${escapeHtml(copyFieldText(product, key))}</td>`).join("");
-      const html = `<table><tbody><tr>${cells}</tr></tbody></table>`;
-      const plainText = fields.map((key) => key === "image" ? "" : copyFieldText(product, key)).join("\t");
-      await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([plainText], { type: "text/plain" }) })]);
-      toast(`已复制 ${fields.length} 项商品信息，可直接粘贴到表格`);
+      const fieldCount = await copyProductToClipboard(product, copyConfig, formatDate);
+      toast(`已复制 ${fieldCount} 项商品信息，可直接粘贴到表格`);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "复制失败", "error"); }
     finally { setCopyingId(""); }
   }
@@ -167,7 +136,7 @@ export function ProductsView() {
       <button type="button" className="active" onClick={() => switchArchiveView(true)}><Archive size={17} />已归档</button>
     </nav>
     <section className="toolbar">
-      <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索已归档商品的货号、序号、名称或店铺" /></div>
+      <div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索已归档商品的货号、序号、名称、店铺或链接" /></div>
       <div className="toolbar-filters">
         <div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部选品直播间</option>{lookups?.departments.filter((item) => item.kind === "live_room").map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div>
         <select value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}><option value="">全部分类</option>{lookups?.categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>
@@ -193,7 +162,7 @@ export function ProductsView() {
   return <>
     <PageHeader eyebrow="商品档案" title={archiveView ? "已归档商品" : "所有商品款式"} description={archiveView ? "归档内容会完整保留，可查看档案或恢复继续使用。" : "一个基础货号对应一个款式，每件实物在基础货号后追加独立序号。"} actions={<>{!archiveView && <button className="button button-secondary" type="button" onClick={openCopySettings}><Settings2 size={17} />复制设置</button>}{!archiveView && can("products:export") && <Link className="button button-secondary" href="/api/export?type=products"><Download size={17} />导出 Excel</Link>}{can("products:create") && <Link className="button button-primary" href="/products/new"><PackagePlus size={18} />登记新商品</Link>}</>} />
     <nav className="archive-view-switch" aria-label="商品档案范围"><button type="button" className={!archiveView ? "active" : ""} onClick={() => switchArchiveView(false)}><Boxes size={17} />在用商品</button><button type="button" className={archiveView ? "active" : ""} onClick={() => switchArchiveView(true)}><Archive size={17} />已归档</button></nav>
-    <section className="toolbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索货号、序号、商品名或店铺名" /></div><div className="toolbar-filters"><div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部选品直播间</option>{lookups?.departments.filter((item) => item.kind === "live_room").map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div><select value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}><option value="">全部分类</option>{lookups?.categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><details className="price-filter"><summary><ArrowDownUp size={16} /><span>{prices.length ? `已选 ${prices.length} 个价格` : "价格筛选"}</span><ChevronDown size={15} /></summary><div className="price-filter-menu"><header><div><b>商品价格</b><small>勾选已有价格，可同时选择多个</small></div>{(prices.length > 0 || priceOrder) && <button type="button" onClick={() => { setPrices([]); setPriceOrder(""); setPage(1); }}>清空</button>}</header><div className="price-sort"><span>排序</span><button type="button" className={!priceOrder ? "selected" : ""} onClick={() => { setPriceOrder(""); setPage(1); }}>默认</button><button type="button" className={priceOrder === "asc" ? "selected" : ""} onClick={() => { setPriceOrder("asc"); setPage(1); }}>从低到高</button><button type="button" className={priceOrder === "desc" ? "selected" : ""} onClick={() => { setPriceOrder("desc"); setPage(1); }}>从高到低</button></div><div className="price-option-list">{availablePrices.length ? availablePrices.map((option) => <label className={prices.includes(option.price) ? "selected" : ""} key={option.price}><input type="checkbox" checked={prices.includes(option.price)} onChange={() => togglePrice(option.price)} /><span>¥{option.price}</span><small>{option.count} 件商品</small></label>) : <p>暂无已填写的商品价格</p>}</div></div></details></div></section>
+    <section className="toolbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索货号、序号、商品名、店铺或链接" /></div><div className="toolbar-filters"><div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部选品直播间</option>{lookups?.departments.filter((item) => item.kind === "live_room").map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div><select value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}><option value="">全部分类</option>{lookups?.categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><details className="price-filter"><summary><ArrowDownUp size={16} /><span>{prices.length ? `已选 ${prices.length} 个价格` : "价格筛选"}</span><ChevronDown size={15} /></summary><div className="price-filter-menu"><header><div><b>商品价格</b><small>勾选已有价格，可同时选择多个</small></div>{(prices.length > 0 || priceOrder) && <button type="button" onClick={() => { setPrices([]); setPriceOrder(""); setPage(1); }}>清空</button>}</header><div className="price-sort"><span>排序</span><button type="button" className={!priceOrder ? "selected" : ""} onClick={() => { setPriceOrder(""); setPage(1); }}>默认</button><button type="button" className={priceOrder === "asc" ? "selected" : ""} onClick={() => { setPriceOrder("asc"); setPage(1); }}>从低到高</button><button type="button" className={priceOrder === "desc" ? "selected" : ""} onClick={() => { setPriceOrder("desc"); setPage(1); }}>从高到低</button></div><div className="price-option-list">{availablePrices.length ? availablePrices.map((option) => <label className={prices.includes(option.price) ? "selected" : ""} key={option.price}><input type="checkbox" checked={prices.includes(option.price)} onChange={() => togglePrice(option.price)} /><span>¥{option.price}</span><small>{option.count} 件商品</small></label>) : <p>暂无已填写的商品价格</p>}</div></div></details></div></section>
     <section className="panel table-panel">
       {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.rows.length ? <EmptyState title="没有找到商品" description={search || prices.length ? "试试更换筛选条件。" : "登记第一款商品后会显示在这里。"} action={can("products:create") ? <Link href="/products/new" className="button button-primary">登记商品</Link> : undefined} /> : <><div className="data-table-wrap"><table className="data-table product-table"><thead><tr><th>商品</th><th>选品直播间</th><th>商务信息</th><th>价格</th><th>佣金</th><th>实物数量</th><th>最近更新</th><th /></tr></thead><tbody>{data.rows.map((product) => <tr key={product.id}><td><Link href={`/products/${product.id}`} className="table-product"><ProductImage urls={product.imageUrls} alt={product.name} size="small" /><div><b>{product.name}</b><span>{product.sku} {product.categoryName && `· ${product.categoryName}`}</span>{product.tags && <small>{product.tags}</small>}</div></Link></td><td><span className="table-departments">{product.selectedDepartments || "—"}</span></td><td><div className="stacked-cell"><span>{product.storeName || "未填店铺"}</span><small>{product.businessContactName || "未指定对接人"}</small></div></td><td><b className="money-cell">{product.price ? `¥${product.price}` : "—"}</b></td><td><b className="commission-cell">{product.commission ? formatCommission(product.commission) : "—"}</b></td><td><b className="quantity-number">{product.sampleCount}</b><small className="quantity-sub">{product.activeCount} 件在库/在用</small></td><td>{formatDate(product.updatedAt || product.createdAt)}</td><td><div className="table-actions"><button type="button" className="button button-compact button-secondary" disabled={copyingId === product.id} onClick={() => copyProduct(product)}><Clipboard size={15} />{copyingId === product.id ? "复制中" : "一键复制"}</button><Link className="row-link" href={`/products/${product.id}`}>查看</Link><button type="button" className={`button button-compact ${product.pendingIssueId ? "button-warning" : "button-secondary"}`} onClick={() => openIssue(product)}><CircleAlert size={15} />{product.pendingIssueId ? "查看报障" : product.latestResolvedIssueId ? "历史报障" : "链接报障"}</button></div></td></tr>)}</tbody></table></div><div className="mobile-record-list">{data.rows.map((product) => <div className="mobile-record product-mobile-record" key={product.id}><Link href={`/products/${product.id}`}><ProductImage urls={product.imageUrls} alt={product.name} size="medium" /><div className="mobile-record-main"><div><span className="sku-chip">{product.sku}</span><b>{product.name}</b></div><p>{product.selectedDepartments || "未指定直播间"}</p><small>{product.price ? `¥${product.price} · ` : ""}{product.commission ? `${formatCommission(product.commission)} · ` : ""}{product.sampleCount} 件样品 · {formatDate(product.updatedAt)}</small></div></Link><div className="product-mobile-actions"><button type="button" className="icon-button" aria-label={`复制 ${product.name}`} disabled={copyingId === product.id} onClick={() => copyProduct(product)}><Clipboard size={18} /></button><button type="button" className={`icon-button issue-mobile-button ${product.pendingIssueId ? "has-pending" : ""}`} aria-label={product.pendingIssueId ? "查看待处理报障" : product.latestResolvedIssueId ? "查看历史报障" : "链接报障"} onClick={() => openIssue(product)}><CircleAlert size={19} /></button></div></div>)}</div><Pagination page={data.page} pageSize={data.pageSize} total={data.total} onChange={setPage} /></>}
     </section>
@@ -342,12 +311,14 @@ export function ProductDetailView({ id }: { id: string }) {
       <section className="panel product-hero-card"><ProductImage urls={p.imageUrls} alt={p.name} size="large" /><div className="product-hero-copy"><div className="badge-line"><span className="sku-chip">{p.sku}</span><span className="soft-badge archived-badge">已归档</span>{p.categoryName && <span className="soft-badge">{p.categoryName}</span>}{p.tags.map((tag) => <span className="soft-badge" style={{ borderColor: tag.color, color: tag.color }} key={tag.id}>{tag.name}</span>)}</div><h2>{p.name}</h2><div className="product-meta-grid"><span><Store size={16} />{p.storeName || "未填店铺"}</span><span><UserRound size={16} />{p.businessContactName || "未指定商务"}</span><span><MapPin size={16} />{p.departments.map((item) => item.name).join("、")}</span><span><CalendarDays size={16} />登记于 {formatDate(p.createdAt)}</span></div><div className="commercial-line"><div><small>价格</small><b>{p.price ? "¥" + p.price : "—"}</b></div><div><small>佣金</small><b>{p.commission ? formatCommission(p.commission) : "—"}</b></div><div><small>店铺评分</small><b>{p.storeRating || "—"}</b></div></div>{p.productUrl && (isWebProductLink(p.productUrl) ? <a className="external-product-link" href={p.productUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} />打开商品链接</a> : <button type="button" className="external-product-link" title={p.productUrl} onClick={async () => { await navigator.clipboard.writeText(p.productUrl || ""); toast("视频号商品链接已复制"); }}><Clipboard size={16} />复制视频号商品链接</button>)}</div></section>
       <section className="panel detail-info"><h2>合作信息</h2><dl><div><dt>供应链 / 机构</dt><dd>{p.supplyChain || "—"}</dd></div><div><dt>合作机制</dt><dd>{p.cooperationMechanism || "—"}</dd></div><div><dt>内部备注</dt><dd>{p.notes || "—"}</dd></div></dl></section>
     </div>
+    <ProductLinkHistory rows={data.linkHistory || []} />
     <section className="panel table-panel"><header className="panel-header padded"><div><p className="eyebrow">历史记录</p><h2>归档样品（{data.samples.length}）</h2></div></header>{data.samples.length === 0 ? <EmptyState title="没有历史样品" /> : <><div className="data-table-wrap"><table className="data-table"><thead><tr><th>独立编号</th><th>到样日期</th><th>归档前状态</th><th>最后位置</th><th>最后更新</th></tr></thead><tbody>{data.samples.map((sample) => <tr key={sample.id}><td><span className="code-text">{sample.code}</span></td><td>{formatDate(sample.arrivedAt)}</td><td><StatusBadge status={sample.status} /></td><td>{activeLocationLabel({ status: sample.status, department_name: sample.departmentName, location_name: sample.locationName })}</td><td>{formatDate(sample.updatedAt, true)}</td></tr>)}</tbody></table></div><div className="mobile-record-list">{data.samples.map((sample) => <div className="mobile-record compact" key={sample.id}><div><b className="code-text">{sample.code}</b><p>{activeLocationLabel({ status: sample.status, department_name: sample.departmentName, location_name: sample.locationName })}</p><small>到样 {formatDate(sample.arrivedAt)}</small></div><StatusBadge status={sample.status} /></div>)}</div></>}</section>
   </>;
   return <>
     <PageHeader eyebrow={p.sku} title={p.name} description={`${p.departments.map((item) => item.name).join("、")} · 共 ${data.samples.length} 件实物样品`} actions={<><Link href="/products" className="button button-ghost"><ArrowLeft size={17} />返回</Link>{can("products:edit") && <button className="button button-secondary" onClick={() => setStockOpen(true)}><Plus size={17} />追加到样</button>}{can("products:edit") && <Link href={`/products/${id}/edit`} className="button button-primary"><FilePenLine size={17} />编辑档案</Link>}</>} />
     <div className="detail-grid"><section className="panel product-hero-card"><ProductImage urls={p.imageUrls} alt={p.name} size="large" /><div className="product-hero-copy"><div className="badge-line"><span className="sku-chip">{p.sku}</span>{p.categoryName && <span className="soft-badge">{p.categoryName}</span>}{p.tags.map((tag) => <span className="soft-badge" style={{ borderColor: tag.color, color: tag.color }} key={tag.id}>{tag.name}</span>)}</div><h2>{p.name}</h2><div className="product-meta-grid"><span><Store size={16} />{p.storeName || "未填店铺"}</span><span><UserRound size={16} />{p.businessContactName || "未指定商务"}</span><span><MapPin size={16} />{p.departments.map((item) => item.name).join("、")}</span><span><CalendarDays size={16} />登记于 {formatDate(p.createdAt)}</span></div><div className="commercial-line"><div><small>价格</small><b>{p.price ? `¥${p.price}` : "—"}</b></div><div><small>佣金</small><b>{p.commission ? formatCommission(p.commission) : "—"}</b></div><div><small>店铺评分</small><b>{p.storeRating || "—"}</b></div></div>{p.productUrl && (isWebProductLink(p.productUrl) ? <a className="external-product-link" href={p.productUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} />打开商品链接</a> : <button type="button" className="external-product-link" title={p.productUrl} onClick={async () => { await navigator.clipboard.writeText(p.productUrl || ""); toast("视频号商品链接已复制"); }}><Clipboard size={16} />复制视频号商品链接</button>)}</div></section>
       <section className="panel detail-info"><h2>合作信息</h2><dl><div><dt>供应链 / 机构</dt><dd>{p.supplyChain || "—"}</dd></div><div><dt>合作机制</dt><dd>{p.cooperationMechanism || "—"}</dd></div><div><dt>内部备注</dt><dd>{p.notes || "—"}</dd></div></dl>{can("products:archive") && <button className="danger-link" onClick={archive}><Archive size={16} />归档商品</button>}</section></div>
+    <ProductLinkHistory rows={data.linkHistory || []} />
     <section className="panel table-panel"><header className="panel-header padded"><div><p className="eyebrow">逐件管理</p><h2>实物样品（{data.samples.length}）</h2></div></header>{data.samples.length === 0 ? <EmptyState title="暂时没有实物样品" /> : <><div className="data-table-wrap"><table className="data-table"><thead><tr><th>独立编号</th><th>到样日期</th><th>状态</th><th>当前位置</th><th>最后更新</th><th /></tr></thead><tbody>{data.samples.map((sample) => <tr key={sample.id}><td><Link href={`/samples/${sample.code}`} className="code-link">{sample.code}</Link></td><td>{formatDate(sample.arrivedAt)}</td><td><StatusBadge status={sample.status} /></td><td>{activeLocationLabel({ status: sample.status, department_name: sample.departmentName, location_name: sample.locationName })}</td><td>{formatDate(sample.updatedAt, true)}</td><td><Link className="row-link" href={`/samples/${sample.code}`}>查看流转</Link></td></tr>)}</tbody></table></div><div className="mobile-record-list">{data.samples.map((sample) => <Link href={`/samples/${sample.code}`} className="mobile-record compact" key={sample.id}><div><b className="code-link">{sample.code}</b><p>{activeLocationLabel({ status: sample.status, department_name: sample.departmentName, location_name: sample.locationName })}</p><small>到样 {formatDate(sample.arrivedAt)}</small></div><StatusBadge status={sample.status} /></Link>)}</div></> }</section>
     {stockOpen && <Modal title="追加实物样品" onClose={() => setStockOpen(false)}><form className="modal-form" onSubmit={addStock}><div className="form-grid"><Field label="追加数量" required><input type="number" min="1" max="500" value={stock.quantity} onChange={(event) => setStock({ ...stock, quantity: event.target.value })} /></Field><Field label="到样日期" required><input type="date" value={stock.arrivedAt} onChange={(event) => setStock({ ...stock, arrivedAt: event.target.value })} /></Field><Field label="所在部门" required><select value={stock.departmentId} onChange={(event) => setStock({ ...stock, departmentId: event.target.value, locationId: "" })}><option value="">请选择</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field><Field label="具体位置"><select value={stock.locationId} onChange={(event) => setStock({ ...stock, locationId: event.target.value })}><option value="">暂不细分</option>{stockLocations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field><Field label="备注" className="field-full"><textarea rows={3} value={stock.note} onChange={(event) => setStock({ ...stock, note: event.target.value })} /></Field></div><div className="modal-actions"><button type="button" className="button button-ghost" onClick={() => setStockOpen(false)}>取消</button><button className="button button-primary" disabled={saving}>{saving ? "正在创建…" : `创建 ${stock.quantity || 0} 件样品`}</button></div></form></Modal>}
   </>;

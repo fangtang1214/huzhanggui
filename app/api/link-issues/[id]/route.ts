@@ -33,7 +33,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       const rows = await tx`
         SELECT li.*, p.sku, p.name AS product_name, p.product_url
         FROM link_issues li JOIN products p ON p.id = li.product_id
-        WHERE li.id = ${issueId} FOR UPDATE OF li`;
+        WHERE li.id = ${issueId} FOR UPDATE OF li, p`;
       const issue = rows[0];
       if (!issue) return { missing: true as const };
 
@@ -66,6 +66,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       const newProductUrl = input.result === "replaced" ? input.newProductUrl : null;
       const resolutionNote = input.resolutionNote || null;
       if (input.result === "replaced") {
+        const previousProductUrl = String(issue.productUrl || "");
+        if (previousProductUrl && previousProductUrl !== newProductUrl) {
+          await tx`
+            INSERT INTO product_link_history(product_id, url, replaced_by_url, source, source_entity_id, changed_by)
+            VALUES(${issue.productId}, ${previousProductUrl}, ${newProductUrl}, 'link_issue', ${issueId}, ${user.id})
+          `;
+        }
         await tx`
           UPDATE products SET product_url = ${newProductUrl}, version = version + 1, updated_at = now()
           WHERE id = ${issue.productId}`;
@@ -90,4 +97,3 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return apiError(error);
   }
 }
-

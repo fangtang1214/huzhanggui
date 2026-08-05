@@ -16,16 +16,18 @@ export async function GET(request: Request) {
       LEFT JOIN departments fd ON fd.id = m.from_department_id LEFT JOIN locations fl ON fl.id = m.from_location_id
       LEFT JOIN departments td ON td.id = m.to_department_id LEFT JOIN locations tl ON tl.id = m.to_location_id
       LEFT JOIN users u ON u.id = m.operator_id
-      WHERE (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR u.name ILIKE ${like}
+      WHERE (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR u.name ILIKE ${like} OR p.product_url ILIKE ${like}
         OR EXISTS (SELECT 1 FROM sample_code_aliases sca WHERE sca.sample_id=s.id AND sca.alias ILIKE ${like})
-        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
+        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
+        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
       ORDER BY m.created_at DESC LIMIT ${pageSize} OFFSET ${offset}
     `;
     const [count] = await sql`
       SELECT count(*)::int AS total FROM sample_movements m JOIN samples s ON s.id = m.sample_id JOIN products p ON p.id = s.product_id LEFT JOIN users u ON u.id = m.operator_id
-      WHERE (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR u.name ILIKE ${like}
+      WHERE (${search} = '' OR s.code ILIKE ${like} OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR u.name ILIKE ${like} OR p.product_url ILIKE ${like}
         OR EXISTS (SELECT 1 FROM sample_code_aliases sca WHERE sca.sample_id=s.id AND sca.alias ILIKE ${like})
-        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
+        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
+        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
     `;
     return ok({ rows, total: count.total, page, pageSize });
   } catch (error) { return apiError(error); }

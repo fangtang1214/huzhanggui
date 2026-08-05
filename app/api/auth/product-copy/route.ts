@@ -10,6 +10,15 @@ const schema = z.object({
   enabled: z.array(z.string()).max(50).refine((values) => values.every(isProductCopyFieldKey), "复制字段配置无效"),
 });
 
+export async function GET() {
+  try {
+    const user = await requireUser();
+    return ok(normalizeProductCopyConfig(user.productCopyConfig));
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
 export async function PATCH(request: Request) {
   try {
     const user = await requireUser();

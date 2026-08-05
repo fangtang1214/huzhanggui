@@ -57,7 +57,15 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
       WHERE s.product_id = ${id} AND (s.archived = false OR ${Boolean(rows[0].archived)} = true)
       ORDER BY s.created_at DESC
     `;
-    return ok({ product: rows[0], samples });
+    const linkHistory = await sql`
+      SELECT history.id, history.url, history.replaced_by_url, history.source, history.source_entity_id,
+             history.changed_at, actor.name AS changed_by_name
+      FROM product_link_history history
+      LEFT JOIN users actor ON actor.id = history.changed_by
+      WHERE history.product_id = ${id}
+      ORDER BY history.changed_at DESC, history.id DESC
+    `;
+    return ok({ product: rows[0], samples, linkHistory });
   } catch (error) {
     return apiError(error);
   }
@@ -72,6 +80,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const [before] = await sql`SELECT * FROM products WHERE id = ${id} AND archived = false`;
     if (!before) return Response.json({ ok: false, message: "商品不存在" }, { status: 404 });
     await sql.begin(async (tx) => {
+      const previousProductUrl = String(before.productUrl || "");
+      const nextProductUrl = input.productUrl || "";
+      if (previousProductUrl && previousProductUrl !== nextProductUrl) {
+        await tx`
+          INSERT INTO product_link_history(product_id, url, replaced_by_url, source, changed_by)
+          VALUES(${id}, ${previousProductUrl}, ${nextProductUrl || null}, 'product_edit', ${user.id})
+        `;
+      }
       await tx`
         UPDATE products SET name = ${input.name},
           business_contact_id = ${input.businessContactId || null}, store_name = ${input.storeName || null},

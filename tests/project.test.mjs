@@ -216,13 +216,16 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   assert.match(productsView, /设置一键复制内容/);
   assert.match(productsView, /粘贴后的单元格顺序/);
   assert.match(productsView, /添加其他内容/);
-  assert.match(productsView, /ClipboardItem/);
+  assert.match(productsView, /copyProductToClipboard/);
   assert.match(productsView, /draggable/);
   assert.doesNotMatch(productsView, /className="table-place"><MapPin/);
   assert.match(productsView, /<th>价格<\/th><th>佣金<\/th>/);
 
   const copyRoute = await readFile(new URL("../app/api/auth/product-copy/route.ts", import.meta.url), "utf8");
   assert.match(copyRoute, /UPDATE users SET product_copy_config/);
+  assert.match(copyRoute, /export async function GET/);
+  const clipboardHelper = await readFile(new URL("../lib/product-copy-clipboard.ts", import.meta.url), "utf8");
+  assert.match(clipboardHelper, /ClipboardItem/);
   const copyImageRoute = await readFile(new URL("../app/api/products/[id]/copy-image/route.ts", import.meta.url), "utf8");
   assert.match(copyImageRoute, /SELECT image_urls FROM products/);
   const restoreRoute = await readFile(new URL("../app/api/products/[id]/restore/route.ts", import.meta.url), "utf8");
@@ -238,11 +241,29 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
 
   const issueRoute = await readFile(new URL("../app/api/link-issues/route.ts", import.meta.url), "utf8");
   assert.match(issueRoute, /p\.supply_chain/);
+  for (const route of ["products/route.ts", "samples/route.ts", "movements/route.ts", "link-issues/route.ts"]) {
+    const source = await readFile(new URL(`../app/api/${route}`, import.meta.url), "utf8");
+    assert.match(source, /product_link_history/);
+    assert.match(source, /product_url ILIKE/);
+  }
+  const productDetailRoute = await readFile(new URL("../app/api/products/[id]/route.ts", import.meta.url), "utf8");
+  assert.match(productDetailRoute, /source, changed_by/);
+  assert.match(productDetailRoute, /linkHistory/);
+  const linkHistoryMigration = await readFile(new URL("../migrations/012_product_link_history.sql", import.meta.url), "utf8");
+  assert.match(linkHistoryMigration, /CREATE TABLE product_link_history/);
+  assert.doesNotMatch(linkHistoryMigration, /INSERT INTO product_link_history/);
+  const samplesView = await readFile(new URL("../components/views/samples-view.tsx", import.meta.url), "utf8");
+  assert.match(samplesView, /copySampleProduct/);
+  assert.match(samplesView, /一键复制/);
+  assert.match(samplesView, /\/api\/auth\/product-copy/);
   const issueView = await readFile(new URL("../components/views/link-issues-view.tsx", import.meta.url), "utf8");
   assert.match(issueView, /供应链：/);
   assert.match(issueView, /等待商务处理/);
   assert.match(issueView, /const processedLink/);
   assert.doesNotMatch(issueView, /商品档案当前链接/);
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(styles, /\.issue-card \{ overflow: hidden; padding: 8px 12px 7px/);
+  assert.match(styles, /\.issue-body:has\(\.issue-resolution-note\)/);
 
   const movementRoute = await readFile(new URL("../app/api/movements/route.ts", import.meta.url), "utf8");
   assert.match(movementRoute, /p\.image_urls/);
@@ -345,6 +366,13 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(legacyStatuses.rows[0].status, "consumed");
     const restoreColumn = await database.query("SELECT data_type FROM information_schema.columns WHERE table_name='samples' AND column_name='archived_with_product'");
     assert.equal(restoreColumn.rows[0].data_type, "boolean");
+    const historyTable = await database.query("SELECT to_regclass('product_link_history') AS name");
+    assert.equal(historyTable.rows[0].name, "product_link_history");
+    const existingHistory = await database.query("SELECT count(*)::int AS count FROM product_link_history");
+    assert.equal(existingHistory.rows[0].count, 0);
+    await database.query("INSERT INTO product_link_history(product_id,url,replaced_by_url,source) VALUES($1,'https://example.com/old-product-link','https://example.com/latest-product-link','product_edit')", [product.rows[0].id]);
+    const fuzzyHistory = await database.query("SELECT count(*)::int AS count FROM products p WHERE EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE $1)", ["%old-product%"]);
+    assert.equal(fuzzyHistory.rows[0].count, 1);
   } finally {
     await database.close();
   }
