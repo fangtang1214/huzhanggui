@@ -11,6 +11,7 @@ import { cosineSimilarity } from "../lib/cosine.ts";
 import { extractSampleCode } from "../lib/scan-code.ts";
 import { formatCommission, normalizeCommission } from "../lib/commission.ts";
 import { DEFAULT_PRODUCT_COPY_CONFIG, normalizeProductCopyConfig } from "../lib/product-copy.ts";
+import { SAMPLE_STATUSES, statusLabel } from "../lib/constants.ts";
 
 test("系统包含核心样品流转数据结构", async () => {
   const migration = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
@@ -235,8 +236,9 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   assert.match(movementRoute, /p\.image_urls/);
   const movementView = await readFile(new URL("../components/views/movements-view.tsx", import.meta.url), "utf8");
   assert.match(movementView, /<ProductImage urls=\{item\.imageUrls\}/);
-  const statuses = await readFile(new URL("../lib/constants.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(statuses, /consumed|scrapped|已消耗|已报废/);
+  assert.deepEqual(SAMPLE_STATUSES.map((item) => item.value), ["active", "returned", "damaged", "lost", "gifted"]);
+  assert.equal(statusLabel("consumed"), "已消耗（历史）");
+  assert.equal(statusLabel("scrapped"), "已报废（历史）");
 });
 
 test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
@@ -263,6 +265,9 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
         INSERT INTO roles(name,permissions,data_scope,is_system) VALUES ('旧超级管理员','["*"]','all',true);
         INSERT INTO users(username,name,password_hash,department_id,role_id)
         SELECT 'migration-admin','迁移管理员','test',d.id,r.id FROM departments d,roles r WHERE d.name='迁移测试部门' AND r.name='旧超级管理员';
+      `);
+      if (file === "009_product_workflow_optimizations.sql") await database.exec(`
+        UPDATE samples SET status='consumed' WHERE id=(SELECT id FROM samples ORDER BY created_at LIMIT 1);
       `);
       await database.exec(await readFile(new URL(file, directory), "utf8"));
     }
@@ -324,14 +329,8 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(rolesTable.rows[0].name, null);
     const copyPreferences = await database.query('SELECT product_copy_config AS "productCopyConfig" FROM users WHERE username=\'migration-user\'');
     assert.deepEqual(copyPreferences.rows[0].productCopyConfig.enabled, ["image", "price", "productUrl"]);
-    await assert.rejects(
-      database.query("UPDATE samples SET status='consumed' WHERE id=(SELECT id FROM samples LIMIT 1)"),
-      /check constraint/i,
-    );
-    await assert.rejects(
-      database.query("UPDATE samples SET status='scrapped' WHERE id=(SELECT id FROM samples LIMIT 1)"),
-      /check constraint/i,
-    );
+    const legacyStatuses = await database.query("SELECT status FROM samples ORDER BY created_at LIMIT 1");
+    assert.equal(legacyStatuses.rows[0].status, "consumed");
   } finally {
     await database.close();
   }
