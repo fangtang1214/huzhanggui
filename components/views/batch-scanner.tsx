@@ -1,6 +1,6 @@
 "use client";
 
-import { BarcodeFormat, BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
+import { type IScannerControls } from "@zxing/browser";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Camera, CheckCircle2, Keyboard, MapPin, ScanLine, Trash2, Volume2, VolumeX, X } from "lucide-react";
 import { activeLocationLabel, SAMPLE_STATUSES, statusLabel } from "@/lib/constants";
@@ -32,11 +32,7 @@ type FeedbackKind = "success" | "duplicate" | "error";
 const DRAFT_LIFETIME = 24 * 60 * 60 * 1000;
 const initialTarget: BatchTarget = { status: "active", departmentId: "", locationId: "", remark: "" };
 
-function createBarcodeReader() {
-  const reader = new BrowserMultiFormatReader(undefined, { delayBetweenScanAttempts: 120, delayBetweenScanSuccess: 500 });
-  reader.possibleFormats = [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.QR_CODE];
-  return reader;
-}
+import { getBarcodeReader } from "../barcode-reader";
 
 export function BatchScanner({ onBack }: { onBack: () => void }) {
   const { user, lookups } = useAppData();
@@ -201,7 +197,7 @@ export function BatchScanner({ onBack }: { onBack: () => void }) {
     const attempt = scanAttemptRef.current;
     setCameraError(""); setStarting(true);
     try {
-      const controls = await createBarcodeReader().decodeFromConstraints(
+      const controls = await getBarcodeReader().decodeFromConstraints(
         { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
         videoRef.current || undefined,
         (result) => { if (result && attempt === scanAttemptRef.current) void addScannedValue(result.getText()); },
@@ -226,7 +222,7 @@ export function BatchScanner({ onBack }: { onBack: () => void }) {
     setReadingImage(true); setCameraError("");
     const imageUrl = URL.createObjectURL(file);
     try {
-      const result = await createBarcodeReader().decodeFromImageUrl(imageUrl);
+      const result = await getBarcodeReader().decodeFromImageUrl(imageUrl);
       await addScannedValue(result.getText());
     } catch (reason) {
       if (reason instanceof Error && reason.message.includes("样品")) signal("error", reason.message);

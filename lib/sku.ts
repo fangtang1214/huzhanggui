@@ -1,6 +1,6 @@
-type SqlTransaction = {
-  unsafe: (query: string, params?: unknown[]) => Promise<Array<Record<string, unknown>>>;
-};
+import type { Sql, TransactionSql } from "postgres";
+
+type Queryable = Sql<any> | TransactionSql<any>;
 
 export class SkuGenerationError extends Error {
   constructor(message: string) {
@@ -38,33 +38,31 @@ export function formatSampleCode(productSku: string, sequence: number) {
   return `${productSku}-${String(value).padStart(3, "0")}`;
 }
 
-export async function nextProductSku(tx: SqlTransaction, date = beijingDate()) {
+export async function nextProductSku(tx: Queryable, date = beijingDate()) {
   const sequenceDate = `${date.slice(0, 4)}-01-01`;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const rows = await tx.unsafe(
-      `INSERT INTO product_sku_sequences (sku_date, last_value)
-       VALUES ($1, 1)
-       ON CONFLICT (sku_date) DO UPDATE
-       SET last_value = product_sku_sequences.last_value + 1
-       RETURNING last_value AS sequence`,
-      [sequenceDate],
-    );
+    const rows = await tx`
+      INSERT INTO product_sku_sequences (sku_date, last_value)
+      VALUES (${sequenceDate}, 1)
+      ON CONFLICT (sku_date) DO UPDATE
+      SET last_value = product_sku_sequences.last_value + 1
+      RETURNING last_value AS sequence
+    `;
     const sku = formatProductSku(date, validSequence(rows[0]?.sequence, "商品货号"));
-    const existing = await tx.unsafe("SELECT 1 FROM products WHERE lower(sku)=lower($1) LIMIT 1", [sku]);
+    const existing = await tx`SELECT 1 FROM products WHERE lower(sku)=lower(${sku}) LIMIT 1`;
     if (!existing.length) return sku;
   }
   throw new SkuGenerationError("本年度商品货号序列存在冲突");
 }
 
-export async function nextProductSampleCode(tx: SqlTransaction, productId: string, productSku: string) {
-  const rows = await tx.unsafe(
-    `INSERT INTO product_sample_sequences (product_id, last_value)
-     VALUES ($1, 1)
-     ON CONFLICT (product_id) DO UPDATE
-     SET last_value = product_sample_sequences.last_value + 1,
-         updated_at = now()
-     RETURNING last_value AS sequence`,
-    [productId],
-  );
+export async function nextProductSampleCode(tx: Queryable, productId: string, productSku: string) {
+  const rows = await tx`
+    INSERT INTO product_sample_sequences (product_id, last_value)
+    VALUES (${productId}, 1)
+    ON CONFLICT (product_id) DO UPDATE
+    SET last_value = product_sample_sequences.last_value + 1,
+        updated_at = now()
+    RETURNING last_value AS sequence
+  `;
   return formatSampleCode(productSku, validSequence(rows[0]?.sequence, "实物编号"));
 }

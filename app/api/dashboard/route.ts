@@ -2,8 +2,14 @@ import { apiError, ok } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 
+let cacheEntry: { data: any; timestamp: number } | null = null;
+const CACHE_TTL = 30_000;
+
 export async function GET() {
   try {
+    if (cacheEntry && Date.now() - cacheEntry.timestamp < CACHE_TTL) {
+      return ok(cacheEntry.data);
+    }
     await requireUser("dashboard:view");
     const sql = getDb();
     const [summary] = await sql`
@@ -47,7 +53,9 @@ export async function GET() {
       WHERE p.archived = false
       GROUP BY p.id ORDER BY p.created_at DESC LIMIT 6
     `;
-    return ok({ summary, locations, recent, newProducts });
+    const data = { summary, locations, recent, newProducts };
+    cacheEntry = { data, timestamp: Date.now() };
+    return ok(data);
   } catch (error) {
     return apiError(error);
   }

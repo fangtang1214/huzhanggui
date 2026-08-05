@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- 条形码是接口即时生成的数据图片，不能交给 Next 图片代理。 */
 
-import { BarcodeFormat, BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
+import { type IScannerControls } from "@zxing/browser";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
@@ -71,12 +71,7 @@ export function SampleDetailView({ id }: { id: string }) {
   </>;
 }
 
-function createBarcodeReader() {
-  const reader = new BrowserMultiFormatReader(undefined, { delayBetweenScanAttempts: 120, delayBetweenScanSuccess: 500 });
-  // Code 128 is the current label format. The other formats keep existing and third-party labels usable.
-  reader.possibleFormats = [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.QR_CODE];
-  return reader;
-}
+import { getBarcodeReader } from "../barcode-reader";
 
 export function ScannerView() {
   const { can } = useAppData();
@@ -99,7 +94,7 @@ function SingleScanner({ onBack }: { onBack: () => void }) {
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) { setCameraError("当前页面无法调用摄像头，请确认使用 HTTPS 地址，或改用拍照识别。"); return; }
     const attempt = scanAttemptRef.current; setCameraError(""); setStarting(true);
     try {
-      const controls = await createBarcodeReader().decodeFromConstraints({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }, videoRef.current || undefined, (result) => {
+      const controls = await getBarcodeReader().decodeFromConstraints({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }, videoRef.current || undefined, (result) => {
         if (result && attempt === scanAttemptRef.current) openValue(result.getText());
       });
       if (attempt !== scanAttemptRef.current) { controls.stop(); return; }
@@ -113,7 +108,7 @@ function SingleScanner({ onBack }: { onBack: () => void }) {
   }
   async function scanImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; stop(); const attempt = scanAttemptRef.current; setCameraError(""); setReadingImage(true); const imageUrl = URL.createObjectURL(file);
-    try { const result = await createBarcodeReader().decodeFromImageUrl(imageUrl); if (attempt === scanAttemptRef.current) openValue(result.getText()); }
+    try { const result = await getBarcodeReader().decodeFromImageUrl(imageUrl); if (attempt === scanAttemptRef.current) openValue(result.getText()); }
     catch { if (attempt === scanAttemptRef.current) toast("照片中未识别到条形码，请保持条码横向、画面清晰后重试", "error"); }
     finally { URL.revokeObjectURL(imageUrl); if (attempt === scanAttemptRef.current) setReadingImage(false); }
   }

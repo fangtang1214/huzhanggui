@@ -58,29 +58,28 @@ export async function embedImage(imageUrl: string) {
   }
 }
 
-export async function syncProductImageQueue(productId: string, imageUrls: string[]) {
-  const sql = getDb();
+export async function syncProductImageQueue(productId: string, imageUrls: string[], existingTx?: unknown) {
   const unique = Array.from(new Set(imageUrls.map((url) => url.trim()).filter(Boolean)));
-  await sql.begin(async (tx) => {
-    for (const imageUrl of unique) {
-      await tx`
-        INSERT INTO product_image_features(product_id, image_url, url_hash, model)
-        VALUES (${productId}, ${imageUrl}, ${urlHash(imageUrl)}, ${IMAGE_MODEL})
-        ON CONFLICT(product_id, url_hash) DO UPDATE SET
-          image_url = excluded.image_url,
-          status = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.status ELSE 'pending' END,
-          embedding = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.embedding ELSE NULL END,
-          embedding_vector = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.embedding_vector ELSE NULL END,
-          error = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.error ELSE NULL END,
-          attempts = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.attempts ELSE 0 END,
-          model = excluded.model,
-          updated_at = now()
-      `;
-    }
-    if (unique.length) {
-      await tx`DELETE FROM product_image_features WHERE product_id = ${productId} AND NOT (image_url = ANY(${unique}))`;
-    } else {
-      await tx`DELETE FROM product_image_features WHERE product_id = ${productId}`;
-    }
-  });
+  const run = (existingTx as { unsafe(query: string, params?: unknown[]): Promise<Record<string, unknown>[]> }) || getDb();
+  for (const imageUrl of unique) {
+    await run.unsafe(
+      `INSERT INTO product_image_features(product_id, image_url, url_hash, model)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT(product_id, url_hash) DO UPDATE SET
+         image_url = excluded.image_url,
+         status = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.status ELSE 'pending' END,
+         embedding = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.embedding ELSE NULL END,
+         embedding_vector = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.embedding_vector ELSE NULL END,
+         error = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.error ELSE NULL END,
+         attempts = CASE WHEN product_image_features.model = excluded.model THEN product_image_features.attempts ELSE 0 END,
+         model = excluded.model,
+         updated_at = now()`,
+      [productId, imageUrl, urlHash(imageUrl), IMAGE_MODEL],
+    );
+  }
+  if (unique.length) {
+    await run.unsafe(`DELETE FROM product_image_features WHERE product_id = $1 AND NOT (image_url = ANY($2::text[]))`, [productId, unique]);
+  } else {
+    await run.unsafe(`DELETE FROM product_image_features WHERE product_id = $1`, [productId]);
+  }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { CurrentUser } from "@/lib/auth";
 
 export type LookupData = {
@@ -12,8 +12,12 @@ export type LookupData = {
   permissionGroups: Array<{ label: string; items: Array<{ key: string; label: string }> }>;
 };
 
-export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers } });
+function getCsrfToken() {
+  return document.cookie.split("; ").find(row => row.startsWith("huzhanggui_csrf="))?.split("=")[1] || "";
+}
+
+export async function apiFetch<T>(url: string, init?: RequestInit & { signal?: AbortSignal }): Promise<T> {
+  const response = await fetch(url, { ...init, headers: { ...(init?.body ? { "content-type": "application/json" } : {}), "x-csrf-token": getCsrfToken(), ...init?.headers } });
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(payload?.message || "操作失败，请稍后重试");
   return payload.data as T;
@@ -60,18 +64,30 @@ export const useToast = () => useContext(ToastContext);
 
 export function useRemote<T>(url: string | null) {
   const [data, setData] = useState<T | null>(null); const [loading, setLoading] = useState(Boolean(url)); const [error, setError] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
-    if (!url) return; setLoading(true); setError("");
-    try { setData(await apiFetch<T>(url)); } catch (reason) { setError(reason instanceof Error ? reason.message : "加载失败"); }
+    if (!url) return;
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController(); abortRef.current = controller;
+    setLoading(true); setError("");
+    try { setData(await apiFetch<T>(url, { signal: controller.signal })); }
+    catch (reason) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      setError(reason instanceof Error ? reason.message : "加载失败");
+    }
     finally { setLoading(false); }
   }, [url]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
   return { data, loading, error, reload: load, setData };
 }
 
+const dateFormatter = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
+const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+
 export function formatDate(value?: string | Date | null, includeTime = false) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", ...(includeTime ? { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false } : {}) }).format(new Date(value));
+  return (includeTime ? dateTimeFormatter : dateFormatter).format(new Date(value));
 }
 
 export async function copyToClipboard(text: string) {

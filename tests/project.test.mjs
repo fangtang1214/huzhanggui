@@ -157,18 +157,31 @@ test("自动货号使用 HZG 两级编号", async () => {
   assert.throws(() => formatSampleCode("SP-20260802-007", 1), SkuGenerationError);
 
   let productSequence = 0; let sampleSequence = 0; const sequenceDates = [];
-  const tx = { unsafe: async (query, params) => {
-    if (query.includes("product_sku_sequences")) sequenceDates.push(params[0]);
-    if (query.includes("product_sku_sequences")) return [{ sequence: ++productSequence }];
-    if (query.includes("product_sample_sequences")) return [{ sequence: ++sampleSequence }];
-    return [];
-  } };
+  function makeTx() {
+    const txFn = async (strings, ...values) => {
+      const query = strings.join("?");
+      if (query.includes("product_sku_sequences")) {
+        if (values.length) sequenceDates.push(String(values[0]));
+        return [{ sequence: ++productSequence }];
+      }
+      if (query.includes("product_sample_sequences")) return [{ sequence: ++sampleSequence }];
+      return [];
+    };
+    txFn.unsafe = async (query, params) => {
+      if (query.includes("lastValue")) return [{ lastValue: 1 }];
+      if (query.includes("product_sku_sequences")) { if (params) sequenceDates.push(params[0]); return [{ sequence: ++productSequence }]; }
+      if (query.includes("product_sample_sequences")) return [{ sequence: ++sampleSequence }];
+      return [];
+    };
+    return txFn;
+  }
+  const tx = makeTx();
   assert.equal(await nextProductSku(tx, "2026-08-04"), "HZG-2026-0001");
   assert.equal(await nextProductSku(tx, "2026-12-31"), "HZG-2026-0002");
   assert.deepEqual(sequenceDates, ["2026-01-01", "2026-01-01"]);
   assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-2026-0001"), "HZG-2026-0001-001");
   assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "HZG-2026-0001"), "HZG-2026-0001-002");
-  await assert.rejects(nextProductSku({ unsafe: async () => [{ lastValue: 1 }] }, "2026-08-04"), SkuGenerationError);
+  await assert.rejects(async () => { const badTx = async () => [{ lastValue: 1 }]; await nextProductSku(badTx, "2026-08-04"); }, SkuGenerationError);
 });
 
 test("样品列表空筛选可安全加载，商品档案提供价格多选和排序", async () => {
@@ -209,8 +222,10 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   assert.deepEqual(copyConfig.enabled, ["image", "sku"]);
   assert.deepEqual(DEFAULT_PRODUCT_COPY_CONFIG.enabled, ["image", "price", "productUrl"]);
 
+  const searchLib = await readFile(new URL("../lib/search.ts", import.meta.url), "utf8");
+  assert.match(searchLib, /right\(p\.sku, 4\)/);
+  assert.match(searchLib, /product_url ILIKE/);
   const productsRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
-  assert.match(productsRoute, /right\(p\.sku, 4\)/);
   assert.match(productsRoute, /p\.cooperation_mechanism, p\.notes/);
   const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(productsView, /设置一键复制内容/);
@@ -241,11 +256,7 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
 
   const issueRoute = await readFile(new URL("../app/api/link-issues/route.ts", import.meta.url), "utf8");
   assert.match(issueRoute, /p\.supply_chain/);
-  for (const route of ["products/route.ts", "samples/route.ts", "movements/route.ts", "link-issues/route.ts"]) {
-    const source = await readFile(new URL(`../app/api/${route}`, import.meta.url), "utf8");
-    assert.match(source, /product_link_history/);
-    assert.match(source, /product_url ILIKE/);
-  }
+  assert.match(searchLib, /product_link_history/);
   const productDetailRoute = await readFile(new URL("../app/api/products/[id]/route.ts", import.meta.url), "utf8");
   assert.match(productDetailRoute, /source, changed_by/);
   assert.match(productDetailRoute, /linkHistory/);
@@ -262,8 +273,8 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   assert.match(issueView, /const processedLink/);
   assert.doesNotMatch(issueView, /商品档案当前链接/);
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(styles, /\.issue-card \{ overflow: hidden; padding: 8px 12px 7px/);
-  assert.match(styles, /\.issue-body:has\(\.issue-resolution-note\)/);
+  assert.match(styles, /\.issue-card\s*\{[\s\S]*?overflow:\s*hidden[\s\S]*?border-radius:\s*12px/);
+  assert.match(styles, /\.issue-note-box\.issue-note-resolution/);
 
   const movementRoute = await readFile(new URL("../app/api/movements/route.ts", import.meta.url), "utf8");
   assert.match(movementRoute, /p\.image_urls/);

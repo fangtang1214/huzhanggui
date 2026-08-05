@@ -22,6 +22,7 @@ export async function GET(request: Request) {
         LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false
         WHERE p.archived = false
         GROUP BY p.id, c.name, u.name ORDER BY p.created_at DESC
+        LIMIT 50000
       `;
       workbook = createXlsx("商品档案", [
         { header: "货号", key: "sku", width: 18 }, { header: "商品名称", key: "name", width: 28 }, { header: "分类", key: "categoryName", width: 14 },
@@ -39,6 +40,7 @@ export async function GET(request: Request) {
         LEFT JOIN departments fd ON fd.id = m.from_department_id LEFT JOIN locations fl ON fl.id = m.from_location_id
         LEFT JOIN departments td ON td.id = m.to_department_id LEFT JOIN locations tl ON tl.id = m.to_location_id LEFT JOIN users u ON u.id = m.operator_id
         ORDER BY m.created_at DESC
+        LIMIT 50000
       `;
       const formatted = rows.map((row) => ({ ...row, fromStatusText: row.fromStatus ? statusLabel(String(row.fromStatus)) : "首次登记", toStatusText: statusLabel(String(row.toStatus)), fromPlace: [row.fromDepartmentName, row.fromLocationName].filter(Boolean).join(" · ") || "—", toPlace: row.toStatus === "active" ? [row.toDepartmentName, row.toLocationName].filter(Boolean).join(" · ") : statusLabel(String(row.toStatus)) }));
       workbook = createXlsx("流转记录", [
@@ -53,6 +55,7 @@ export async function GET(request: Request) {
         FROM samples s JOIN products p ON p.id = s.product_id LEFT JOIN departments d ON d.id = s.current_department_id LEFT JOIN locations l ON l.id = s.current_location_id
         WHERE s.archived = false AND p.archived = false
         ORDER BY s.updated_at DESC
+        LIMIT 50000
       `;
       const formatted = rows.map((row) => ({ ...row, statusText: statusLabel(String(row.status)), place: activeLocationLabel({ status: String(row.status), department_name: row.departmentName ? String(row.departmentName) : null, location_name: row.locationName ? String(row.locationName) : null }) }));
       workbook = createXlsx("实物样品", [

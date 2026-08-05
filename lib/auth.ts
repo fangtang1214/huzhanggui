@@ -5,6 +5,7 @@ import { getDb } from "./db";
 import { normalizeProductCopyConfig, type ProductCopyConfig } from "./product-copy";
 
 const COOKIE_NAME = "huzhanggui_session";
+const CSRF_COOKIE_NAME = "huzhanggui_csrf";
 const LEGACY_COOKIE_NAME = "siyuan_session";
 const SESSION_DAYS = 7;
 
@@ -22,10 +23,10 @@ export type CurrentUser = {
 };
 
 function hashToken(token: string) {
-  if (!process.env.SESSION_SECRET && process.env.NODE_ENV === "production") {
-    throw new Error("生产环境缺少 SESSION_SECRET");
+  if (!process.env.SESSION_SECRET) {
+    throw new Error("缺少 SESSION_SECRET 环境变量");
   }
-  const secret = process.env.SESSION_SECRET || "development-only-secret";
+  const secret = process.env.SESSION_SECRET;
   return createHash("sha256").update(`${secret}:${token}`).digest("hex");
 }
 
@@ -92,9 +93,17 @@ export async function createSession(userId: string) {
     VALUES (${tokenHash}, ${userId}, now() + (${SESSION_DAYS} || ' days')::interval)
   `;
   await sql`UPDATE users SET last_login_at = now() WHERE id = ${userId}`;
+  const csrfToken = randomBytes(32).toString("base64url");
   const cookieStore = await cookies();
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: SESSION_DAYS * 24 * 60 * 60,
+  });
+  cookieStore.set(CSRF_COOKIE_NAME, csrfToken, {
+    httpOnly: false,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
@@ -111,6 +120,17 @@ export async function destroySession() {
   }
   cookieStore.set(COOKIE_NAME, "", { httpOnly: true, path: "/", maxAge: 0 });
   cookieStore.set(LEGACY_COOKIE_NAME, "", { httpOnly: true, path: "/", maxAge: 0 });
+  cookieStore.set(CSRF_COOKIE_NAME, "", { httpOnly: false, path: "/", maxAge: 0 });
+}
+
+export async function validateCsrf(request: Request) {
+  if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
+  const cookieStore = await cookies();
+  const cookieToken = cookieStore.get(CSRF_COOKIE_NAME)?.value;
+  const headerToken = request.headers.get("x-csrf-token");
+  if (!cookieToken || cookieToken !== headerToken) {
+    throw new AuthError("CSRF 验证失败", 403);
+  }
 }
 
 export async function requireUser(permission?: string) {

@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { productLinkSchema } from "@/lib/product-link";
 import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
+import { productSearchConditions } from "@/lib/search";
 import { syncProductImageQueue, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission";
@@ -36,8 +37,8 @@ function nullable(value: string | null | undefined): string | null { return valu
 export async function GET(request: Request) {
   try {
     await requireUser("products:view"); const sql = getDb(); const url = new URL(request.url);
-    const search = (url.searchParams.get("search") || "").trim(); const like = `%${search}%`;
-    const sequenceSearch = /^\d{1,4}$/.test(search) ? search.padStart(4, "0") : null;
+    const search = (url.searchParams.get("search") || "").trim();
+    const searchFrag = productSearchConditions(sql, search);
     const archived = url.searchParams.get("view") === "archived";
     const departmentId = url.searchParams.get("departmentId") || null; const categoryId = url.searchParams.get("categoryId") || null;
     const selectedPrices = Array.from(new Set(url.searchParams.getAll("price").filter((value) => /^\d+(?:\.\d{1,2})?$/.test(value)))).slice(0, 10000);
@@ -59,18 +60,12 @@ export async function GET(request: Request) {
       FROM products p LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users u ON u.id = p.business_contact_id
       LEFT JOIN samples s ON s.product_id = p.id AND (p.archived = true OR s.archived = false) LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
-      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.product_url ILIKE ${like}
-        OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
-        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
-        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
+      WHERE p.archived = ${archived} AND ${searchFrag}
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
         ${priceFilter}
       GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
-      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.product_url ILIKE ${like}
-        OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
-        OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
-        OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
+      WHERE p.archived = ${archived} AND ${searchFrag}
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
       ${priceFilter}`;
     const priceOptions = await sql`
@@ -78,10 +73,7 @@ export async function GET(request: Request) {
       FROM products p
       LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = ${archived} AND p.price IS NOT NULL
-        AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.product_url ILIKE ${like}
-          OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
-          OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like})
-          OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE ${like}))
+        AND ${searchFrag}
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
       GROUP BY p.price ORDER BY p.price ASC`;
     return ok({ rows, total: countRow.total, page, pageSize, priceOptions });
@@ -124,7 +116,7 @@ export async function POST(request: Request) {
         product = updated[0]; mergedProductVersion = Number(product.version);
         if (wasArchived) await tx`UPDATE samples SET archived=false, archived_with_product=false, updated_at=now() WHERE product_id=${product.id} AND archived_with_product=true`;
       } else {
-        const sku = await nextProductSku(tx as never);
+        const sku = await nextProductSku(tx);
         const inserted = await tx`INSERT INTO products(sku,name,business_contact_id,store_name,price,product_url,commission,store_rating,supply_chain,cooperation_mechanism,category_id,image_urls,notes,created_by)
           VALUES(${sku},${input.name},${input.businessContactId || null},${nullable(input.storeName)},${input.price ?? null},${nullable(input.productUrl)},${nullable(input.commission)},${input.storeRating ?? null},${nullable(input.supplyChain)},${nullable(input.cooperationMechanism)},${input.categoryId || null},${tx.json(input.imageUrls)},${nullable(input.notes)},${user.id}) RETURNING *`;
         product = inserted[0];
@@ -135,7 +127,7 @@ export async function POST(request: Request) {
       for (const tagId of input.tagIds) await tx`INSERT INTO product_tags(product_id,tag_id) VALUES(${product.id},${tagId})`;
       const codes: string[] = []; const sampleIds: string[] = [];
       for (let index = 0; index < input.quantity; index += 1) {
-        const code = await nextProductSampleCode(tx as never, String(product.id), String(product.sku));
+        const code = await nextProductSampleCode(tx, String(product.id), String(product.sku));
         const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,created_by)
           VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id}) RETURNING id`;
         await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)
@@ -145,9 +137,9 @@ export async function POST(request: Request) {
       if (input.matchDecision === "matched") await tx`INSERT INTO product_intake_batches(product_id,match_run_id,user_id,sample_ids,submitted_data,previous_product_data,merged_product_version)
         VALUES(${product.id},${input.matchRunId},${user.id},${tx.json(sampleIds)},${tx.json(input)},${tx.json(previousProductData as never)},${mergedProductVersion})`;
       await tx`UPDATE image_match_runs SET selected_product_id=${input.matchedProductId || null}, decision=${input.matchDecision}, decided_at=now() WHERE id=${input.matchRunId}`;
+      await syncProductImageQueue(String(product.id), product.imageUrls as string[], tx);
       return { id: String(product.id), sku: String(product.sku), name: String(product.name), codes, imageUrls: product.imageUrls as string[], matched: input.matchDecision === "matched" };
     });
-    await syncProductImageQueue(result.id, result.imageUrls);
     await writeAudit(user, result.matched ? "product.match_merge" : "product.create", "product", result.id, result.matched ? `确认同款 ${result.sku}，追加 ${input.quantity} 件样品` : `登记新商品 ${result.sku}，到样 ${input.quantity} 件`, input, requestIp(request));
     return created(result);
   } catch (error) { return apiError(error); }
