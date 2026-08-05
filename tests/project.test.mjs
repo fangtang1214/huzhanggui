@@ -225,6 +225,16 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   assert.match(copyRoute, /UPDATE users SET product_copy_config/);
   const copyImageRoute = await readFile(new URL("../app/api/products/[id]/copy-image/route.ts", import.meta.url), "utf8");
   assert.match(copyImageRoute, /SELECT image_urls FROM products/);
+  const restoreRoute = await readFile(new URL("../app/api/products/[id]/restore/route.ts", import.meta.url), "utf8");
+  assert.match(restoreRoute, /requireUser\("products:archive"\)/);
+  assert.match(restoreRoute, /archived_with_product = true/);
+  assert.match(restoreRoute, /product\.restore/);
+  const restoreMigration = await readFile(new URL("../migrations/011_product_restore.sql", import.meta.url), "utf8");
+  assert.match(restoreMigration, /ADD COLUMN IF NOT EXISTS archived_with_product/);
+  const archiveView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(archiveView, /在用商品/);
+  assert.match(archiveView, /已归档商品/);
+  assert.match(archiveView, /恢复商品/);
 
   const issueRoute = await readFile(new URL("../app/api/link-issues/route.ts", import.meta.url), "utf8");
   assert.match(issueRoute, /p\.supply_chain/);
@@ -333,6 +343,8 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.deepEqual(copyPreferences.rows[0].productCopyConfig.enabled, ["image", "price", "productUrl"]);
     const legacyStatuses = await database.query("SELECT status FROM samples ORDER BY created_at LIMIT 1");
     assert.equal(legacyStatuses.rows[0].status, "consumed");
+    const restoreColumn = await database.query("SELECT data_type FROM information_schema.columns WHERE table_name='samples' AND column_name='archived_with_product'");
+    assert.equal(restoreColumn.rows[0].data_type, "boolean");
   } finally {
     await database.close();
   }

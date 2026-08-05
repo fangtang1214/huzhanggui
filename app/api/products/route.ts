@@ -38,6 +38,7 @@ export async function GET(request: Request) {
     await requireUser("products:view"); const sql = getDb(); const url = new URL(request.url);
     const search = (url.searchParams.get("search") || "").trim(); const like = `%${search}%`;
     const sequenceSearch = /^\d{1,4}$/.test(search) ? search.padStart(4, "0") : null;
+    const archived = url.searchParams.get("view") === "archived";
     const departmentId = url.searchParams.get("departmentId") || null; const categoryId = url.searchParams.get("categoryId") || null;
     const selectedPrices = Array.from(new Set(url.searchParams.getAll("price").filter((value) => /^\d+(?:\.\d{1,2})?$/.test(value)))).slice(0, 10000);
     const priceOrder = url.searchParams.get("priceOrder");
@@ -45,7 +46,7 @@ export async function GET(request: Request) {
     const priceFilter = selectedPrices.length ? sql`AND p.price = ANY(${selectedPrices}::numeric[])` : sql``;
     const orderBy = priceOrder === "asc" ? sql`p.price ASC NULLS LAST, p.created_at DESC` : priceOrder === "desc" ? sql`p.price DESC NULLS LAST, p.created_at DESC` : sql`p.created_at DESC`;
     const rows = await sql`
-      SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain,
+      SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.archived,
              p.cooperation_mechanism, p.notes, p.image_urls, p.created_at, p.updated_at,
              c.name AS category_name, u.name AS business_contact_name, count(DISTINCT s.id)::int AS sample_count,
              count(DISTINCT s.id) FILTER (WHERE s.status = 'active')::int AS active_count,
@@ -56,16 +57,16 @@ export async function GET(request: Request) {
              (SELECT li.resolved_at FROM link_issues li WHERE li.product_id = p.id AND li.status IN ('replaced', 'no_change', 'unresolved')
               ORDER BY li.resolved_at DESC NULLS LAST, li.created_at DESC LIMIT 1) AS latest_resolved_at
       FROM products p LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users u ON u.id = p.business_contact_id
-      LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false LEFT JOIN product_departments pd ON pd.product_id = p.id
+      LEFT JOIN samples s ON s.product_id = p.id AND (p.archived = true OR s.archived = false) LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
-      WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
         OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
         OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
         ${priceFilter}
       GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
-      WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+      WHERE p.archived = ${archived} AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
         OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
         OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
@@ -74,7 +75,7 @@ export async function GET(request: Request) {
       SELECT p.price::text AS price, count(DISTINCT p.id)::int AS count
       FROM products p
       LEFT JOIN product_departments pd ON pd.product_id = p.id
-      WHERE p.archived = false AND p.price IS NOT NULL
+      WHERE p.archived = ${archived} AND p.price IS NOT NULL
         AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
           OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
           OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
@@ -100,6 +101,7 @@ export async function POST(request: Request) {
         const matchedProductId = input.matchedProductId as string;
         const rows = await tx`SELECT * FROM products WHERE id = ${matchedProductId} FOR UPDATE`; product = rows[0];
         if (!product) throw new Error("确认的同款商品已不存在");
+        const wasArchived = Boolean(product.archived);
         const previousDepartments = await tx`SELECT department_id FROM product_departments WHERE product_id = ${product.id}`;
         const previousTags = await tx`SELECT tag_id FROM product_tags WHERE product_id = ${product.id}`;
         previousProductData = { product, departmentIds: previousDepartments.map((row) => row.departmentId), tagIds: previousTags.map((row) => row.tagId) };
@@ -109,6 +111,7 @@ export async function POST(request: Request) {
           supply_chain=${nullable(input.supplyChain)}, cooperation_mechanism=${nullable(input.cooperationMechanism)}, category_id=${input.categoryId || null},
           image_urls=${tx.json(mergedImages)}, notes=${nullable(input.notes)}, archived=false, version=version+1, updated_at=now() WHERE id=${product.id} RETURNING *`;
         product = updated[0]; mergedProductVersion = Number(product.version);
+        if (wasArchived) await tx`UPDATE samples SET archived=false, archived_with_product=false, updated_at=now() WHERE product_id=${product.id} AND archived_with_product=true`;
       } else {
         const sku = await nextProductSku(tx as never);
         const inserted = await tx`INSERT INTO products(sku,name,business_contact_id,store_name,price,product_url,commission,store_rating,supply_chain,cooperation_mechanism,category_id,image_urls,notes,created_by)

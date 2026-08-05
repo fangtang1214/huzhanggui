@@ -120,7 +120,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     if (!sample) return Response.json({ ok: false, message: "样品不存在" }, { status: 404 });
     if (sample.status === "active") return Response.json({ ok: false, message: "请先将样品处理为结束状态，再归档" }, { status: 409 });
     const sql = getDb();
-    await sql`UPDATE samples SET archived = true, updated_at = now() WHERE id = ${sample.id}`;
+    await sql`UPDATE samples SET archived = true, archived_with_product = false, updated_at = now() WHERE id = ${sample.id}`;
     await writeAudit(user, "sample.archive", "sample", sample.id, `归档样品 ${sample.code}`, undefined, requestIp(request));
     return ok({ archived: true });
   } catch (error) {

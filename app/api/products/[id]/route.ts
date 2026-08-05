@@ -54,7 +54,7 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
       FROM samples s
       LEFT JOIN departments d ON d.id = s.current_department_id
       LEFT JOIN locations l ON l.id = s.current_location_id
-      WHERE s.product_id = ${id} AND s.archived = false
+      WHERE s.product_id = ${id} AND (s.archived = false OR ${Boolean(rows[0].archived)} = true)
       ORDER BY s.created_at DESC
     `;
     return ok({ product: rows[0], samples });
@@ -111,7 +111,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     }
     await sql.begin(async (tx) => {
       await tx`UPDATE products SET archived = true, version = version + 1, updated_at = now() WHERE id = ${id}`;
-      await tx`UPDATE samples SET archived = true, updated_at = now() WHERE product_id = ${id}`;
+      await tx`UPDATE samples SET archived = true, archived_with_product = true, updated_at = now() WHERE product_id = ${id} AND archived = false`;
     });
     await writeAudit(user, "product.archive", "product", id, `归档商品 ${product.sku} ${product.name}`, undefined, requestIp(request));
     return ok({ archived: true });
