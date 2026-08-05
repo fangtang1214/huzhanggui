@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { getDb } from "./db";
+import { normalizeProductCopyConfig, type ProductCopyConfig } from "./product-copy";
 
 const COOKIE_NAME = "huzhanggui_session";
 const LEGACY_COOKIE_NAME = "siyuan_session";
@@ -17,6 +18,7 @@ export type CurrentUser = {
   permissions: string[];
   isSuperAdmin: boolean;
   mustChangePassword: boolean;
+  productCopyConfig: ProductCopyConfig;
 };
 
 function hashToken(token: string) {
@@ -39,7 +41,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const tokenHash = hashToken(token);
   const rows = await sql`
     SELECT u.id, u.username, u.name, u.department_id, d.name AS department_name, d.kind AS department_kind,
-           u.permissions, u.is_super_admin, u.must_change_password
+           u.permissions, u.is_super_admin, u.must_change_password, u.product_copy_config
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     JOIN departments d ON d.id = u.department_id
@@ -61,6 +63,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     permissions: Array.isArray(row.permissions) ? row.permissions : [],
     isSuperAdmin: Boolean(row.isSuperAdmin),
     mustChangePassword: row.mustChangePassword,
+    productCopyConfig: normalizeProductCopyConfig(row.productCopyConfig),
   };
 }
 

@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CalendarDays, CircleAlert, Clipboard, ExternalLink, FilePenLine, Filter, RefreshCw, Search, Store, UserRound } from "lucide-react";
+import { CalendarDays, CircleAlert, Clipboard, ExternalLink, FilePenLine, Filter, MessagesSquare, RefreshCw, Search, Store, UserRound } from "lucide-react";
 import { LINK_ISSUE_STATUS_META, LINK_ISSUE_STATUSES, type LinkIssueStatus } from "@/lib/link-issues";
 import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, Modal, PageHeader, Pagination, ProductImage } from "../ui";
@@ -27,7 +27,7 @@ type LinkIssue = {
   sku: string;
   productName: string;
   storeName?: string;
-  productUrl?: string;
+  supplyChain?: string;
   imageUrls: string[];
   canCancel: boolean;
 };
@@ -93,15 +93,17 @@ export function LinkIssuesView() {
 
   return <>
     <PageHeader eyebrow="链接协作" title="问题处理" description="直播间与商务共用的问题清单；处理完成的新链接会同步更新商品档案。" />
-    <section className="toolbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索货号、商品名或店铺名" /></div><div className="toolbar-filters"><div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部报障部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div><select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">全部处理状态</option>{LINK_ISSUE_STATUSES.map((value) => <option value={value} key={value}>{LINK_ISSUE_STATUS_META[value].label}</option>)}</select></div></section>
+    <section className="toolbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索货号、商品名、店铺或供应链" /></div><div className="toolbar-filters"><div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部报障部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div><select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">全部处理状态</option>{LINK_ISSUE_STATUSES.map((value) => <option value={value} key={value}>{LINK_ISSUE_STATUS_META[value].label}</option>)}</select></div></section>
     <section className="issue-list-panel">
       {loading ? <div className="panel"><LoadingState /></div> : error ? <div className="panel"><ErrorState message={error} retry={reload} /></div> : !data?.rows.length ? <div className="panel"><EmptyState title="没有找到问题记录" description={search || departmentId || status ? "可以更换筛选条件。" : "从商品档案发起链接报障后，会显示在这里。"} /></div> : <>{data.rows.map((issue) => {
-        const focused = focusId === issue.id; const completed = issue.status === "replaced" || issue.status === "no_change" || issue.status === "unresolved";
-        return <article className={`panel issue-card ${focused ? "issue-focused" : ""}`} id={`issue-${issue.id}`} key={issue.id}>
-          {focused && completed && <div className="issue-history-reminder"><CircleAlert size={21} /><div><b>此问题已在{handledAgo(issue.resolvedAt)}处理过</b><p>请先检查下方的当前最新链接是否可用；仍不可用时，可重新提交一条新的报障。</p></div></div>}
-          <header className="issue-card-head"><div className="issue-product"><ProductImage urls={issue.imageUrls} alt={issue.productName} size="small" /><div><span className="sku-chip">{issue.sku}</span><h2>{issue.productName}</h2><p><Store size={14} />{issue.storeName || "未填店铺"}</p></div></div>{issueStatus(issue.status)}</header>
+        const focused = focusId === issue.id; const pending = issue.status === "pending"; const completed = issue.status === "replaced" || issue.status === "no_change" || issue.status === "unresolved";
+        const processedLink = issue.status === "replaced" ? issue.newProductUrl : issue.status === "no_change" ? issue.oldProductUrl : "";
+        return <article className={`panel issue-card ${pending ? "issue-pending" : ""} ${focused ? "issue-focused" : ""}`} id={`issue-${issue.id}`} key={issue.id}>
+          {pending && <div className="issue-pending-strip"><CircleAlert size={17} /><b>等待商务处理</b><span>请优先核实报障链接并更新处理结果</span></div>}
+          {focused && completed && <div className="issue-history-reminder"><CircleAlert size={21} /><div><b>此问题已在{handledAgo(issue.resolvedAt)}处理过</b><p>请先检查下方的处理后链接是否可用；仍不可用时，可重新提交一条新的报障。</p></div></div>}
+          <header className="issue-card-head"><div className="issue-product"><ProductImage urls={issue.imageUrls} alt={issue.productName} size="small" /><div><span className="sku-chip">{issue.sku}</span><h2>{issue.productName}</h2><div className="issue-product-details"><p><Store size={14} />{issue.storeName || "未填店铺"}</p><p><MessagesSquare size={14} />供应链：{issue.supplyChain || "未填写"}</p></div></div></div>{issueStatus(issue.status)}</header>
           <div className="issue-meta"><span><UserRound size={15} />{issue.reportedDepartmentName} · {issue.reportedByName || "未知账号"}</span><span><CalendarDays size={15} />报障于 {formatDate(issue.createdAt, true)}</span>{issue.resolvedAt && <span><FilePenLine size={15} />{issue.resolvedByName || "未知商务"} · {formatDate(issue.resolvedAt, true)}</span>}</div>
-          <div className="issue-body"><section className="issue-note"><small>问题备注</small><p>{issue.reportNote}</p></section><section className="issue-links"><div><small>报障时链接</small><code title={issue.oldProductUrl || ""}>{issue.oldProductUrl || "未填写"}</code>{issue.oldProductUrl && <button type="button" onClick={() => copyLink(issue.oldProductUrl || "")}><Clipboard size={14} />复制</button>}</div><div className="current-link"><small>商品档案当前链接</small><code title={issue.productUrl || ""}>{issue.productUrl || "未填写"}</code>{issue.productUrl && <button type="button" onClick={() => copyLink(issue.productUrl || "")}><Clipboard size={14} />一键复制</button>}</div>{issue.status === "replaced" && <div className="resolved-link"><small>本次处理的新链接</small><code title={issue.newProductUrl || ""}>{issue.newProductUrl || "—"}</code>{issue.newProductUrl && <button type="button" onClick={() => copyLink(issue.newProductUrl || "")}><Clipboard size={14} />一键复制</button>}</div>}</section>{issue.resolutionNote && <section className="issue-resolution-note"><small>处理说明</small><p>{issue.resolutionNote}</p></section>}</div>
+          <div className="issue-body"><section className="issue-note"><small>问题备注</small><p>{issue.reportNote}</p></section><section className={`issue-links ${processedLink ? "has-result" : ""}`}><div><small>报障链接</small><code title={issue.oldProductUrl || ""}>{issue.oldProductUrl || "未填写"}</code>{issue.oldProductUrl && <button type="button" onClick={() => copyLink(issue.oldProductUrl || "")}><Clipboard size={14} />复制</button>}</div>{processedLink && <div className="resolved-link"><small>处理后链接</small><code title={processedLink}>{processedLink}</code><button type="button" onClick={() => copyLink(processedLink)}><Clipboard size={14} />复制</button></div>}</section>{issue.resolutionNote && <section className="issue-resolution-note"><small>处理说明</small><p>{issue.resolutionNote}</p></section>}</div>
           <footer className="issue-actions"><LinkToProduct productId={issue.productId} />{issue.canCancel && <button type="button" className="button button-ghost button-compact" onClick={() => cancelIssue(issue)}>撤销报障</button>}{data.canProcess && issue.status !== "cancelled" && <button type="button" className="button button-secondary button-compact" onClick={() => openResolve(issue)}>{issue.status === "pending" ? "处理问题" : "修改结果"}</button>}{focused && completed && <button type="button" className="button button-primary button-compact" onClick={() => { setReportNote(""); setResubmittingIssue(issue); }}><RefreshCw size={15} />重新提交报障</button>}</footer>
         </article>;
       })}<Pagination page={data.page} pageSize={data.pageSize} total={data.total} onChange={setPage} /></>}
@@ -116,4 +118,3 @@ export function LinkIssuesView() {
 function LinkToProduct({ productId }: { productId: string }) {
   return <a className="button button-ghost button-compact" href={`/products/${productId}`}>查看商品档案</a>;
 }
-

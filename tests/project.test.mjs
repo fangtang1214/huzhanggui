@@ -9,6 +9,8 @@ import { vector } from "@electric-sql/pglite-pgvector";
 import { beijingDate, formatProductSku, formatSampleCode, nextProductSampleCode, nextProductSku, SkuGenerationError } from "../lib/sku.ts";
 import { cosineSimilarity } from "../lib/cosine.ts";
 import { extractSampleCode } from "../lib/scan-code.ts";
+import { formatCommission, normalizeCommission } from "../lib/commission.ts";
+import { DEFAULT_PRODUCT_COPY_CONFIG, normalizeProductCopyConfig } from "../lib/product-copy.ts";
 
 test("系统包含核心样品流转数据结构", async () => {
   const migration = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
@@ -125,7 +127,7 @@ test("链接报障支持公共待办、商务处理、历史提醒和重新提�
   const view = await readFile(new URL("../components/views/link-issues-view.tsx", import.meta.url), "utf8");
   assert.match(view, /此问题已在\{handledAgo/);
   assert.match(view, /重新提交报障/);
-  assert.match(view, /一键复制/);
+  assert.match(view, /处理后链接/);
 });
 
 test("账号直接授权并限制普通管理员扩大权限", async () => {
@@ -195,6 +197,46 @@ test("图片识别使用预热的 Q8 模型与前后台优先队列", async () =
   const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
   assert.match(route, /image_embedding_cache/);
   assert.match(route, /embedding_vector <=>/);
+});
+
+test("问题处理、商品复制、流转图片和状态精简按新流程实现", async () => {
+  assert.equal(normalizeCommission("20"), "20%");
+  assert.equal(normalizeCommission("20%"), "20%");
+  assert.equal(formatCommission("12.5"), "12.5%");
+  const copyConfig = normalizeProductCopyConfig({ order: ["productUrl", "image"], enabled: ["image", "sku"] });
+  assert.deepEqual(copyConfig.order.slice(0, 2), ["productUrl", "image"]);
+  assert.deepEqual(copyConfig.enabled, ["image", "sku"]);
+  assert.deepEqual(DEFAULT_PRODUCT_COPY_CONFIG.enabled, ["image", "price", "productUrl"]);
+
+  const productsRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
+  assert.match(productsRoute, /right\(p\.sku, 4\)/);
+  assert.match(productsRoute, /p\.cooperation_mechanism, p\.notes/);
+  const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(productsView, /一键复制设置/);
+  assert.match(productsView, /ClipboardItem/);
+  assert.match(productsView, /draggable/);
+  assert.doesNotMatch(productsView, /className="table-place"><MapPin/);
+  assert.match(productsView, /<th>价格<\/th><th>佣金<\/th>/);
+
+  const copyRoute = await readFile(new URL("../app/api/auth/product-copy/route.ts", import.meta.url), "utf8");
+  assert.match(copyRoute, /UPDATE users SET product_copy_config/);
+  const copyImageRoute = await readFile(new URL("../app/api/products/[id]/copy-image/route.ts", import.meta.url), "utf8");
+  assert.match(copyImageRoute, /SELECT image_urls FROM products/);
+
+  const issueRoute = await readFile(new URL("../app/api/link-issues/route.ts", import.meta.url), "utf8");
+  assert.match(issueRoute, /p\.supply_chain/);
+  const issueView = await readFile(new URL("../components/views/link-issues-view.tsx", import.meta.url), "utf8");
+  assert.match(issueView, /供应链：/);
+  assert.match(issueView, /等待商务处理/);
+  assert.match(issueView, /const processedLink/);
+  assert.doesNotMatch(issueView, /商品档案当前链接/);
+
+  const movementRoute = await readFile(new URL("../app/api/movements/route.ts", import.meta.url), "utf8");
+  assert.match(movementRoute, /p\.image_urls/);
+  const movementView = await readFile(new URL("../components/views/movements-view.tsx", import.meta.url), "utf8");
+  assert.match(movementView, /<ProductImage urls=\{item\.imageUrls\}/);
+  const statuses = await readFile(new URL("../lib/constants.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(statuses, /consumed|scrapped|已消耗|已报废/);
 });
 
 test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
@@ -280,6 +322,16 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(migratedAdmin.rows[0].is_super_admin, true);
     const rolesTable = await database.query("SELECT to_regclass('roles') AS name");
     assert.equal(rolesTable.rows[0].name, null);
+    const copyPreferences = await database.query('SELECT product_copy_config AS "productCopyConfig" FROM users WHERE username=\'migration-user\'');
+    assert.deepEqual(copyPreferences.rows[0].productCopyConfig.enabled, ["image", "price", "productUrl"]);
+    await assert.rejects(
+      database.query("UPDATE samples SET status='consumed' WHERE id=(SELECT id FROM samples LIMIT 1)"),
+      /check constraint/i,
+    );
+    await assert.rejects(
+      database.query("UPDATE samples SET status='scrapped' WHERE id=(SELECT id FROM samples LIMIT 1)"),
+      /check constraint/i,
+    );
   } finally {
     await database.close();
   }

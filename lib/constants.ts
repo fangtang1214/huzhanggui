@@ -1,11 +1,9 @@
 export const SAMPLE_STATUSES = [
   { value: "active", label: "在用/在库", tone: "green" },
   { value: "returned", label: "已退样", tone: "blue" },
-  { value: "consumed", label: "已消耗", tone: "amber" },
   { value: "damaged", label: "已损坏", tone: "red" },
   { value: "lost", label: "已丢失", tone: "red" },
   { value: "gifted", label: "已赠送", tone: "purple" },
-  { value: "scrapped", label: "已报废", tone: "gray" },
 ] as const;
 
 export const DEPARTMENT_KINDS = [
@@ -26,4 +24,3 @@ export function activeLocationLabel(row: {
   if (row.status !== "active") return statusLabel(row.status);
   return [row.department_name, row.location_name].filter(Boolean).join(" · ") || "位置待确认";
 }
-

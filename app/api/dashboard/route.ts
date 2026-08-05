@@ -11,7 +11,7 @@ export async function GET() {
         count(*) FILTER (WHERE s.archived = false)::int AS total_samples,
         count(*) FILTER (WHERE s.archived = false AND s.status = 'active')::int AS active_samples,
         count(*) FILTER (WHERE s.archived = false AND s.status = 'returned')::int AS returned_samples,
-        count(*) FILTER (WHERE s.archived = false AND s.status IN ('damaged','lost','scrapped'))::int AS exception_samples,
+        count(*) FILTER (WHERE s.archived = false AND s.status IN ('damaged','lost'))::int AS exception_samples,
         count(DISTINCT s.product_id) FILTER (WHERE s.archived = false)::int AS total_products
       FROM samples s
     `;

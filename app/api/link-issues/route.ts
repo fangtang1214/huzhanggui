@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       SELECT li.id, li.product_id, li.previous_issue_id, li.old_product_url, li.report_note, li.status,
              li.new_product_url, li.resolution_note, li.reported_by, li.reported_department_id,
              li.resolved_by, li.resolved_at, li.created_at, li.updated_at,
-             p.sku, p.name AS product_name, p.store_name, p.product_url, p.image_urls,
+             p.sku, p.name AS product_name, p.store_name, p.supply_chain, p.image_urls,
              reporter.name AS reported_by_name, department.name AS reported_department_name,
              resolver.name AS resolved_by_name
       FROM link_issues li
@@ -40,7 +40,7 @@ export async function GET(request: Request) {
       JOIN departments department ON department.id = li.reported_department_id
       LEFT JOIN users reporter ON reporter.id = li.reported_by
       LEFT JOIN users resolver ON resolver.id = li.resolved_by
-      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like})
+      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.supply_chain ILIKE ${like})
         AND (${status}::text IS NULL OR li.status = ${status})
         AND (${departmentId}::uuid IS NULL OR li.reported_department_id = ${departmentId})
       ORDER BY CASE WHEN li.id = ${focusId} THEN 0 WHEN li.status = 'pending' THEN 1 ELSE 2 END, li.created_at DESC
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
       SELECT count(*)::int AS total
       FROM link_issues li
       JOIN products p ON p.id = li.product_id
-      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like})
+      WHERE (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like} OR p.supply_chain ILIKE ${like})
         AND (${status}::text IS NULL OR li.status = ${status})
         AND (${departmentId}::uuid IS NULL OR li.reported_department_id = ${departmentId})`;
 

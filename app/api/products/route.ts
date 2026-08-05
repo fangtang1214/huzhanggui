@@ -7,14 +7,19 @@ import { productLinkSchema } from "@/lib/product-link";
 import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
 import { syncProductImageQueue, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
+import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
+const commissionSchema = z.string().trim().max(30).refine(
+  (value) => value === "" || COMMISSION_INPUT_PATTERN.test(value),
+  "佣金只能填写数字或数字加百分号",
+).optional().nullable().transform(normalizeCommission);
 const productSchema = z.object({
   name: z.string().trim().min(1, "请填写商品名称").max(200),
   departmentIds: z.array(z.string().uuid()).min(1, "至少选择一个选品直播间"),
   businessContactId: z.string().uuid().optional().nullable(), storeName: optionalText,
   price: z.coerce.number().min(0).max(99999999).optional().nullable(), productUrl: productLinkSchema,
-  commission: optionalText, storeRating: z.coerce.number().min(0).max(5).optional().nullable(),
+  commission: commissionSchema, storeRating: z.coerce.number().min(0).max(5).optional().nullable(),
   supplyChain: optionalText, cooperationMechanism: optionalText,
   categoryId: z.string().uuid().optional().nullable(), tagIds: z.array(z.string().uuid()).default([]),
   imageUrls: z.array(imageUrlSchema).min(1, "请先填写至少一张商品图片").max(100), notes: optionalText,
@@ -32,6 +37,7 @@ export async function GET(request: Request) {
   try {
     await requireUser("products:view"); const sql = getDb(); const url = new URL(request.url);
     const search = (url.searchParams.get("search") || "").trim(); const like = `%${search}%`;
+    const sequenceSearch = /^\d{1,4}$/.test(search) ? search.padStart(4, "0") : null;
     const departmentId = url.searchParams.get("departmentId") || null; const categoryId = url.searchParams.get("categoryId") || null;
     const selectedPrices = Array.from(new Set(url.searchParams.getAll("price").filter((value) => /^\d+(?:\.\d{1,2})?$/.test(value)))).slice(0, 10000);
     const priceOrder = url.searchParams.get("priceOrder");
@@ -39,7 +45,8 @@ export async function GET(request: Request) {
     const priceFilter = selectedPrices.length ? sql`AND p.price = ANY(${selectedPrices}::numeric[])` : sql``;
     const orderBy = priceOrder === "asc" ? sql`p.price ASC NULLS LAST, p.created_at DESC` : priceOrder === "desc" ? sql`p.price DESC NULLS LAST, p.created_at DESC` : sql`p.created_at DESC`;
     const rows = await sql`
-      SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.image_urls, p.created_at, p.updated_at,
+      SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain,
+             p.cooperation_mechanism, p.notes, p.image_urls, p.created_at, p.updated_at,
              c.name AS category_name, u.name AS business_contact_name, count(DISTINCT s.id)::int AS sample_count,
              count(DISTINCT s.id) FILTER (WHERE s.status = 'active')::int AS active_count,
              string_agg(DISTINCT d.name, '、') AS selected_departments, string_agg(DISTINCT t.name, '、') AS tags,
@@ -52,12 +59,14 @@ export async function GET(request: Request) {
       LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
       WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+        OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
         OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
         ${priceFilter}
       GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = false AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+        OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
         OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
       ${priceFilter}`;
@@ -67,6 +76,7 @@ export async function GET(request: Request) {
       LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = false AND p.price IS NOT NULL
         AND (${search} = '' OR p.sku ILIKE ${like} OR p.name ILIKE ${like} OR p.store_name ILIKE ${like}
+          OR (${sequenceSearch}::text IS NOT NULL AND right(p.sku, 4) = ${sequenceSearch})
           OR EXISTS (SELECT 1 FROM product_sku_aliases psa WHERE psa.product_id=p.id AND psa.alias ILIKE ${like}))
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
       GROUP BY p.price ORDER BY p.price ASC`;

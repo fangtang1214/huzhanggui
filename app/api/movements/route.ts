@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     const page = Math.max(1, Number(url.searchParams.get("page") || 1)); const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize") || 30))); const offset = (page - 1) * pageSize;
     const rows = await sql`
       SELECT m.id, m.batch_id, m.from_status, m.to_status, m.remark, m.created_at,
-             s.id AS sample_id, s.code, p.sku, p.name AS product_name,
+             s.id AS sample_id, s.code, p.sku, p.name AS product_name, p.image_urls,
              fd.name AS from_department_name, fl.name AS from_location_name,
              td.name AS to_department_name, tl.name AS to_location_name, u.name AS operator_name
       FROM sample_movements m JOIN samples s ON s.id = m.sample_id JOIN products p ON p.id = s.product_id

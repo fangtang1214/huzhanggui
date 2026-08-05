@@ -6,8 +6,13 @@ import { writeAudit } from "@/lib/audit";
 import { productLinkSchema } from "@/lib/product-link";
 import { syncProductImageQueue } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
+import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
+const commissionSchema = z.string().trim().max(30).refine(
+  (value) => value === "" || COMMISSION_INPUT_PATTERN.test(value),
+  "佣金只能填写数字或数字加百分号",
+).optional().nullable().transform(normalizeCommission);
 const schema = z.object({
   name: z.string().trim().min(1, "请填写商品名称").max(200),
   departmentIds: z.array(z.string().uuid()).min(1, "至少选择一个选品直播间"),
@@ -15,7 +20,7 @@ const schema = z.object({
   storeName: optionalText,
   price: z.coerce.number().min(0).max(99999999).optional().nullable(),
   productUrl: productLinkSchema,
-  commission: optionalText,
+  commission: commissionSchema,
   storeRating: z.coerce.number().min(0).max(5).optional().nullable(),
   supplyChain: optionalText,
   cooperationMechanism: optionalText,
