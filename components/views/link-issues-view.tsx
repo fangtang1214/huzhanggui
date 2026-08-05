@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CalendarDays, CircleAlert, Clipboard, ExternalLink, FilePenLine, Filter, MessagesSquare, RefreshCw, Search, Store, UserRound } from "lucide-react";
+import { CalendarDays, CheckCircle2, CircleAlert, Copy, ExternalLink, FilePenLine, Filter, Link2, MessagesSquare, RefreshCw, Search, Store, UserRound } from "lucide-react";
 import { LINK_ISSUE_STATUS_META, LINK_ISSUE_STATUSES, type LinkIssueStatus } from "@/lib/link-issues";
 import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, Modal, PageHeader, Pagination, ProductImage } from "../ui";
@@ -87,8 +87,8 @@ export function LinkIssuesView() {
     } catch (reason) { toast(reason instanceof Error ? reason.message : "重新提交失败", "error"); } finally { setSaving(false); }
   }
 
-  async function copyLink(value: string) {
-    try { await navigator.clipboard.writeText(value); toast("商品链接已复制"); } catch { toast("复制失败，请手动选择链接", "error"); }
+  async function copyText(value: string, label: string) {
+    try { await navigator.clipboard.writeText(value); toast(`${label}已复制`); } catch { toast("复制失败，请手动选择", "error"); }
   }
 
   return <>
@@ -98,18 +98,64 @@ export function LinkIssuesView() {
       {loading ? <div className="panel"><LoadingState /></div> : error ? <div className="panel"><ErrorState message={error} retry={reload} /></div> : !data?.rows.length ? <div className="panel"><EmptyState title="没有找到问题记录" description={search || departmentId || status ? "可以更换筛选条件。" : "从商品档案发起链接报障后，会显示在这里。"} /></div> : <>{data.rows.map((issue) => {
         const focused = focusId === issue.id; const pending = issue.status === "pending"; const completed = issue.status === "replaced" || issue.status === "no_change" || issue.status === "unresolved";
         const processedLink = issue.status === "replaced" ? issue.newProductUrl : issue.status === "no_change" ? issue.oldProductUrl : "";
-        return <article className={`panel issue-card ${pending ? "issue-pending" : ""} ${focused ? "issue-focused" : ""}`} id={`issue-${issue.id}`} key={issue.id}>
-          {pending && <div className="issue-pending-strip"><CircleAlert size={17} /><b>等待商务处理</b><span>请优先核实报障链接并更新处理结果</span></div>}
-          {focused && completed && <div className="issue-history-reminder"><CircleAlert size={21} /><div><b>此问题已在{handledAgo(issue.resolvedAt)}处理过</b><p>请先检查下方的处理后链接是否可用；仍不可用时，可重新提交一条新的报障。</p></div></div>}
-          <header className="issue-card-head"><div className="issue-product"><ProductImage urls={issue.imageUrls} alt={issue.productName} size="small" /><div><span className="sku-chip">{issue.sku}</span><h2>{issue.productName}</h2><div className="issue-product-details"><p><Store size={14} />{issue.storeName || "未填店铺"}</p><p><MessagesSquare size={14} />供应链：{issue.supplyChain || "未填写"}</p></div></div></div>{issueStatus(issue.status)}</header>
-          <div className="issue-meta"><span><UserRound size={15} />{issue.reportedDepartmentName} · {issue.reportedByName || "未知账号"}</span><span><CalendarDays size={15} />报障于 {formatDate(issue.createdAt, true)}</span>{issue.resolvedAt && <span><FilePenLine size={15} />{issue.resolvedByName || "未知商务"} · {formatDate(issue.resolvedAt, true)}</span>}</div>
-          <div className="issue-body"><section className="issue-note"><small>问题备注</small><p>{issue.reportNote}</p></section><section className={`issue-links ${processedLink ? "has-result" : ""}`}><div><small>报障链接</small><code title={issue.oldProductUrl || ""}>{issue.oldProductUrl || "未填写"}</code>{issue.oldProductUrl && <button type="button" onClick={() => copyLink(issue.oldProductUrl || "")}><Clipboard size={14} />复制</button>}</div>{processedLink && <div className="resolved-link"><small>处理后链接</small><code title={processedLink}>{processedLink}</code><button type="button" onClick={() => copyLink(processedLink)}><Clipboard size={14} />复制</button></div>}</section>{issue.resolutionNote && <section className="issue-resolution-note"><small>处理说明</small><p>{issue.resolutionNote}</p></section>}</div>
-          <footer className="issue-actions"><LinkToProduct productId={issue.productId} />{issue.canCancel && <button type="button" className="button button-ghost button-compact" onClick={() => cancelIssue(issue)}>撤销报障</button>}{data.canProcess && issue.status !== "cancelled" && <button type="button" className="button button-secondary button-compact" onClick={() => openResolve(issue)}>{issue.status === "pending" ? "处理问题" : "修改结果"}</button>}{focused && completed && <button type="button" className="button button-primary button-compact" onClick={() => { setReportNote(""); setResubmittingIssue(issue); }}><RefreshCw size={15} />重新提交报障</button>}</footer>
+        return <article className={`issue-card ${pending ? "issue-pending" : ""} ${focused ? "issue-focused" : ""}`} id={`issue-${issue.id}`} key={issue.id}>
+          {pending && <div className="issue-notice-bar issue-pending-bar"><CircleAlert size={15} /><b>等待商务处理</b><span>请优先核实报障链接并更新处理结果</span></div>}
+          {focused && completed && <div className="issue-notice-bar issue-history-bar"><CircleAlert size={16} /><div><b>此问题已在{handledAgo(issue.resolvedAt)}处理过</b><p>请先检查下方的处理后链接是否可用；仍不可用时，可重新提交一条新的报障。</p></div></div>}
+
+          <div className="issue-card-inner">
+            <header className="issue-header">
+              <ProductImage urls={issue.imageUrls} alt={issue.productName} size="small" />
+              <div className="issue-header-info">
+                <div className="issue-header-title">
+                  <span className="sku-chip">{issue.sku}</span>
+                  <h2>{issue.productName}</h2>
+                </div>
+                <div className="issue-header-extra">
+                  <span><Store size={13} />{issue.storeName || "未填店铺"}</span>
+                  <span className="issue-header-sep" />
+                  <span><MessagesSquare size={13} />供应链：{issue.supplyChain || "未填写"}</span>
+                </div>
+              </div>
+              {issueStatus(issue.status)}
+            </header>
+
+            <div className="issue-content">
+              <div className="issue-note-box">
+                <h4>问题备注</h4>
+                <p>{issue.reportNote}</p>
+              </div>
+
+              <div className="issue-links-row">
+                <div className="issue-link-field">
+                  <span className="issue-link-label"><Link2 size={11} />报障链接</span>
+                  <code title={issue.oldProductUrl || ""}>{issue.oldProductUrl || "未填写"}</code>
+                  {issue.oldProductUrl && <button type="button" onClick={() => copyText(issue.oldProductUrl || "", "商品链接")}><Copy size={12} /></button>}
+                </div>
+                {processedLink && <div className="issue-link-field issue-link-resolved"><span className="issue-link-label"><CheckCircle2 size={11} />处理后链接</span><code title={processedLink}>{processedLink}</code><button type="button" onClick={() => copyText(processedLink, "处理后链接")}><Copy size={12} /></button></div>}
+              </div>
+
+              {issue.resolutionNote && <div className="issue-note-box issue-note-resolution"><h4>处理说明</h4><p>{issue.resolutionNote}</p></div>}
+            </div>
+
+            <footer className="issue-footer">
+              <div className="issue-meta-row">
+                <span><UserRound size={13} />{issue.reportedDepartmentName} · {issue.reportedByName || "未知账号"}</span>
+                <span><CalendarDays size={13} />报障于 {formatDate(issue.createdAt, true)}</span>
+                {issue.resolvedAt && <span><FilePenLine size={13} />{issue.resolvedByName || "未知商务"} · {formatDate(issue.resolvedAt, true)}</span>}
+              </div>
+              <div className="issue-actions">
+                <LinkToProduct productId={issue.productId} />
+                {issue.canCancel && <button type="button" className="button button-ghost button-compact" onClick={() => cancelIssue(issue)}>撤销报障</button>}
+                {data.canProcess && issue.status !== "cancelled" && <button type="button" className="button button-secondary button-compact" onClick={() => openResolve(issue)}>{issue.status === "pending" ? "处理问题" : "修改结果"}</button>}
+                {focused && completed && <button type="button" className="button button-primary button-compact" onClick={() => { setReportNote(""); setResubmittingIssue(issue); }}><RefreshCw size={14} />重新提交报障</button>}
+              </div>
+            </footer>
+          </div>
         </article>;
       })}<Pagination page={data.page} pageSize={data.pageSize} total={data.total} onChange={setPage} /></>}
     </section>
 
-    {editingIssue && <Modal title={editingIssue.status === "pending" ? "处理链接问题" : "修改处理结果"} onClose={() => { if (!saving) setEditingIssue(null); }}><form className="modal-form" onSubmit={submitResolve}><div className="issue-product-summary"><ProductImage urls={editingIssue.imageUrls} alt={editingIssue.productName} size="small" /><div><b>{editingIssue.productName}</b><span>{editingIssue.sku} · {editingIssue.reportedDepartmentName}</span></div></div><Field label="处理结果" required><div className="issue-result-picker"><label className={resolveForm.result === "replaced" ? "selected" : ""}><input type="radio" name="issueResult" checked={resolveForm.result === "replaced"} onChange={() => setResolveForm({ ...resolveForm, result: "replaced" })} /><b>已更换链接</b><small>同步覆盖商品档案链接</small></label><label className={resolveForm.result === "no_change" ? "selected" : ""}><input type="radio" name="issueResult" checked={resolveForm.result === "no_change"} onChange={() => setResolveForm({ ...resolveForm, result: "no_change" })} /><b>无需更换</b><small>核实后原链接可继续使用</small></label><label className={resolveForm.result === "unresolved" ? "selected" : ""}><input type="radio" name="issueResult" checked={resolveForm.result === "unresolved"} onChange={() => setResolveForm({ ...resolveForm, result: "unresolved" })} /><b>无法处理</b><small>本次任务直接结束</small></label></div></Field>{resolveForm.result === "replaced" && <Field label="新商品链接" required hint="提交后立即同步到商品档案。"><div className="input-prefix"><ExternalLink size={17} /><input type="text" required inputMode="url" autoCapitalize="none" spellCheck={false} value={resolveForm.newProductUrl} onChange={(event) => setResolveForm({ ...resolveForm, newProductUrl: event.target.value })} placeholder="https://... 或 weixinstorehs/..." /></div></Field>}<Field label={resolveForm.result === "replaced" ? "处理备注" : "处理原因"} required={resolveForm.result !== "replaced"} hint={resolveForm.result === "replaced" ? "选填" : "必填"}><textarea rows={4} required={resolveForm.result !== "replaced"} maxLength={2000} value={resolveForm.resolutionNote} onChange={(event) => setResolveForm({ ...resolveForm, resolutionNote: event.target.value })} /></Field><div className="modal-actions"><button type="button" className="button button-ghost" disabled={saving} onClick={() => setEditingIssue(null)}>取消</button><button className="button button-primary" disabled={saving || (resolveForm.result === "replaced" ? !resolveForm.newProductUrl.trim() : !resolveForm.resolutionNote.trim())}>{saving ? "正在保存…" : "确认处理结果"}</button></div></form></Modal>}
+    {editingIssue && <Modal title={editingIssue.status === "pending" ? "处理链接问题" : "修改处理结果"} onClose={() => { if (!saving) setEditingIssue(null); }}><form className="modal-form" onSubmit={submitResolve}><div className="issue-product-summary"><ProductImage urls={editingIssue.imageUrls} alt={editingIssue.productName} size="small" /><div><b>{editingIssue.productName}</b><span>{editingIssue.sku} · {editingIssue.reportedDepartmentName}</span></div></div><Field label="处理结果" required><div className="issue-result-picker"><label className={resolveForm.result === "replaced" ? "selected" : ""}><input type="radio" name="issueResult" checked={resolveForm.result === "replaced"} onChange={() => setResolveForm({ ...resolveForm, result: "replaced" })} /><b>已更换链接</b><small>同步覆盖商品档案链接</small></label><label className={resolveForm.result === "no_change" ? "selected" : ""}><input type="radio" name="issueResult" checked={resolveForm.result === "no_change"} onChange={() => setResolveForm({ ...resolveForm, result: "no_change" })} /><b>无需更换</b><small>核实后原链接可继续使用</small></label><label className={resolveForm.result === "unresolved" ? "selected" : ""}><input type="radio" name="issueResult" checked={resolveForm.result === "unresolved"} onChange={() => setResolveForm({ ...resolveForm, result: "unresolved" })} /><b>无法处理</b><small>本次任务直接结束</small></label></div></Field>{resolveForm.result === "replaced" && <Field label="新商品链接" required hint="提交后立即同步到商品档案。"><div className="input-prefix"><ExternalLink size={17} /><input type="text" required inputMode="url" autoCapitalize="none" spellCheck={false} value={resolveForm.newProductUrl} onChange={(event) => setResolveForm({ ...resolveForm, newProductUrl: event.target.value })} placeholder="https://... 或 weixinstorehs/..." /></div></Field>}<Field label={resolveForm.result === "replaced" ? "处理备注" : "处理原因"} required={resolveForm.result !== "replaced"} hint={resolveForm.result === "replaced" ? "选填" : "必填"}><textarea rows={4} required={resolveForm.result !== "replaced"} maxLength={2000} value={resolveForm.resolutionNote} onChange={(event) => setResolveForm({ ...resolveForm, resolutionNote: event.target.value })} placeholder={resolveForm.result === "replaced" ? "备注说明（选填）" : "请填写无法更换的具体原因"} /></Field><div className="modal-actions"><button type="button" className="button button-ghost" disabled={saving} onClick={() => setEditingIssue(null)}>取消</button><button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "确认处理结果"}</button></div></form></Modal>}
 
     {resubmittingIssue && <Modal title="重新提交链接报障" onClose={() => { if (!saving) setResubmittingIssue(null); }}><form className="modal-form" onSubmit={submitAgain}><div className="issue-repeat-warning"><CircleAlert size={22} /><div><b>最近一次问题已在{handledAgo(resubmittingIssue.resolvedAt)}处理</b><p>确认商品档案中的最新链接仍不可用后，再提交新的问题记录。上一次记录不会被修改。</p></div></div><Field label="新的问题备注" required><textarea rows={5} required maxLength={2000} value={reportNote} onChange={(event) => setReportNote(event.target.value)} placeholder="请描述最新链接目前出现的问题。" /></Field><div className="modal-actions"><button type="button" className="button button-ghost" disabled={saving} onClick={() => setResubmittingIssue(null)}>取消</button><button className="button button-primary" disabled={saving || !reportNote.trim()}>{saving ? "正在提交…" : "新增报障记录"}</button></div></form></Modal>}
   </>;
