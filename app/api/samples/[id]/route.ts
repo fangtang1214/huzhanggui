@@ -15,7 +15,7 @@ const schema = z.object({
   note: z.string().trim().max(500).optional().nullable(),
 });
 
-async function findSample(id: string, scopedDepartment: string | null) {
+async function findSample(id: string) {
   const sql = getDb();
   const rows = await sql`
     SELECT s.*, p.sku, p.name AS product_name, p.store_name, p.product_url, p.image_urls,
@@ -28,8 +28,6 @@ async function findSample(id: string, scopedDepartment: string | null) {
     LEFT JOIN categories c ON c.id = p.category_id
     WHERE (s.id::text = ${id} OR lower(s.code) = ${id.toLowerCase()}
       OR EXISTS (SELECT 1 FROM sample_code_aliases sca WHERE sca.sample_id=s.id AND lower(sca.alias)=${id.toLowerCase()})) AND s.archived = false
-      AND (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
-        OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}))
     LIMIT 1
   `;
   return rows[0] || null;
@@ -37,11 +35,10 @@ async function findSample(id: string, scopedDepartment: string | null) {
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireUser("samples:view");
+    await requireUser("samples:view");
     const { id } = await context.params;
-    const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
-    const sample = await findSample(id, scopedDepartment);
-    if (!sample) return Response.json({ ok: false, message: "样品不存在或无权查看" }, { status: 404 });
+    const sample = await findSample(id);
+    if (!sample) return Response.json({ ok: false, message: "样品不存在" }, { status: 404 });
     const sql = getDb();
     const movements = await sql`
       SELECT m.id, m.from_status, m.to_status, m.remark, m.created_at,
@@ -85,9 +82,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (input.status === "active" && !input.departmentId) {
       return Response.json({ ok: false, message: "在用/在库样品必须选择所在部门" }, { status: 400 });
     }
-    const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
-    const sample = await findSample(id, scopedDepartment);
-    if (!sample) return Response.json({ ok: false, message: "样品不存在或无权操作" }, { status: 404 });
+    const sample = await findSample(id);
+    if (!sample) return Response.json({ ok: false, message: "样品不存在" }, { status: 404 });
     const sql = getDb();
     if (input.locationId) {
       const location = await sql`SELECT id FROM locations WHERE id = ${input.locationId} AND department_id = ${input.departmentId || null} AND active = true`;
@@ -120,9 +116,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
   try {
     const user = await requireUser("samples:archive");
     const { id } = await context.params;
-    const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
-    const sample = await findSample(id, scopedDepartment);
-    if (!sample) return Response.json({ ok: false, message: "样品不存在或无权操作" }, { status: 404 });
+    const sample = await findSample(id);
+    if (!sample) return Response.json({ ok: false, message: "样品不存在" }, { status: 404 });
     if (sample.status === "active") return Response.json({ ok: false, message: "请先将样品处理为结束状态，再归档" }, { status: 409 });
     const sql = getDb();
     await sql`UPDATE samples SET archived = true, updated_at = now() WHERE id = ${sample.id}`;

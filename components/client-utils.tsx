@@ -9,7 +9,6 @@ export type LookupData = {
   categories: Array<{ id: string; name: string }>;
   tags: Array<{ id: string; name: string; color: string }>;
   users: Array<{ id: string; name: string; username: string; departmentId: string; departmentName: string }>;
-  roles: Array<{ id: string; name: string }>;
   permissionGroups: Array<{ label: string; items: Array<{ key: string; label: string }> }>;
 };
 
@@ -35,7 +34,7 @@ export function AppDataProvider({ user, children }: { user: CurrentUser; childre
     try { setLookups(await apiFetch<LookupData>("/api/lookups")); } catch { setLookups(null); }
   }, []);
   useEffect(() => { void refreshLookups(); }, [refreshLookups]);
-  const value = useMemo<AppContextValue>(() => ({ user, lookups, refreshLookups, can: (permission) => user.permissions.includes("*") || user.permissions.includes(permission) }), [user, lookups, refreshLookups]);
+  const value = useMemo<AppContextValue>(() => ({ user, lookups, refreshLookups, can: (permission) => user.isSuperAdmin || user.permissions.includes(permission) }), [user, lookups, refreshLookups]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 

@@ -4,9 +4,8 @@ import { getDb } from "@/lib/db";
 
 export async function GET() {
   try {
-    const user = await requireUser("dashboard:view");
+    await requireUser("dashboard:view");
     const sql = getDb();
-    const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
     const [summary] = await sql`
       SELECT
         count(*) FILTER (WHERE s.archived = false)::int AS total_samples,
@@ -15,14 +14,12 @@ export async function GET() {
         count(*) FILTER (WHERE s.archived = false AND s.status IN ('damaged','lost','scrapped'))::int AS exception_samples,
         count(DISTINCT s.product_id) FILTER (WHERE s.archived = false)::int AS total_products
       FROM samples s
-      WHERE (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
-        OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}))
     `;
     const locations = await sql`
       SELECT d.id, d.name, count(s.id)::int AS count
       FROM departments d
       LEFT JOIN samples s ON s.current_department_id = d.id AND s.status = 'active' AND s.archived = false
-      WHERE d.active = true AND (${scopedDepartment}::uuid IS NULL OR d.id = ${scopedDepartment})
+      WHERE d.active = true
       GROUP BY d.id, d.name HAVING count(s.id) > 0
       ORDER BY count DESC, d.name LIMIT 8
     `;
@@ -37,9 +34,6 @@ export async function GET() {
       LEFT JOIN departments fd ON fd.id = m.from_department_id
       LEFT JOIN departments td ON td.id = m.to_department_id
       LEFT JOIN locations tl ON tl.id = m.to_location_id
-      WHERE (${scopedDepartment}::uuid IS NULL OR m.from_department_id = ${scopedDepartment}
-             OR m.to_department_id = ${scopedDepartment}
-             OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = p.id AND pd.department_id = ${scopedDepartment}))
       ORDER BY m.created_at DESC LIMIT 8
     `;
     const newProducts = await sql`
@@ -50,8 +44,7 @@ export async function GET() {
       LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false
       LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id
-      WHERE p.archived = false AND (${scopedDepartment}::uuid IS NULL OR pd.department_id = ${scopedDepartment}
-        OR EXISTS (SELECT 1 FROM samples sx WHERE sx.product_id = p.id AND sx.current_department_id = ${scopedDepartment}))
+      WHERE p.archived = false
       GROUP BY p.id ORDER BY p.created_at DESC LIMIT 6
     `;
     return ok({ summary, locations, recent, newProducts });
@@ -59,4 +52,3 @@ export async function GET() {
     return apiError(error);
   }
 }
-

@@ -14,10 +14,8 @@ export type CurrentUser = {
   departmentId: string;
   departmentName: string;
   departmentKind: "business" | "live_room" | "management" | "other";
-  roleId: string;
-  roleName: string;
   permissions: string[];
-  dataScope: "all" | "department";
+  isSuperAdmin: boolean;
   mustChangePassword: boolean;
 };
 
@@ -30,7 +28,7 @@ function hashToken(token: string) {
 }
 
 export function hasPermission(user: CurrentUser, permission: string) {
-  return user.permissions.includes("*") || user.permissions.includes(permission);
+  return user.isSuperAdmin || user.permissions.includes(permission);
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
@@ -41,15 +39,13 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const tokenHash = hashToken(token);
   const rows = await sql`
     SELECT u.id, u.username, u.name, u.department_id, d.name AS department_name, d.kind AS department_kind,
-           u.role_id, r.name AS role_name, r.permissions, r.data_scope,
-           u.must_change_password
+           u.permissions, u.is_super_admin, u.must_change_password
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     JOIN departments d ON d.id = u.department_id
-    JOIN roles r ON r.id = u.role_id
     WHERE s.token_hash = ${tokenHash}
       AND s.expires_at > now()
-      AND u.active = true AND r.active = true AND d.active = true
+      AND u.active = true AND d.active = true
     LIMIT 1
   `;
   if (rows.length === 0) return null;
@@ -62,10 +58,8 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     departmentId: row.departmentId,
     departmentName: row.departmentName,
     departmentKind: row.departmentKind,
-    roleId: row.roleId,
-    roleName: row.roleName,
     permissions: Array.isArray(row.permissions) ? row.permissions : [],
-    dataScope: row.dataScope,
+    isSuperAdmin: Boolean(row.isSuperAdmin),
     mustChangePassword: row.mustChangePassword,
   };
 }
@@ -73,14 +67,13 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 export async function authenticate(username: string, password: string) {
   const sql = getDb();
   const rows = await sql`
-    SELECT u.id, u.password_hash, u.active, r.active AS role_active, d.active AS department_active
+    SELECT u.id, u.password_hash, u.active, d.active AS department_active
     FROM users u
-    JOIN roles r ON r.id = u.role_id
     JOIN departments d ON d.id = u.department_id
     WHERE lower(u.username) = ${username.trim().toLowerCase()}
     LIMIT 1
   `;
-  if (rows.length === 0 || !rows[0].active || !rows[0].roleActive || !rows[0].departmentActive) {
+  if (rows.length === 0 || !rows[0].active || !rows[0].departmentActive) {
     return null;
   }
   const valid = await bcrypt.compare(password, rows[0].passwordHash);
@@ -128,7 +121,7 @@ export async function requireUser(permission?: string) {
 
 export async function requireSuperAdmin() {
   const user = await requireUser();
-  if (!user.permissions.includes("*")) {
+  if (!user.isSuperAdmin) {
     throw new AuthError("仅超级管理员可以执行系统更新", 403);
   }
   return user;

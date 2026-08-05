@@ -4,7 +4,7 @@ import { getDb } from "@/lib/db";
 
 export async function GET(request: Request) {
   try {
-    const user = await requireUser("samples:view");
+    await requireUser("samples:view");
     const sql = getDb();
     const url = new URL(request.url);
     const search = (url.searchParams.get("search") || "").trim();
@@ -16,7 +16,6 @@ export async function GET(request: Request) {
     const page = Math.max(1, Number(url.searchParams.get("page") || 1));
     const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize") || 30)));
     const offset = (page - 1) * pageSize;
-    const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
     const rows = await sql`
       SELECT s.id, s.code, s.arrived_at, s.status, s.note, s.updated_at,
              p.id AS product_id, p.sku, p.name AS product_name, p.image_urls,
@@ -34,8 +33,6 @@ export async function GET(request: Request) {
         AND (${departmentId}::uuid IS NULL OR s.current_department_id = ${departmentId})
         AND (${locationId}::uuid IS NULL OR s.current_location_id = ${locationId})
         AND (${productId}::uuid IS NULL OR s.product_id = ${productId})
-        AND (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
-          OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}))
       ORDER BY s.updated_at DESC, s.code DESC
       LIMIT ${pageSize} OFFSET ${offset}
     `;
@@ -49,8 +46,6 @@ export async function GET(request: Request) {
         AND (${departmentId}::uuid IS NULL OR s.current_department_id = ${departmentId})
         AND (${locationId}::uuid IS NULL OR s.current_location_id = ${locationId})
         AND (${productId}::uuid IS NULL OR s.product_id = ${productId})
-        AND (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
-          OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}))
     `;
     return ok({ rows, total: count.total, page, pageSize });
   } catch (error) {

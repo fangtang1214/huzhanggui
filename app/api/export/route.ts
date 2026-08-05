@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url); const type = url.searchParams.get("type") || "samples";
     const permission = type === "products" ? "products:export" : "samples:export";
-    const user = await requireUser(permission); const sql = getDb(); const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
+    await requireUser(permission); const sql = getDb();
     let workbook: Uint8Array;
     if (type === "products") {
       const rows = await sql`
@@ -20,8 +20,7 @@ export async function GET(request: Request) {
         LEFT JOIN product_departments pd ON pd.product_id = p.id LEFT JOIN departments d ON d.id = pd.department_id
         LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
         LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false
-        WHERE p.archived = false AND (${scopedDepartment}::uuid IS NULL OR pd.department_id = ${scopedDepartment}
-          OR EXISTS (SELECT 1 FROM samples sx WHERE sx.product_id = p.id AND sx.current_department_id = ${scopedDepartment}))
+        WHERE p.archived = false
         GROUP BY p.id, c.name, u.name ORDER BY p.created_at DESC
       `;
       workbook = createXlsx("商品档案", [
@@ -39,8 +38,6 @@ export async function GET(request: Request) {
         FROM sample_movements m JOIN samples s ON s.id = m.sample_id JOIN products p ON p.id = s.product_id
         LEFT JOIN departments fd ON fd.id = m.from_department_id LEFT JOIN locations fl ON fl.id = m.from_location_id
         LEFT JOIN departments td ON td.id = m.to_department_id LEFT JOIN locations tl ON tl.id = m.to_location_id LEFT JOIN users u ON u.id = m.operator_id
-        WHERE (${scopedDepartment}::uuid IS NULL OR m.from_department_id = ${scopedDepartment} OR m.to_department_id = ${scopedDepartment}
-          OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = p.id AND pd.department_id = ${scopedDepartment}))
         ORDER BY m.created_at DESC
       `;
       const formatted = rows.map((row) => ({ ...row, fromStatusText: row.fromStatus ? statusLabel(String(row.fromStatus)) : "首次登记", toStatusText: statusLabel(String(row.toStatus)), fromPlace: [row.fromDepartmentName, row.fromLocationName].filter(Boolean).join(" · ") || "—", toPlace: row.toStatus === "active" ? [row.toDepartmentName, row.toLocationName].filter(Boolean).join(" · ") : statusLabel(String(row.toStatus)) }));
@@ -54,8 +51,7 @@ export async function GET(request: Request) {
         SELECT s.code, s.arrived_at, s.status, s.note, p.sku, p.name AS product_name, p.store_name,
                d.name AS department_name, l.name AS location_name, s.updated_at
         FROM samples s JOIN products p ON p.id = s.product_id LEFT JOIN departments d ON d.id = s.current_department_id LEFT JOIN locations l ON l.id = s.current_location_id
-        WHERE s.archived = false AND p.archived = false AND (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
-          OR EXISTS (SELECT 1 FROM product_departments pd WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}))
+        WHERE s.archived = false AND p.archived = false
         ORDER BY s.updated_at DESC
       `;
       const formatted = rows.map((row) => ({ ...row, statusText: statusLabel(String(row.status)), place: activeLocationLabel({ status: String(row.status), department_name: row.departmentName ? String(row.departmentName) : null, location_name: row.locationName ? String(row.locationName) : null }) }));

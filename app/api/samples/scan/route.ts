@@ -4,7 +4,7 @@ import { getDb } from "@/lib/db";
 
 export async function GET(request: Request) {
   try {
-    const user = await requireUser("samples:move");
+    await requireUser("samples:move");
     const code = (new URL(request.url).searchParams.get("code") || "").trim();
     if (!code) {
       return Response.json({ ok: false, message: "请扫描或输入样品条形码" }, { status: 400 });
@@ -14,7 +14,6 @@ export async function GET(request: Request) {
     }
 
     const sql = getDb();
-    const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
     const rows = await sql`
       SELECT s.id, s.code, s.status, s.arrived_at,
              p.id AS product_id, p.sku, p.name AS product_name, p.image_urls,
@@ -30,15 +29,10 @@ export async function GET(request: Request) {
           WHERE sca.sample_id = s.id AND lower(sca.alias) = ${code.toLowerCase()}
         ))
         AND s.archived = false AND p.archived = false
-        AND (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
-          OR EXISTS (
-            SELECT 1 FROM product_departments pd
-            WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}
-          ))
       LIMIT 1
     `;
     if (!rows[0]) {
-      return Response.json({ ok: false, message: "未找到样品，或当前账号无权操作" }, { status: 404 });
+      return Response.json({ ok: false, message: "未找到样品" }, { status: 404 });
     }
     return ok({ sample: rows[0] });
   } catch (error) {

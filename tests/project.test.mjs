@@ -12,7 +12,7 @@ import { extractSampleCode } from "../lib/scan-code.ts";
 
 test("系统包含核心样品流转数据结构", async () => {
   const migration = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
-  for (const table of ["products", "samples", "sample_movements", "audit_logs", "users", "roles", "departments", "locations"]) {
+  for (const table of ["products", "samples", "sample_movements", "audit_logs", "users", "departments", "locations"]) {
     assert.match(migration, new RegExp(`CREATE TABLE ${table}`));
   }
   assert.match(migration, /sample_code_seq/);
@@ -128,6 +128,22 @@ test("链接报障支持公共待办、商务处理、历史提醒和重新提�
   assert.match(view, /一键复制/);
 });
 
+test("账号直接授权并限制普通管理员扩大权限", async () => {
+  const policy = await readFile(new URL("../lib/account-permissions.ts", import.meta.url), "utf8");
+  assert.match(policy, /不能修改自己的账号权限/);
+  assert.match(policy, /只有超级管理员可以授予或移除管理账号权限/);
+  assert.match(policy, /actor\.permissions\.includes\(permission\)/);
+  const navigation = await readFile(new URL("../components/huzhanggui-app.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(navigation, /href: "\/roles"/);
+  const migration = await readFile(new URL("../migrations/008_user_permissions.sql", import.meta.url), "utf8");
+  assert.match(migration, /ALTER TABLE users ADD COLUMN permissions/);
+  assert.match(migration, /DROP TABLE roles/);
+  for (const file of ["auth.ts", "../app/api/dashboard/route.ts", "../app/api/products/route.ts", "../app/api/samples/route.ts", "../app/api/movements/route.ts", "../app/api/export/route.ts"]) {
+    const source = await readFile(new URL(file.startsWith("..") ? file : `../lib/${file}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /dataScope|scopedDepartment/);
+  }
+});
+
 test("自动货号使用 HZG 两级编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
   assert.equal(formatProductSku("2026-08-02", 7), "HZG-2026-0007");
@@ -197,6 +213,15 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
         INSERT INTO samples(code,product_id,arrived_at,created_at)
         SELECT 'SY-20260804-000002',id,'2026-08-04','2026-08-04T02:02:00Z' FROM products WHERE sku='SP-20260804-NaN';
       `);
+      if (file === "008_user_permissions.sql") await database.exec(`
+        INSERT INTO departments(name,kind) VALUES ('迁移测试部门','management');
+        INSERT INTO roles(name,permissions,data_scope) VALUES ('旧普通角色','["products:view","samples:view","roles:view"]','department');
+        INSERT INTO users(username,name,password_hash,department_id,role_id)
+        SELECT 'migration-user','迁移用户','test',d.id,r.id FROM departments d,roles r WHERE d.name='迁移测试部门' AND r.name='旧普通角色';
+        INSERT INTO roles(name,permissions,data_scope,is_system) VALUES ('旧超级管理员','["*"]','all',true);
+        INSERT INTO users(username,name,password_hash,department_id,role_id)
+        SELECT 'migration-admin','迁移管理员','test',d.id,r.id FROM departments d,roles r WHERE d.name='迁移测试部门' AND r.name='旧超级管理员';
+      `);
       await database.exec(await readFile(new URL(file, directory), "utf8"));
     }
     await database.exec(`
@@ -247,6 +272,14 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(issues.rows.length, 2);
     assert.equal(issues.rows[0].status, "replaced");
     assert.equal(issues.rows[1].previous_issue_id, firstIssue.rows[0].id);
+    const migratedUser = await database.query("SELECT permissions,is_super_admin FROM users WHERE username='migration-user'");
+    assert.deepEqual(migratedUser.rows[0].permissions, ["products:view", "samples:view"]);
+    assert.equal(migratedUser.rows[0].is_super_admin, false);
+    const migratedAdmin = await database.query("SELECT permissions,is_super_admin FROM users WHERE username='migration-admin'");
+    assert.deepEqual(migratedAdmin.rows[0].permissions, []);
+    assert.equal(migratedAdmin.rows[0].is_super_admin, true);
+    const rolesTable = await database.query("SELECT to_regclass('roles') AS name");
+    assert.equal(rolesTable.rows[0].name, null);
   } finally {
     await database.close();
   }

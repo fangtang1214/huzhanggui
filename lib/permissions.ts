@@ -39,8 +39,6 @@ export const PERMISSION_GROUPS = [
     items: [
       { key: "users:view", label: "查看账号" },
       { key: "users:manage", label: "管理账号" },
-      { key: "roles:view", label: "查看角色" },
-      { key: "roles:manage", label: "管理角色与权限" },
       { key: "audits:view", label: "查看操作日志" },
       { key: "backups:view", label: "查看备份" },
       { key: "backups:manage", label: "创建与下载备份" },
@@ -54,3 +52,7 @@ export const ALL_PERMISSIONS = PERMISSION_GROUPS.flatMap((group) =>
 );
 
 export type PermissionKey = (typeof ALL_PERMISSIONS)[number];
+
+export function isPermissionKey(value: string): value is PermissionKey {
+  return (ALL_PERMISSIONS as readonly string[]).includes(value);
+}

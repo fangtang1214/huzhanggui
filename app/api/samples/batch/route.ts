@@ -39,18 +39,12 @@ export async function POST(request: Request) {
       }
     }
 
-    const scopedDepartment = user.dataScope === "department" ? user.departmentId : null;
     const outcome = await sql.begin(async (tx) => {
       const samples = await tx`
         SELECT s.id, s.code, s.status, s.current_department_id, s.current_location_id
         FROM samples s
         JOIN products p ON p.id = s.product_id
         WHERE s.id IN ${tx(input.sampleIds)} AND s.archived = false AND p.archived = false
-          AND (${scopedDepartment}::uuid IS NULL OR s.current_department_id = ${scopedDepartment}
-            OR EXISTS (
-              SELECT 1 FROM product_departments pd
-              WHERE pd.product_id = s.product_id AND pd.department_id = ${scopedDepartment}
-            ))
         FOR UPDATE OF s
       `;
       const availableIds = samples.map((sample) => sample.id as string);
@@ -97,7 +91,7 @@ export async function POST(request: Request) {
     const results = input.sampleIds.map((sampleId) => {
       const sample = sampleMap.get(sampleId);
       if (!sample) {
-        return { sampleId, success: false, changed: false, message: "样品不存在、已归档或无权操作" };
+        return { sampleId, success: false, changed: false, message: "样品不存在或已归档" };
       }
       if (outcome.previouslyCompleted.has(sampleId)) {
         return { sampleId, code: sample.code, success: true, changed: false, message: "该批次已处理，本次未重复流转" };

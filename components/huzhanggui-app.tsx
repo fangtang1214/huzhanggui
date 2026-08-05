@@ -11,11 +11,11 @@ import { ProductsView, ProductFormView, ProductDetailView } from "./views/produc
 import { SamplesView, SampleDetailView, ScannerView } from "./views/samples-view";
 import { MovementsView } from "./views/movements-view";
 import { OrganizationView } from "./views/organization-view";
-import { UsersView, RolesView } from "./views/access-view";
+import { UsersView } from "./views/access-view";
 import { AuditsView, BackupsView, ProfileView, SystemUpdateView } from "./views/system-view";
 import { RecognitionView } from "./views/recognition-view";
 import { LinkIssuesView } from "./views/link-issues-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
@@ -30,7 +30,6 @@ const manageNav = [
   { href: "/locations", key: "locations", label: "位置管理", permission: "locations:view", icon: MapPin },
   { href: "/catalog", key: "catalog", label: "分类标签", permission: "catalog:manage", icon: Tags },
   { href: "/users", key: "users", label: "账号管理", permission: "users:view", icon: UserCog },
-  { href: "/roles", key: "roles", label: "角色权限", permission: "roles:view", icon: ShieldCheck },
   { href: "/recognition", key: "recognition", label: "图片识别", permission: "image_matching:manage|products:correct_merge", icon: BrainCircuit },
   { href: "/audits", key: "audits", label: "操作日志", permission: "audits:view", icon: ClipboardList },
   { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
@@ -64,7 +63,6 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "movements") return <MovementsView />;
   if (view === "departments" || view === "locations" || view === "catalog") return <OrganizationView section={view} />;
   if (view === "users") return <UsersView />;
-  if (view === "roles") return <RolesView />;
   if (view === "recognition") return <RecognitionView />;
   if (view === "audits") return <AuditsView />;
   if (view === "backups") return <BackupsView />;
@@ -75,7 +73,7 @@ function ViewRouter({ path }: { path: string[] }) {
 
 export function HuZhangGuiApp({ initialUser, path }: { initialUser: CurrentUser; path: string[] }) {
   const [sidebarOpen, setSidebarOpen] = useState(false); const [userOpen, setUserOpen] = useState(false); const [pendingIssueCount, setPendingIssueCount] = useState(0); const pathname = usePathname();
-  const can = (permission: string) => initialUser.permissions.includes("*") || initialUser.permissions.includes(permission);
+  const can = (permission: string) => initialUser.isSuperAdmin || initialUser.permissions.includes(permission);
   const refreshPendingIssueCount = useCallback(async () => {
     try { const result = await apiFetch<{ count: number }>("/api/link-issues/count"); setPendingIssueCount(result.count); } catch { setPendingIssueCount(0); }
   }, []);
@@ -91,7 +89,7 @@ export function HuZhangGuiApp({ initialUser, path }: { initialUser: CurrentUser;
         <div className="sidebar-foot"><div className="department-chip"><UsersRound size={16} /><span>{initialUser.departmentName}</span></div><small>数据持续自动保存</small></div>
       </aside>
       <div className="app-main">
-        <header className="topbar"><div className="topbar-title"><button className="mobile-menu icon-button" onClick={() => setSidebarOpen(true)}><Menu size={21} /></button><h2>{viewTitle(path)}</h2></div><div className="topbar-actions">{can("products:create") && <Link href="/products/new" className="button button-primary button-compact"><PackagePlus size={17} /><span>登记到样</span></Link>}{can("samples:view") && <Link href="/scan" className="icon-button scan-shortcut" aria-label="扫码"><ScanLine size={20} /></Link>}<div className="user-menu"><button className="user-button" onClick={() => setUserOpen((value) => !value)}><span className="avatar">{initialUser.name.slice(0, 1)}</span><span className="user-copy"><b>{initialUser.name}</b><small>{initialUser.roleName}</small></span><ChevronDown size={16} /></button>{userOpen && <div className="user-dropdown"><Link href="/profile" onClick={() => setUserOpen(false)}><Settings2 size={17} />账号设置</Link><button onClick={logout}><LogOut size={17} />退出登录</button></div>}</div></div></header>
+        <header className="topbar"><div className="topbar-title"><button className="mobile-menu icon-button" onClick={() => setSidebarOpen(true)}><Menu size={21} /></button><h2>{viewTitle(path)}</h2></div><div className="topbar-actions">{can("products:create") && <Link href="/products/new" className="button button-primary button-compact"><PackagePlus size={17} /><span>登记到样</span></Link>}{can("samples:view") && <Link href="/scan" className="icon-button scan-shortcut" aria-label="扫码"><ScanLine size={20} /></Link>}<div className="user-menu"><button className="user-button" onClick={() => setUserOpen((value) => !value)}><span className="avatar">{initialUser.name.slice(0, 1)}</span><span className="user-copy"><b>{initialUser.name}</b><small>{initialUser.isSuperAdmin ? "超级管理员" : initialUser.departmentName}</small></span><ChevronDown size={16} /></button>{userOpen && <div className="user-dropdown"><Link href="/profile" onClick={() => setUserOpen(false)}><Settings2 size={17} />账号设置</Link><button onClick={logout}><LogOut size={17} />退出登录</button></div>}</div></div></header>
         <main className="page-content"><ViewRouter path={path} /></main>
       </div>
     </div>
