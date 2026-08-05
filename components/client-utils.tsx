@@ -73,3 +73,20 @@ export function formatDate(value?: string | Date | null, includeTime = false) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", ...(includeTime ? { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false } : {}) }).format(new Date(value));
 }
+
+export async function copyToClipboard(text: string) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "absolute";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return true;
+    } catch { return false; }
+  }
+}

@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CalendarDays, CheckCircle2, CircleAlert, Copy, ExternalLink, FilePenLine, Filter, Link2, MessagesSquare, RefreshCw, Search, Store, UserRound } from "lucide-react";
 import { LINK_ISSUE_STATUS_META, LINK_ISSUE_STATUSES, type LinkIssueStatus } from "@/lib/link-issues";
-import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
+import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, Modal, PageHeader, Pagination, ProductImage } from "../ui";
 
 type LinkIssue = {
@@ -88,7 +88,7 @@ export function LinkIssuesView() {
   }
 
   async function copyText(value: string, label: string) {
-    try { await navigator.clipboard.writeText(value); toast(`${label}已复制`); } catch { toast("复制失败，请手动选择", "error"); }
+    const ok = await copyToClipboard(value); if (ok) toast(`${label}已复制`); else toast("复制失败，请手动选择", "error");
   }
 
   return <>

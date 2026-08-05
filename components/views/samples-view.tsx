@@ -10,7 +10,7 @@ import { activeLocationLabel, SAMPLE_STATUSES, statusLabel } from "@/lib/constan
 import { extractSampleCode } from "@/lib/scan-code";
 import { normalizeProductCopyConfig, type ProductCopyConfig } from "@/lib/product-copy";
 import { copyProductToClipboard } from "@/lib/product-copy-clipboard";
-import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
+import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, Modal, PageHeader, Pagination, ProductImage, StatusBadge } from "../ui";
 import { BatchScanner } from "./batch-scanner";
 
@@ -60,7 +60,7 @@ export function SampleDetailView({ id }: { id: string }) {
   if (loading) return <LoadingState />; if (error || !data) return <ErrorState message={error || "样品不存在"} retry={reload} />;
   const s = data.sample; const locations = lookups?.locations.filter((item) => item.departmentId === form.departmentId) || [];
   async function move(event: FormEvent) { event.preventDefault(); setSaving(true); try { await apiFetch(`/api/samples/${s.id}`, { method: "PATCH", body: JSON.stringify({ ...form, departmentId: form.status === "active" ? form.departmentId || null : null, locationId: form.status === "active" ? form.locationId || null : null }) }); toast("样品位置与状态已更新"); setMoveOpen(false); await reload(); } catch (reason) { toast(reason instanceof Error ? reason.message : "更新失败", "error"); } finally { setSaving(false); } }
-  async function copyCode() { await navigator.clipboard.writeText(s.code); setCopied(true); window.setTimeout(() => setCopied(false), 1600); }
+  async function copyCode() { await copyToClipboard(s.code); setCopied(true); window.setTimeout(() => setCopied(false), 1600); }
   async function archive() { if (!confirm("确定归档这件样品吗？归档后仍保留历史记录。")) return; try { await apiFetch(`/api/samples/${s.id}`, { method: "DELETE" }); toast("样品已归档"); router.push("/samples"); } catch (reason) { toast(reason instanceof Error ? reason.message : "归档失败", "error"); } }
   return <>
     <PageHeader eyebrow={`实物编号 ${s.code}`} title={s.productName} description={`货号 ${s.sku} · 到样 ${formatDate(s.arrivedAt)}`} actions={<><Link className="button button-ghost" href="/samples"><ArrowLeft size={17} />返回</Link>{can("samples:move") && <button className="button button-primary" onClick={() => setMoveOpen(true)}><MoveRight size={17} />修改位置 / 状态</button>}</>} />
