@@ -13,9 +13,10 @@ import { MovementsView } from "./views/movements-view";
 import { OrganizationView } from "./views/organization-view";
 import { UsersView } from "./views/access-view";
 import { AuditsView, BackupsView, ProfileView, SystemUpdateView } from "./views/system-view";
+import { TalentAccountsView } from "./views/talent-accounts-view";
 import { RecognitionView } from "./views/recognition-view";
 import { LinkIssuesView } from "./views/link-issues-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, Store, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
@@ -33,6 +34,7 @@ const manageNav = [
   { href: "/recognition", key: "recognition", label: "图片识别", permission: "image_matching:manage|products:correct_merge", icon: BrainCircuit },
   { href: "/audits", key: "audits", label: "操作日志", permission: "audits:view", icon: ClipboardList },
   { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
+  { href: "/talent-accounts", key: "talent-accounts", label: "带货账号", permission: "*", icon: Store },
   { href: "/system-update", key: "system-update", label: "系统更新", permission: "*", icon: RefreshCw },
 ];
 
@@ -66,6 +68,7 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "recognition") return <RecognitionView />;
   if (view === "audits") return <AuditsView />;
   if (view === "backups") return <BackupsView />;
+  if (view === "talent-accounts") return <TalentAccountsView />;
   if (view === "system-update") return <SystemUpdateView />;
   if (view === "profile") return <ProfileView />;
   return <DashboardView />;

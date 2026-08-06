@@ -388,3 +388,31 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     await database.close();
   }
 });
+
+test("橱窗选品登记需要带货账号配置与官方接口同步", async () => {
+  const migration = await readFile(new URL("../migrations/015_talent_window.sql", import.meta.url), "utf8");
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS talent_accounts/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS talent_window_products/);
+  assert.match(migration, /UNIQUE \(account_id, product_id\)/);
+  const api = await readFile(new URL("../lib/talent-window.ts", import.meta.url), "utf8");
+  assert.match(api, /\/cgi-bin\/token\?appid=/);
+  assert.match(api, /\/channels\/ec\/talent\/window\/product\/list\/get/);
+  assert.match(api, /\/channels\/ec\/talent\/window\/product\/get/);
+  assert.match(api, /40164/);
+  const accountsRoute = await readFile(new URL("../app/api/talent-accounts/route.ts", import.meta.url), "utf8");
+  assert.match(accountsRoute, /requireSuperAdmin/);
+  assert.match(accountsRoute, /RETURNING id, name, appid, active, sync_status, synced_at, created_at/);
+  assert.doesNotMatch(accountsRoute, /SELECT a\.id, a\.name, a\.appid, a\.app_secret/);
+  const syncRoute = await readFile(new URL("../app/api/talent-accounts/[id]/sync/route.ts", import.meta.url), "utf8");
+  assert.match(syncRoute, /products:create/);
+  assert.match(syncRoute, /sync_status <> 'syncing'/);
+  const productsRoute = await readFile(new URL("../app/api/window-products/route.ts", import.meta.url), "utf8");
+  assert.match(productsRoute, /requireUser\("products:create"\)/);
+  assert.match(productsRoute, /weixinstorehs/);
+  const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(form, /从橱窗选择/);
+  assert.match(form, /WindowProductPicker/);
+  assert.match(form, /registeredSku/);
+  const navigation = await readFile(new URL("../components/huzhanggui-app.tsx", import.meta.url), "utf8");
+  assert.match(navigation, /\/talent-accounts/);
+});
