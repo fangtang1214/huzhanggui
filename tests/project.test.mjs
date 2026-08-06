@@ -419,5 +419,15 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(navigation, /ShoppingBag/);
   const windowView = await readFile(new URL("../components/views/window-products-view.tsx", import.meta.url), "utf8");
   assert.match(windowView, /同步橱窗/);
-  assert.match(windowView, /registeredSku/);
+  assert.match(windowView, /同步评分/);
+  assert.match(windowView, /goodEvaluationRatio/);
+  assert.match(windowView, /shopScore/);
+  const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
+  assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/productdetail\/get/);
+  assert.match(leagueApi, /good_evaluation_ratio/);
+  assert.match(leagueApi, /shop\.score/);
+  const leagueMigration = await readFile(new URL("../migrations/016_league_quality.sql", import.meta.url), "utf8");
+  assert.match(leagueMigration, /CREATE TABLE IF NOT EXISTS league_accounts/);
+  assert.match(leagueMigration, /good_evaluation_ratio/);
+  assert.match(leagueMigration, /shop_score/);
 });

@@ -14,10 +14,11 @@ import { OrganizationView } from "./views/organization-view";
 import { UsersView } from "./views/access-view";
 import { AuditsView, BackupsView, ProfileView, SystemUpdateView } from "./views/system-view";
 import { TalentAccountsView } from "./views/talent-accounts-view";
+import { LeagueAccountsView } from "./views/league-accounts-view";
 import { WindowProductsView } from "./views/window-products-view";
 import { RecognitionView } from "./views/recognition-view";
 import { LinkIssuesView } from "./views/link-issues-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShoppingBag, Store, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, ShoppingBag, Store, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
@@ -37,6 +38,7 @@ const manageNav = [
   { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
   { href: "/window-products", key: "window-products", label: "橱窗管理", permission: "products:view", icon: ShoppingBag },
   { href: "/talent-accounts", key: "talent-accounts", label: "带货账号", permission: "*", icon: Store },
+  { href: "/league-accounts", key: "league-accounts", label: "联盟机构", permission: "*", icon: ShieldCheck },
   { href: "/system-update", key: "system-update", label: "系统更新", permission: "*", icon: RefreshCw },
 ];
 
@@ -72,6 +74,7 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "backups") return <BackupsView />;
   if (view === "window-products") return <WindowProductsView />;
   if (view === "talent-accounts") return <TalentAccountsView />;
+  if (view === "league-accounts") return <LeagueAccountsView />;
   if (view === "system-update") return <SystemUpdateView />;
   if (view === "profile") return <ProfileView />;
   return <DashboardView />;

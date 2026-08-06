@@ -1,30 +1,47 @@
 "use client";
 
-import { useState } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
 import { apiFetch, copyToClipboard, formatDate, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
-type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null };
+type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null };
+type LeagueOption = { id: string; name: string; active: boolean };
 
 const fenToYuan = (fen?: number | null) => typeof fen === "number" ? (fen / 100).toFixed(2) : "";
+const ratioText = (ratio?: number | null) => typeof ratio === "number" ? `${(ratio / 1000).toFixed(1)}%` : "—";
+const scoreText = (score?: number | null) => typeof score === "number" ? `${(score / 100).toFixed(2)}` : "—";
 
 export function WindowProductsView() {
   const toast = useToast();
   const [accountId, setAccountId] = useState("");
+  const [leagueId, setLeagueId] = useState("");
+  const [leagueOptions, setLeagueOptions] = useState<LeagueOption[]>([]);
   const { data, loading, error, reload } = useRemote<{ accounts: WindowAccount[]; products: WindowProduct[] }>(`/api/window-products${accountId ? `?accountId=${accountId}` : ""}`);
-  const accounts = data?.accounts || [];
-  const products = data?.products || [];
+  const accounts = useMemo(() => data?.accounts || [], [data]);
+  const products = useMemo(() => data?.products || [], [data]);
   const activeAccount = accounts.find((account) => account.id === accountId) || null;
+
+  useEffect(() => { apiFetch<LeagueOption[]>("/api/league-accounts?minimal=1").then((list) => { setLeagueOptions(list); if (list.length) setLeagueId(list[0].id); }).catch(() => {}); }, []);
+  useEffect(() => { if (!accountId && accounts.length) setAccountId(accounts[0].id); }, [accounts, accountId]);
 
   async function syncWindow() {
     if (!accountId) return;
     try {
       await apiFetch(`/api/talent-accounts/${accountId}/sync`, { method: "POST" });
-      toast("已开始同步橱窗商品，稍后列表会自动刷新");
+      toast("已开始同步橱窗商品");
       setTimeout(() => reload(), 2000);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "同步失败", "error"); }
+  }
+
+  async function syncQuality() {
+    if (!leagueId || !accountId) return;
+    try {
+      await apiFetch(`/api/league-accounts/${leagueId}/sync-quality?talentAccountId=${accountId}`, { method: "POST" });
+      toast("已开始同步商品评分数据");
+      setTimeout(() => reload(), 2000);
+    } catch (reason) { toast(reason instanceof Error ? reason.message : "评分同步失败", "error"); }
   }
 
   async function copyLink(link: string) {
@@ -34,12 +51,16 @@ export function WindowProductsView() {
   }
 
   return <>
-    <PageHeader eyebrow="系统管理" title="橱窗管理" description="查看带货账号橱窗中的所有商品，支持链接复制和已登记商品对照。" actions={accounts.length ? <button type="button" className="button button-secondary" disabled={!accountId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "同步中…" : "同步橱窗"}</button> : undefined} />
+    <PageHeader eyebrow="系统管理" title="橱窗管理" description="查看带货账号橱窗中的所有商品，支持评分数据和已登记商品对照。" actions={accounts.length ? <div style={{ display: "flex", gap: 6 }}>
+      <button type="button" className="button button-secondary" disabled={!accountId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "橱窗同步中…" : "同步橱窗"}</button>
+      {leagueOptions.length > 0 && <button type="button" className="button button-secondary" disabled={!accountId} onClick={syncQuality}><ShieldCheck size={17} />同步评分</button>}
+    </div> : undefined} />
     <section className="toolbar">
       {!accounts.length && !loading ? <EmptyState title="尚未配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥后，再回来查看。" /> : <>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", flex: 1 }}>
           <select value={accountId} onChange={(event) => setAccountId(event.target.value)} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步…" : activeAccount.syncedAt ? `最近同步：${formatDate(activeAccount.syncedAt, true)}` : "尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 上次同步失败：${activeAccount.syncError}` : ""}</span>
+          {leagueOptions.length > 1 && <select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={{ minWidth: 200 }}><option value="">选择机构账号</option>{leagueOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>}
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步…" : activeAccount.syncedAt ? `橱窗同步：${formatDate(activeAccount.syncedAt, true)}` : "橱窗尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 失败：${activeAccount.syncError}` : ""}</span>
         </div>
       </>}
     </section>
@@ -47,10 +68,10 @@ export function WindowProductsView() {
       {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !accountId ? <EmptyState title="请先选择一个带货账号" description="选择一个已配置的带货账号即可查看其橱窗商品列表。" /> : !products.length ? <EmptyState title="橱窗商品为空" description="请点击右上角「同步橱窗」从微信拉取数据。" /> : <div className="data-table-wrap"><table className="data-table">
         <thead><tr>
           <th>商品</th>
-          <th>橱窗 ID</th>
+          <th>店铺 / 评分</th>
           <th>售价</th>
+          <th>好评率</th>
           <th>库存</th>
-          <th>销量</th>
           <th>状态</th>
           <th>链接</th>
           <th>狐掌柜</th>
@@ -59,22 +80,25 @@ export function WindowProductsView() {
           <td><div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <ProductImage urls={item.imgUrl ? [item.imgUrl] : []} alt={item.title || "橱窗商品"} size="small" />
             <div style={{ minWidth: 0 }}>
-              <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 280 }}>{item.title || `商品 ${item.productId}`}</b>
-              {item.isHide && <small style={{ color: "var(--muted)" }}>橱窗中已隐藏</small>}
+              <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240 }}>{item.title || `商品 ${item.productId}`}</b>
+              <small style={{ color: "var(--muted)" }}>{item.isHide ? "橱窗中已隐藏" : ""}{item.sales ? ` · 销量 ${item.sales}` : ""}</small>
             </div>
           </div></td>
-          <td><code style={{ fontSize: 11 }}>{item.productId}</code></td>
+          <td><div>{item.shopName || "—"}{item.shopScore ? <small style={{ display: "block", color: "var(--muted)" }}>{scoreText(item.shopScore)}</small> : ""}</div></td>
           <td><b className="money-cell">{fenToYuan(item.sellingPriceFen) ? `¥${fenToYuan(item.sellingPriceFen)}` : "—"}</b></td>
+          <td><b style={{ color: (item.goodEvaluationRatio ?? 0) >= 90000 ? "var(--green)" : (item.goodEvaluationRatio ?? 0) > 0 ? "var(--amber)" : "inherit" }}>{ratioText(item.goodEvaluationRatio)}</b></td>
           <td><b>{typeof item.stock === "number" ? item.stock : "—"}</b></td>
-          <td><b>{typeof item.sales === "number" ? item.sales : "—"}</b></td>
           <td>{item.status === 1 ? <span style={{ color: "var(--green)", fontSize: 13 }}>生效中</span> : item.status === 2 ? <span style={{ color: "var(--red)", fontSize: 13 }}>禁止售卖</span> : "—"}</td>
           <td><div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-            <code style={{ fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 180 }} title={item.link}>{item.link}</code>
+            <code style={{ fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }} title={item.link}>{item.link}</code>
             <button type="button" className="icon-button" onClick={() => copyLink(item.link)} aria-label="复制链接" title="复制链接"><ExternalLink size={13} /></button>
           </div></td>
           <td>{item.registeredProductId ? <span style={{ fontSize: 13 }}>{item.registeredSku || "已登记"}</span> : <span style={{ color: "var(--muted)", fontSize: 12 }}>未登记</span>}</td>
         </tr>)}</tbody>
       </table></div>}
     </section>
+    {!leagueOptions.length && <section className="panel" style={{ padding: 20 }}>
+      <p style={{ fontSize: 13, color: "var(--muted)" }}><ShieldCheck size={14} style={{ marginRight: 4 }} />还没有配置联盟带货机构账号。添加后可同步商品的好评率、店铺评分数据。<br />请超管在「系统管理 → 联盟带货机构」中添加 AppID 和密钥。</p>
+    </section>}
   </>;
 }
