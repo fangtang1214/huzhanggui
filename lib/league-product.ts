@@ -202,10 +202,9 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     try {
       const detail = await fetchWindowProductDetail(talentAccount, product.productId);
       if (detail.shopAppid) {
-        await sql`UPDATE talent_window_products SET shop_appid = ${detail.shopAppid}, out_product_id = coalesce(${detail.outProductId || null}, out_product_id), promotion_link = coalesce(promotion_link, ${detail.promotionLink || null}) WHERE id = ${product.id}`;
+        await sql`UPDATE talent_window_products SET shop_appid = ${detail.shopAppid}, out_product_id = coalesce(${detail.outProductId || null}, out_product_id) WHERE id = ${product.id}`;
         product.shopAppid = detail.shopAppid;
         if (detail.outProductId && !product.outProductId) product.outProductId = detail.outProductId;
-        if (detail.promotionLink && !product.promotionLink) product.promotionLink = detail.promotionLink;
         patchedShopIds += 1;
       }
     } catch { /* skip individual detail failure */ }

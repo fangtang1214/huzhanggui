@@ -15,5 +15,5 @@ export function isSupportedProductLink(value: string) {
 
 export const productLinkSchema = z.string().trim().max(2000, "商品链接过长").refine(
   isSupportedProductLink,
-  "商品链接可填写完整网址或视频号格式，例如 weixinstorehs/28512353738164 或 v1= 开头的推广参数",
+  "商品链接可填写完整网址或视频号格式，例如 weixinstorehs/28656350764640",
 ).optional().nullable();

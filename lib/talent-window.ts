@@ -41,7 +41,6 @@ export type WindowProductDetail = {
   sales: number | null;
   status: number | null;
   isHide: boolean | null;
-  promotionLink: string | null;
 };
 
 export class TalentApiError extends Error {
@@ -174,7 +173,6 @@ export async function fetchWindowProductDetail(account: TalentAccountRow, produc
       sales?: number;
       status?: number;
       is_hide?: boolean;
-      product_promotion_link?: string;
     };
   }>(account, "/channels/ec/talent/window/product/get", { product_id: productId });
   const product = payload.product || {};
@@ -189,7 +187,6 @@ export async function fetchWindowProductDetail(account: TalentAccountRow, produc
     sales: typeof product.sales === "number" ? product.sales : null,
     status: typeof product.status === "number" ? product.status : null,
     isHide: typeof product.is_hide === "boolean" ? product.is_hide : null,
-    promotionLink: safeText(product.product_promotion_link),
   };
 }
 
@@ -237,7 +234,6 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
             stock = ${detail.stock}, sales = ${detail.sales}, status = ${detail.status}, is_hide = ${detail.isHide},
             out_product_id = coalesce(${detail.outProductId}, out_product_id),
             shop_appid = coalesce(${detail.shopAppid}, shop_appid),
-            promotion_link = coalesce(promotion_link, ${detail.promotionLink}),
             synced_at = now()
         WHERE account_id = ${accountId} AND product_id = ${batch[offset].productId}
       `;

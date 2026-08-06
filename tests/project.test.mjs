@@ -400,7 +400,6 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(api, /\/cgi-bin\/token\?appid=/);
   assert.match(api, /\/channels\/ec\/talent\/window\/product\/list\/get/);
   assert.match(api, /\/channels\/ec\/talent\/window\/product\/get/);
-  assert.match(api, /product_promotion_link/);
   assert.match(api, /40164/);
   const accountsRoute = await readFile(new URL("../app/api/talent-accounts/route.ts", import.meta.url), "utf8");
   assert.match(accountsRoute, /requireSuperAdmin/);
