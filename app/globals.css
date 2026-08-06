@@ -171,6 +171,12 @@ select { cursor: pointer; }
 .sidebar nav a.active { color: #fff; background: #315e52; box-shadow: inset 3px 0 #d7a469; }
 .nav-count { min-width: 23px; height: 21px; margin-left: auto; padding: 0 6px; display: inline-grid; place-items: center; border-radius: 999px; background: #dc754f; color: #fff; font-size: 10px; line-height: 1; }
 .nav-label { margin: 25px 12px 8px; color: #719188; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
+
+.nav-fold-header { margin: 5px 12px 0; padding: 9px 14px !important; color: #719188; font-size: 12px; font-weight: 700; border-radius: 9px; display: flex; align-items: center; gap: 11px; border: none; background: none; cursor: pointer; width: calc(100% - 24px); }
+
+.nav-fold-header:hover { color: #fff; background: rgba(255,255,255,.04); }
+
+.nav-fold-active { color: #a9d7c4 !important; }
 .sidebar-foot { padding: 17px 20px 20px; border-top: 1px solid rgba(255,255,255,.08); }
 .department-chip { min-height: 34px; padding: 0 10px; display: flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; color: #dbe7e3; }
 .sidebar-foot small { display: block; margin-top: 8px; color: #709188; font-size: 10px; }

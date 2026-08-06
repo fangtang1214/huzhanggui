@@ -36,10 +36,12 @@ const manageNav = [
   { href: "/recognition", key: "recognition", label: "图片识别", permission: "image_matching:manage|products:correct_merge", icon: BrainCircuit },
   { href: "/audits", key: "audits", label: "操作日志", permission: "audits:view", icon: ClipboardList },
   { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
+  { href: "/system-update", key: "system-update", label: "系统更新", permission: "*", icon: RefreshCw },
+];
+const wechatShopNav = [
   { href: "/window-products", key: "window-products", label: "橱窗管理", permission: "products:view", icon: ShoppingBag },
   { href: "/talent-accounts", key: "talent-accounts", label: "带货账号", permission: "*", icon: Store },
   { href: "/league-accounts", key: "league-accounts", label: "联盟机构", permission: "*", icon: ShieldCheck },
-  { href: "/system-update", key: "system-update", label: "系统更新", permission: "*", icon: RefreshCw },
 ];
 
 type NavEntry = (typeof primaryNav)[number] | (typeof manageNav)[number];
@@ -81,7 +83,7 @@ function ViewRouter({ path }: { path: string[] }) {
 }
 
 export function HuZhangGuiApp({ initialUser, path }: { initialUser: CurrentUser; path: string[] }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false); const [userOpen, setUserOpen] = useState(false); const [pendingIssueCount, setPendingIssueCount] = useState(0); const pathname = usePathname();
+  const [sidebarOpen, setSidebarOpen] = useState(false); const [userOpen, setUserOpen] = useState(false); const [wechatShopOpen, setWechatShopOpen] = useState(false); const [pendingIssueCount, setPendingIssueCount] = useState(0); const pathname = usePathname();
   const can = (permission: string) => initialUser.isSuperAdmin || initialUser.permissions.includes(permission);
   const refreshPendingIssueCount = useCallback(async () => {
     try { const result = await apiFetch<{ count: number }>("/api/link-issues/count"); setPendingIssueCount(result.count); } catch { setPendingIssueCount(0); }
@@ -94,7 +96,9 @@ export function HuZhangGuiApp({ initialUser, path }: { initialUser: CurrentUser;
       {sidebarOpen && <button className="sidebar-scrim" aria-label="关闭菜单" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="sidebar-brand"><div className="brand-mark"><Image src="/brand/huzhanggui-logo.png" alt="" width={42} height={42} priority /></div><div><b>狐掌柜</b><span>直播样品管理系统</span></div><button className="mobile-close icon-button" onClick={() => setSidebarOpen(false)}><X size={20} /></button></div>
-        <div className="sidebar-nav"><NavGroup items={primaryNav} can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} pendingIssueCount={pendingIssueCount} /><NavGroup items={manageNav} label="系统管理" can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} /></div>
+        <div className="sidebar-nav"><NavGroup items={primaryNav} can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} pendingIssueCount={pendingIssueCount} /><NavGroup items={manageNav} label="系统管理" can={can} pathname={pathname} onNavigate={() => setSidebarOpen(false)} />
+          {(() => { const visible = wechatShopNav.filter((item) => !item.permission || item.permission.split("|").some(can)); if (!visible.length) return null; const active = visible.some((item) => pathname.startsWith(item.href)); return <div><button type="button" className={`nav-fold-header ${active ? "nav-fold-active" : ""}`} onClick={() => setWechatShopOpen((v) => !v)}><Store size={18} /><span style={{ flex: 1, textAlign: "left" }}>微信小店</span><ChevronDown size={15} style={{ transform: wechatShopOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }} /></button>{wechatShopOpen && <nav style={{ paddingLeft: 10 }}>{visible.map((item) => { const Icon = item.icon; return <Link className={pathname.startsWith(item.href) ? "active" : ""} href={item.href} key={item.key} onClick={() => setSidebarOpen(false)}><Icon size={17} /><span>{item.label}</span></Link>; })}</nav>}</div>; })()}
+        </div>
         <div className="sidebar-foot"><div className="department-chip"><UsersRound size={16} /><span>{initialUser.departmentName}</span></div><small>数据持续自动保存</small></div>
       </aside>
       <div className="app-main">

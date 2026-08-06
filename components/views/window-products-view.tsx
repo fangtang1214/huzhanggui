@@ -18,27 +18,28 @@ export function WindowProductsView() {
   const [accountId, setAccountId] = useState("");
   const [leagueId, setLeagueId] = useState("");
   const [leagueOptions, setLeagueOptions] = useState<LeagueOption[]>([]);
-  const { data, loading, error, reload } = useRemote<{ accounts: WindowAccount[]; products: WindowProduct[] }>(`/api/window-products${accountId ? `?accountId=${accountId}` : ""}`);
+  const url = accountId ? `/api/window-products?accountId=${accountId}` : "/api/window-products";
+  const { data, loading, error, reload } = useRemote<{ accounts: WindowAccount[]; products: WindowProduct[] }>(url);
   const accounts = useMemo(() => data?.accounts || [], [data]);
   const products = useMemo(() => data?.products || [], [data]);
-  const activeAccount = accounts.find((account) => account.id === accountId) || null;
+  const selectedId = accountId || accounts[0]?.id || "";
+  const activeAccount = accounts.find((a) => a.id === selectedId) || null;
 
   useEffect(() => { apiFetch<LeagueOption[]>("/api/league-accounts?minimal=1").then((list) => { setLeagueOptions(list); if (list.length) setLeagueId(list[0].id); }).catch(() => {}); }, []);
-  useEffect(() => { if (!accountId && accounts.length) setAccountId(accounts[0].id); }, [accounts, accountId]);
 
   async function syncWindow() {
-    if (!accountId) return;
+    if (!selectedId) return;
     try {
-      await apiFetch(`/api/talent-accounts/${accountId}/sync`, { method: "POST" });
+      await apiFetch(`/api/talent-accounts/${selectedId}/sync`, { method: "POST" });
       toast("已开始同步橱窗商品");
       setTimeout(() => reload(), 2000);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "同步失败", "error"); }
   }
 
   async function syncQuality() {
-    if (!leagueId || !accountId) return;
+    if (!leagueId || !selectedId) return;
     try {
-      await apiFetch(`/api/league-accounts/${leagueId}/sync-quality?talentAccountId=${accountId}`, { method: "POST" });
+      await apiFetch(`/api/league-accounts/${leagueId}/sync-quality?talentAccountId=${selectedId}`, { method: "POST" });
       toast("已开始同步商品评分数据");
       setTimeout(() => reload(), 2000);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "评分同步失败", "error"); }
@@ -52,20 +53,20 @@ export function WindowProductsView() {
 
   return <>
     <PageHeader eyebrow="系统管理" title="橱窗管理" description="查看带货账号橱窗中的所有商品，支持评分数据和已登记商品对照。" actions={accounts.length ? <div style={{ display: "flex", gap: 6 }}>
-      <button type="button" className="button button-secondary" disabled={!accountId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "橱窗同步中…" : "同步橱窗"}</button>
-      {leagueOptions.length > 0 && <button type="button" className="button button-secondary" disabled={!accountId} onClick={syncQuality}><ShieldCheck size={17} />同步评分</button>}
+      <button type="button" className="button button-secondary" disabled={!selectedId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "橱窗同步中…" : "同步橱窗"}</button>
+      {leagueOptions.length > 0 && <button type="button" className="button button-secondary" disabled={!selectedId} onClick={syncQuality}><ShieldCheck size={17} />同步评分</button>}
     </div> : undefined} />
     <section className="toolbar">
       {!accounts.length && !loading ? <EmptyState title="尚未配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥后，再回来查看。" /> : <>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", flex: 1 }}>
-          <select value={accountId} onChange={(event) => setAccountId(event.target.value)} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
+          <select value={selectedId} onChange={(event) => setAccountId(event.target.value)} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
           {leagueOptions.length > 1 && <select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={{ minWidth: 200 }}><option value="">选择机构账号</option>{leagueOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>}
           <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步…" : activeAccount.syncedAt ? `橱窗同步：${formatDate(activeAccount.syncedAt, true)}` : "橱窗尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 失败：${activeAccount.syncError}` : ""}</span>
         </div>
       </>}
     </section>
     <section className="panel table-panel">
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !accountId ? <EmptyState title="请先选择一个带货账号" description="选择一个已配置的带货账号即可查看其橱窗商品列表。" /> : !products.length ? <EmptyState title="橱窗商品为空" description="请点击右上角「同步橱窗」从微信拉取数据。" /> : <div className="data-table-wrap"><table className="data-table">
+      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !accounts.length ? <EmptyState title="请先配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥。" /> : !products.length ? <EmptyState title="橱窗商品为空" description="请点击右上角「同步橱窗」从微信拉取数据。" /> : <div className="data-table-wrap"><table className="data-table">
         <thead><tr>
           <th>商品</th>
           <th>店铺 / 评分</th>
