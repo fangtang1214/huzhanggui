@@ -11,7 +11,7 @@ import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission"
 import { parseXlsxRows } from "@/lib/xlsx";
 
 const FIELD_MAP: Record<string, string> = {
-  "商品名称*": "name", "选品直播间*": "departments", "价格*": "price",
+  "商品名称*": "name", "选品部门*": "departments", "价格*": "price",
   "商品链接*": "productUrl", "佣金*": "commission", "分类*": "category",
   "供应链/机构*": "supplyChain", "图片链接*": "imageUrls", "到样数量*": "quantity",
   "存放部门*": "dept", "存放位置*": "location", "店铺名*": "storeName",
@@ -99,7 +99,7 @@ export async function POST(request: Request) {
         if (idx < cells.length) row[key] = (cells[idx] || "").trim();
       }
       if (!row.name) { failures.push({ row: rowNum, message: "商品名称为空" }); continue; }
-      if (!row.departments) { failures.push({ row: rowNum, message: "选品直播间为空" }); continue; }
+      if (!row.departments) { failures.push({ row: rowNum, message: "选品部门为空" }); continue; }
       const price = parsePrice(row.price || "");
       if (!price) { failures.push({ row: rowNum, message: "价格格式不正确" }); continue; }
       if (!row.productUrl) { failures.push({ row: rowNum, message: "商品链接为空" }); continue; }
@@ -138,8 +138,8 @@ export async function POST(request: Request) {
         const did = deptMap.get(dn.toLowerCase());
         if (did) deptIds.push(did); else unknownDepts.push(dn);
       }
-      if (unknownDepts.length > 0) { failures.push({ row: rowNum, message: `选品直播间不存在：${unknownDepts.join("、")}` }); continue; }
-      if (deptIds.length === 0) { failures.push({ row: rowNum, message: "至少选择一个选品直播间" }); continue; }
+      if (unknownDepts.length > 0) { failures.push({ row: rowNum, message: `选品部门不存在：${unknownDepts.join("、")}` }); continue; }
+      if (deptIds.length === 0) { failures.push({ row: rowNum, message: "至少选择一个选品部门" }); continue; }
 
       parsedRows.push({ row: rowNum, data: { ...row, deptIds: deptIds.join(","), imageUrls: imageUrls.join(","), price: String(price), commission, category: catId, dept: deptId, location: locId, quantity: String(quantity), storeRating: rating !== null ? String(rating) : "" } });
     }

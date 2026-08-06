@@ -2,7 +2,7 @@ export const PRODUCT_COPY_FIELDS = [
   { key: "image", label: "商品主图" },
   { key: "sku", label: "商品货号" },
   { key: "name", label: "商品名称" },
-  { key: "departments", label: "选品直播间" },
+  { key: "departments", label: "选品部门" },
   { key: "businessContact", label: "商务联系人" },
   { key: "storeName", label: "店铺名称" },
   { key: "price", label: "价格" },

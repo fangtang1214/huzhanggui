@@ -17,7 +17,7 @@ const commissionSchema = z.string().trim().max(30).refine(
 ).optional().nullable().transform(normalizeCommission);
 const productSchema = z.object({
   name: z.string().trim().min(1, "请填写商品名称").max(200),
-  departmentIds: z.array(z.string().uuid()).min(1, "至少选择一个选品直播间"),
+  departmentIds: z.array(z.string().uuid()).min(1, "至少选择一个选品部门"),
   businessContactId: z.string().uuid().optional().nullable(), storeName: optionalText,
   price: z.coerce.number().min(0).max(99999999).optional().nullable(), productUrl: productLinkSchema,
   commission: commissionSchema, storeRating: z.coerce.number().min(0).max(5).optional().nullable(),

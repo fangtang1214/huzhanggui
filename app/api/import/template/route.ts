@@ -22,7 +22,7 @@ export async function GET() {
 
     const templateColumns = [
       { header: "商品名称*", key: "name", width: 22 },
-      { header: "选品直播间*", key: "departments", width: 24 },
+      { header: "选品部门*", key: "departments", width: 24 },
       { header: "价格*", key: "price", width: 12 },
       { header: "商品链接*", key: "productUrl", width: 36 },
       { header: "佣金*", key: "commission", width: 12 },

@@ -26,7 +26,7 @@ export async function GET(request: Request) {
       `;
       workbook = createXlsx("商品档案", [
         { header: "货号", key: "sku", width: 18 }, { header: "商品名称", key: "name", width: 28 }, { header: "分类", key: "categoryName", width: 14 },
-        { header: "选品直播间", key: "departments", width: 24 }, { header: "商务对接人", key: "businessContactName", width: 16 }, { header: "店铺名", key: "storeName", width: 22 },
+        { header: "选品部门", key: "departments", width: 24 }, { header: "商务对接人", key: "businessContactName", width: 16 }, { header: "店铺名", key: "storeName", width: 22 },
         { header: "价格", key: "price", width: 12 }, { header: "商品链接", key: "productUrl", width: 36 }, { header: "佣金", key: "commission", width: 12 },
         { header: "店铺评分", key: "storeRating", width: 12 }, { header: "供应链/机构", key: "supplyChain", width: 20 }, { header: "合作机制", key: "cooperationMechanism", width: 28 },
         { header: "标签", key: "tags", width: 18 }, { header: "样品总数", key: "quantity", width: 12 }, { header: "首次到样", key: "firstArrivedAt", width: 14 }, { header: "最近到样", key: "lastArrivedAt", width: 14 },
