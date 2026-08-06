@@ -236,9 +236,13 @@ type ProductDraft = { version: 1; form: ProductFormState; savedAt: number };
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
-type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null };
+type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; commissionRatio?: number | null; normalCommissionRatio?: number | null };
 
 const fenToYuan = (fen?: number | null) => typeof fen === "number" ? (fen / 100).toFixed(2) : "";
+const windowCommissionText = (product: WindowProduct) => {
+  const ratio = (product.commissionRatio ?? 0) > 0 ? product.commissionRatio : product.normalCommissionRatio;
+  return typeof ratio === "number" && ratio > 0 ? `${parseFloat((ratio / 10000).toFixed(2))}%` : "";
+};
 
 function WindowProductPicker({ onPick, onClose }: { onPick: (product: WindowProduct) => void; onClose: () => void }) {
   const toast = useToast();
@@ -278,7 +282,7 @@ function WindowProductPicker({ onPick, onClose }: { onPick: (product: WindowProd
           <div style={{ flex: 1, minWidth: 0 }}>
             <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.title || `商品 ${item.productId}`}</b>
             <small style={{ color: "var(--muted)" }}><code>{item.link}</code>{item.isHide ? " · 橱窗中隐藏" : ""}{item.status === 2 ? " · 已被禁止售卖" : ""}</small>
-            <div style={{ fontSize: 12, marginTop: 2 }}>{fenToYuan(item.sellingPriceFen) ? `¥${fenToYuan(item.sellingPriceFen)}` : "价格未知"}{typeof item.stock === "number" ? ` · 库存 ${item.stock}` : ""}{typeof item.sales === "number" ? ` · 销量 ${item.sales}` : ""}</div>
+            <div style={{ fontSize: 12, marginTop: 2 }}>{fenToYuan(item.sellingPriceFen) ? `¥${fenToYuan(item.sellingPriceFen)}` : "价格未知"}{typeof item.stock === "number" ? ` · 库存 ${item.stock}` : ""}{typeof item.sales === "number" ? ` · 销量 ${item.sales}` : ""}{windowCommissionText(item) ? ` · 佣金 ${windowCommissionText(item)}` : ""}{item.shopName ? ` · ${item.shopName}` : ""}</div>
           </div>
           {item.registeredProductId ? <span style={{ fontSize: 12, color: "var(--muted)", flexShrink: 0 }}>已登记 {item.registeredSku}</span> : <button type="button" className="button button-primary button-compact" style={{ flexShrink: 0 }} disabled={!item.title || !item.imgUrl} onClick={() => onPick(item)}>添加</button>}
         </article>)}</div>}
@@ -371,7 +375,8 @@ export function ProductFormView({ id }: { id?: string }) {
   function applyWindowProduct(product: WindowProduct) {
     setDraftTouched(true);
     const link = product.link || (product.outProductId ? `weixinstorehs/${product.outProductId}` : "");
-    setForm((current) => ({ ...current, name: product.title || current.name, imageUrls: product.imgUrl || current.imageUrls, price: fenToYuan(product.sellingPriceFen) || current.price, productUrl: link || current.productUrl }));
+    const commission = windowCommissionText(product);
+    setForm((current) => ({ ...current, name: product.title || current.name, imageUrls: product.imgUrl || current.imageUrls, price: fenToYuan(product.sellingPriceFen) || current.price, productUrl: link || current.productUrl, storeName: product.shopName || current.storeName, storeRating: typeof product.shopScore === "number" ? (product.shopScore / 100).toFixed(2) : current.storeRating, commission: commission || current.commission }));
     setWindowPickerOpen(false); setEntryMode("form");
   }
   if (!id && entryMode === "chooser") return <>

@@ -427,11 +427,15 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/productdetail\/get/);
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/cooperativeitem\/list\/get/);
+  assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/item\/promotiondetail\/get/);
   assert.match(leagueApi, /head_supplier_item_link/);
+  assert.match(leagueApi, /commission_info/);
   assert.match(leagueApi, /good_evaluation_ratio/);
   assert.match(leagueApi, /shop\.score/);
   const linkMigration = await readFile(new URL("../migrations/017_window_promotion_link.sql", import.meta.url), "utf8");
   assert.match(linkMigration, /promotion_link/);
+  const commissionMigration = await readFile(new URL("../migrations/019_window_commission.sql", import.meta.url), "utf8");
+  assert.match(commissionMigration, /commission_ratio/);
   const leagueMigration = await readFile(new URL("../migrations/016_league_quality.sql", import.meta.url), "utf8");
   assert.match(leagueMigration, /CREATE TABLE IF NOT EXISTS league_accounts/);
   assert.match(leagueMigration, /good_evaluation_ratio/);

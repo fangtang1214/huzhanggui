@@ -22,6 +22,7 @@ export async function GET(request: Request) {
       SELECT w.id, w.product_id, w.out_product_id, w.product_source, w.title, w.img_url,
              w.selling_price_fen, w.stock, w.sales, w.status, w.is_hide, w.synced_at,
              w.shop_name, w.shop_score, w.shop_icon, w.good_evaluation_ratio, w.quality_synced_at,
+             w.commission_ratio, w.normal_commission_ratio, w.service_ratio, w.commission_type, w.plan_type,
              ${productLinkFragment} AS link,
              p.id AS registered_product_id, p.sku AS registered_sku
       FROM talent_window_products w

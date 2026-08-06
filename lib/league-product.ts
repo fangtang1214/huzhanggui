@@ -156,6 +156,38 @@ export async function fetchLeagueProductDetail(
   };
 }
 
+export type LeagueItemPromotion = {
+  commissionRatio: number | null;
+  normalCommissionRatio: number | null;
+  serviceRatio: number | null;
+  commissionType: number | null;
+  planType: number | null;
+};
+
+export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSupplierItemLink: string): Promise<LeagueItemPromotion> {
+  const payload = await callLeagueApi<{
+    item?: {
+      commission_info?: {
+        plan_type?: number;
+        commission_type?: number;
+        ratio?: number;
+        service_ratio?: number;
+        normal_commission_info?: { ratio?: number };
+      };
+    };
+  }>(account, "/channels/ec/league/headsupplier/item/promotiondetail/get", {
+    head_supplier_item_link: headSupplierItemLink,
+  });
+  const info = payload.item?.commission_info;
+  return {
+    commissionRatio: typeof info?.ratio === "number" ? info.ratio : null,
+    normalCommissionRatio: typeof info?.normal_commission_info?.ratio === "number" ? info.normal_commission_info.ratio : null,
+    serviceRatio: typeof info?.service_ratio === "number" ? info.service_ratio : null,
+    commissionType: typeof info?.commission_type === "number" ? info.commission_type : null,
+    planType: typeof info?.plan_type === "number" ? info.plan_type : null,
+  };
+}
+
 export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, string>> {
   const links = new Map<string, string>();
   for (const commissionType of [0, 1]) {
@@ -233,33 +265,40 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   let detailed = 0;
   for (let index = 0; index < products.length; index += QUALITY_CONCURRENCY) {
     const batch = products.slice(index, index + QUALITY_CONCURRENCY);
-    const results = await Promise.allSettled(batch.map((item) => {
+    const results = await Promise.all(batch.map(async (item) => {
       const sid = item.outProductId || item.productId;
-      if (!sid || !item.shopAppid) return Promise.resolve(null);
-      return fetchLeagueProductDetail(leagueAccount, item.shopAppid, sid);
+      const [qualityResult, promotionResult] = await Promise.allSettled([
+        sid && item.shopAppid ? fetchLeagueProductDetail(leagueAccount, item.shopAppid, sid) : Promise.resolve(null),
+        item.promotionLink ? fetchLeagueItemPromotion(leagueAccount, item.promotionLink) : Promise.resolve(null),
+      ]);
+      return { item, qualityResult, promotionResult };
     }));
 
-    for (let offset = 0; offset < batch.length; offset += 1) {
-      const result = results[offset];
-      if (result.status !== "fulfilled") {
-        if (result.status === "rejected" && errors.length < 3) errors.push(result.reason instanceof Error ? result.reason.message : "评分接口调用失败");
-        continue;
+    for (const { item, qualityResult, promotionResult } of results) {
+      for (const result of [qualityResult, promotionResult]) {
+        if (result.status === "rejected" && errors.length < 3) errors.push(result.reason instanceof Error ? result.reason.message : "联盟接口调用失败");
       }
-      if (!result.value) continue;
-      const quality = result.value;
+      const quality = qualityResult.status === "fulfilled" ? qualityResult.value : null;
+      const promotion = promotionResult.status === "fulfilled" ? promotionResult.value : null;
+      if (!quality && !promotion) continue;
       await sql`
         UPDATE talent_window_products
-        SET shop_name = coalesce(${quality.shopName}, shop_name),
-            shop_score = coalesce(${quality.shopScore}, shop_score),
-            shop_icon = coalesce(${quality.shopIcon}, shop_icon),
-            good_evaluation_ratio = coalesce(${quality.goodEvaluationRatio}, good_evaluation_ratio),
+        SET shop_name = coalesce(${quality?.shopName ?? null}, shop_name),
+            shop_score = coalesce(${quality?.shopScore ?? null}, shop_score),
+            shop_icon = coalesce(${quality?.shopIcon ?? null}, shop_icon),
+            good_evaluation_ratio = coalesce(${quality?.goodEvaluationRatio ?? null}, good_evaluation_ratio),
+            commission_ratio = coalesce(${promotion?.commissionRatio ?? null}, commission_ratio),
+            normal_commission_ratio = coalesce(${promotion?.normalCommissionRatio ?? null}, normal_commission_ratio),
+            service_ratio = coalesce(${promotion?.serviceRatio ?? null}, service_ratio),
+            commission_type = coalesce(${promotion?.commissionType ?? null}, commission_type),
+            plan_type = coalesce(${promotion?.planType ?? null}, plan_type),
             quality_synced_at = now()
-        WHERE id = ${batch[offset].id}
+        WHERE id = ${item.id}
       `;
       detailed += 1;
     }
   }
-  const eligible = products.filter((item) => item.shopAppid && (item.outProductId || item.productId)).length;
+  const eligible = products.filter((item) => (item.shopAppid && (item.outProductId || item.productId)) || item.promotionLink).length;
   if (detailed === 0 && eligible > 0 && errors.length) {
     throw new Error(`评分同步失败：${errors[0]}`);
   }
