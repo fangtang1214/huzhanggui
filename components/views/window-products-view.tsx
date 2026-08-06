@@ -68,6 +68,7 @@ export function WindowProductsView() {
       ? `${parseFloat((product.serviceRatio / 10000).toFixed(2))}%` : "";
     const draft = {
       version: 1 as const,
+      autoRestore: true,
       form: {
         imageUrls: product.imgUrl || "",
         name: product.title || "",

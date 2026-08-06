@@ -232,7 +232,7 @@ export function ProductsView() {
 type ProductFormState = { sku: string; name: string; departmentIds: string[]; businessContactId: string; storeName: string; price: string; productUrl: string; commission: string; storeRating: string; supplyChain: string; cooperationMechanism: string; categoryId: string; tagIds: string[]; imageUrls: string; notes: string; quantity: string; arrivedAt: string; initialDepartmentId: string; initialLocationId: string };
 const today = () => { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); };
 const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", quantity: "1", arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" });
-type ProductDraft = { version: 1; form: ProductFormState; savedAt: number };
+type ProductDraft = { version: 1; form: ProductFormState; savedAt: number; autoRestore?: boolean };
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
 export function ProductFormView({ id }: { id?: string }) {
@@ -251,7 +251,16 @@ export function ProductFormView({ id }: { id?: string }) {
       const draft = JSON.parse(raw) as ProductDraft;
       const valid = draft?.version === 1 && typeof draft.savedAt === "number" && Date.now() - draft.savedAt < PRODUCT_DRAFT_LIFETIME
         && draft.form && typeof draft.form.imageUrls === "string" && Array.isArray(draft.form.departmentIds) && Array.isArray(draft.form.tagIds);
-      if (valid) { setDraftCandidate(draft); }
+      if (valid) {
+        if (draft.autoRestore) {
+          setForm({ ...blankForm(), ...draft.form, departmentIds: draft.form.departmentIds || [], tagIds: draft.form.tagIds || [] });
+          setCheckedUrls([]); setExcludedProducts([]); setConfirmedMatch(null); setCandidates([]); setRecognizingUrl("");
+          setRecognition({ phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "" });
+          setDraftSavedAt(draft.savedAt); setDraftTouched(true); setDraftReady(true);
+        } else {
+          setDraftCandidate(draft);
+        }
+      }
       else { localStorage.removeItem(draftKey); setDraftReady(true); }
     } catch {
       localStorage.removeItem(draftKey); setDraftReady(true);
