@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDownUp, ChevronDown, ExternalLink, PenLine, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { ArrowDownUp, ChevronDown, ExternalLink, Filter, PenLine, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
 
@@ -25,6 +25,11 @@ export function WindowProductsView() {
   const [search, setSearch] = useState("");
   const [sortField, setSortField] = useState<SortField>("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [priceRange, setPriceRange] = useState("");
+  const [scoreRange, setScoreRange] = useState("");
+  const [evalRange, setEvalRange] = useState("");
+  const [stockFilter, setStockFilter] = useState("");
+  const [regFilter, setRegFilter] = useState("");
   const url = accountId ? `/api/window-products?accountId=${accountId}` : "/api/window-products";
   const { data, loading, error, reload } = useRemote<{ accounts: WindowAccount[]; products: WindowProduct[] }>(url);
   const accounts = useMemo(() => data?.accounts || [], [data]);
@@ -50,6 +55,42 @@ export function WindowProductsView() {
           (item.shopName || "").toLowerCase().includes(keyword) ||
           (item.link || "").toLowerCase().includes(keyword))
       : [...products];
+    if (priceRange) {
+      list = list.filter((item) => {
+        const f = (item.sellingPriceFen ?? 0) / 100;
+        if (priceRange === "lt10") return f < 10;
+        if (priceRange === "10to50") return f >= 10 && f < 50;
+        if (priceRange === "50to100") return f >= 50 && f < 100;
+        if (priceRange === "gt100") return f >= 100;
+        return true;
+      });
+    }
+    if (scoreRange) {
+      list = list.filter((item) => {
+        const s = item.shopScore;
+        if (scoreRange === "gte45") return s != null && s >= 450;
+        if (scoreRange === "40to45") return s != null && s >= 400 && s < 450;
+        if (scoreRange === "lt40") return s != null && s < 400;
+        if (scoreRange === "none") return s == null;
+        return true;
+      });
+    }
+    if (evalRange) {
+      list = list.filter((item) => {
+        const r = item.goodEvaluationRatio;
+        if (evalRange === "gte90") return r != null && r >= 90000;
+        if (evalRange === "80to90") return r != null && r >= 80000 && r < 90000;
+        if (evalRange === "lt80") return r != null && r < 80000;
+        if (evalRange === "none") return r == null;
+        return true;
+      });
+    }
+    if (stockFilter) {
+      list = list.filter((item) => stockFilter === "has" ? (item.stock ?? 0) > 0 : (item.stock ?? 0) === 0);
+    }
+    if (regFilter) {
+      list = list.filter((item) => regFilter === "yes" ? Boolean(item.registeredProductId) : !item.registeredProductId);
+    }
     if (sortField && sortDir) {
       list.sort((a, b) => {
         let va = 0; let vb = 0;
@@ -60,7 +101,7 @@ export function WindowProductsView() {
       });
     }
     return list;
-  }, [products, search, sortField, sortDir]);
+  }, [products, search, sortField, sortDir, priceRange, scoreRange, evalRange, stockFilter, regFilter]);
 
   function toggleSort(field: SortField) {
     if (sortField === field) {
@@ -81,6 +122,8 @@ export function WindowProductsView() {
       <ArrowDownUp size={12} className={sortField === field ? (sortDir === "asc" ? "sort-asc" : "sort-desc") : "sort-inactive"} />
     </button>
   );
+
+  const filterCount = [priceRange, scoreRange, evalRange, stockFilter, regFilter].filter(Boolean).length;
 
   async function syncWindow() {
     if (!selectedId) return;
@@ -160,6 +203,25 @@ export function WindowProductsView() {
         </div>
       </>}
     </section>
+    {!accounts.length || loading ? null : <div className="window-filter-bar">
+      <span className="filter-bar-label"><Filter size={14} />筛选{filterCount > 0 ? <b>（{filterCount}）</b> : ""}</span>
+      <FilterDropdown label="售价" value={priceRange} set={setPriceRange} options={[
+        { key: "lt10", label: "¥10 以下" }, { key: "10to50", label: "¥10 – 50" }, { key: "50to100", label: "¥50 – 100" }, { key: "gt100", label: "¥100 以上" },
+      ]} />
+      <FilterDropdown label="评分" value={scoreRange} set={setScoreRange} options={[
+        { key: "gte45", label: "4.5 分以上" }, { key: "40to45", label: "4.0 – 4.5" }, { key: "lt40", label: "4.0 分以下" }, { key: "none", label: "暂无评分" },
+      ]} />
+      <FilterDropdown label="好评率" value={evalRange} set={setEvalRange} options={[
+        { key: "gte90", label: "90% 以上" }, { key: "80to90", label: "80% – 90%" }, { key: "lt80", label: "80% 以下" }, { key: "none", label: "暂无数据" },
+      ]} />
+      <FilterDropdown label="库存" value={stockFilter} set={setStockFilter} options={[
+        { key: "has", label: "有库存" }, { key: "empty", label: "无库存" },
+      ]} />
+      <FilterDropdown label="登记" value={regFilter} set={setRegFilter} options={[
+        { key: "yes", label: "已登记" }, { key: "no", label: "未登记" },
+      ]} />
+      {filterCount > 0 && <button type="button" className="button button-ghost button-compact" onClick={() => { setPriceRange(""); setScoreRange(""); setEvalRange(""); setStockFilter(""); setRegFilter(""); }}>清空筛选</button>}
+    </div>}
     <section className="panel table-panel">
       {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !accounts.length ? <EmptyState title="请先配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥。" /> : !products.length ? <EmptyState title="橱窗商品为空" description="请点击右上角「同步橱窗」从微信拉取数据。" /> : <div className="data-table-wrap"><table className="data-table">
         <thead><tr>
@@ -197,4 +259,16 @@ export function WindowProductsView() {
       <p style={{ fontSize: 13, color: "var(--muted)" }}><ShieldCheck size={14} style={{ marginRight: 4 }} />还没有配置联盟带货机构账号。添加后可同步商品的好评率、店铺评分数据。<br />请超管在「系统管理 → 联盟带货机构」中添加 AppID 和密钥。</p>
     </section>}
   </>;
+}
+
+type FilterOption = { key: string; label: string };
+
+function FilterDropdown({ label, value, set, options }: { label: string; value: string; set: (v: string) => void; options: FilterOption[] }) {
+  const activeLabel = options.find((o) => o.key === value)?.label || label;
+  return <details className="window-filter-dropdown">
+    <summary><span>{activeLabel}</span><ChevronDown size={12} /></summary>
+    <div className="window-filter-menu">
+      {options.map((opt) => <label key={opt.key} className={value === opt.key ? "selected" : ""}><input type="radio" name={`filter-${label}`} checked={value === opt.key} onChange={() => set(value === opt.key ? "" : opt.key)} />{opt.label}</label>)}
+    </div>
+  </details>;
 }
