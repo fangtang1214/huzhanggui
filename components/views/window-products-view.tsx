@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDownUp, ChevronDown, ExternalLink, Filter, PenLine, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { ArrowDownUp, ChevronDown, ExternalLink, Filter, PenLine, RefreshCw, Search, ShieldCheck, X } from "lucide-react";
 import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
 
@@ -123,8 +123,6 @@ export function WindowProductsView() {
     </button>
   );
 
-  const filterCount = [priceRange, scoreRange, evalRange, stockFilter, regFilter].filter(Boolean).length;
-
   async function syncWindow() {
     if (!selectedId) return;
     try {
@@ -198,30 +196,11 @@ export function WindowProductsView() {
           <select value={selectedId} onChange={(event) => setAccountId(event.target.value)} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
           {leagueOptions.length > 1 && <select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={{ minWidth: 200 }}><option value="">选择机构账号</option>{leagueOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>}
           <div className="search-box" style={{ flex: 1, minWidth: 180, maxWidth: 320 }}><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索商品名称、ID、店铺或链接" /></div>
-          <details className="price-filter"><summary><ArrowDownUp size={15} /><span>{sortLabel()}</span><ChevronDown size={14} /></summary><div className="price-filter-menu"><header><b>排序</b></header><div className="price-sort"><span>售价</span><button type="button" className={sortField !== "price" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "price" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "price" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>好评率</span><button type="button" className={sortField !== "eval" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "eval" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "eval" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>店铺评分</span><button type="button" className={sortField !== "score" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "score" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "score" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("desc"); }}>高→低</button></div></div></details>
+          <details className="price-filter"><summary><ArrowDownUp size={15} /><span>{sortLabel()}</span><ChevronDown size={14} /></summary><div className="price-filter-menu"><header><b>排序</b></header><div className="price-sort"><span>售价</span><button type="button" className={sortField !== "price" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "price" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "price" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>好评率</span><button type="button" className={sortField !== "eval" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "eval" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "eval" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>店铺评分</span><button type="button" className={sortField !== "score" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "score" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "score" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("desc"); }}>高→低</button></div></div></details>{(() => { const priceLabel = { lt10: "¥10以下", "10to50": "¥10–50", "50to100": "¥50–100", gt100: "¥100以上" }[priceRange] || "售价"; return <details className="price-filter"><summary><Filter size={14} /><span>{priceLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 180 }}><header><b>售价</b>{priceRange && <button type="button" onClick={() => setPriceRange("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "lt10", l: "¥10 以下" }, { k: "10to50", l: "¥10 – 50" }, { k: "50to100", l: "¥50 – 100" }, { k: "gt100", l: "¥100 以上" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-price" checked={priceRange === opt.k} onChange={() => setPriceRange(priceRange === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const scoreLabel = { gte45: "≥4.5", "40to45": "4.0–4.5", lt40: "<4.0", none: "暂无" }[scoreRange] || "评分"; return <details className="price-filter"><summary><Filter size={14} /><span>{scoreLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 180 }}><header><b>评分</b>{scoreRange && <button type="button" onClick={() => setScoreRange("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "gte45", l: "4.5 分以上" }, { k: "40to45", l: "4.0 – 4.5" }, { k: "lt40", l: "4.0 分以下" }, { k: "none", l: "暂无评分" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-score" checked={scoreRange === opt.k} onChange={() => setScoreRange(scoreRange === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const evalLabel = { gte90: "≥90%", "80to90": "80–90%", lt80: "<80%", none: "暂无" }[evalRange] || "好评率"; return <details className="price-filter"><summary><Filter size={14} /><span>{evalLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 180 }}><header><b>好评率</b>{evalRange && <button type="button" onClick={() => setEvalRange("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "gte90", l: "90% 以上" }, { k: "80to90", l: "80% – 90%" }, { k: "lt80", l: "80% 以下" }, { k: "none", l: "暂无数据" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-eval" checked={evalRange === opt.k} onChange={() => setEvalRange(evalRange === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const stockLabel = { has: "有库存", empty: "无库存" }[stockFilter] || "库存"; return <details className="price-filter"><summary><Filter size={14} /><span>{stockLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 150 }}><header><b>库存</b>{stockFilter && <button type="button" onClick={() => setStockFilter("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "has", l: "有库存" }, { k: "empty", l: "无库存" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-stock" checked={stockFilter === opt.k} onChange={() => setStockFilter(stockFilter === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const regLabel = { yes: "已登记", no: "未登记" }[regFilter] || "登记"; return <details className="price-filter"><summary><Filter size={14} /><span>{regLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 150 }}><header><b>登记</b>{regFilter && <button type="button" onClick={() => setRegFilter("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "yes", l: "已登记" }, { k: "no", l: "未登记" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-reg" checked={regFilter === opt.k} onChange={() => setRegFilter(regFilter === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}
           <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步橱窗与评分数据…" : activeAccount.syncedAt ? `最近同步：${formatDate(activeAccount.syncedAt, true)}` : "橱窗尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 失败：${activeAccount.syncError}` : ""}</span>
         </div>
       </>}
     </section>
-    {!accounts.length || loading ? null : <div className="window-filter-bar">
-      <span className="filter-bar-label"><Filter size={14} />筛选{filterCount > 0 ? <b>（{filterCount}）</b> : ""}</span>
-      <FilterDropdown label="售价" value={priceRange} set={setPriceRange} options={[
-        { key: "lt10", label: "¥10 以下" }, { key: "10to50", label: "¥10 – 50" }, { key: "50to100", label: "¥50 – 100" }, { key: "gt100", label: "¥100 以上" },
-      ]} />
-      <FilterDropdown label="评分" value={scoreRange} set={setScoreRange} options={[
-        { key: "gte45", label: "4.5 分以上" }, { key: "40to45", label: "4.0 – 4.5" }, { key: "lt40", label: "4.0 分以下" }, { key: "none", label: "暂无评分" },
-      ]} />
-      <FilterDropdown label="好评率" value={evalRange} set={setEvalRange} options={[
-        { key: "gte90", label: "90% 以上" }, { key: "80to90", label: "80% – 90%" }, { key: "lt80", label: "80% 以下" }, { key: "none", label: "暂无数据" },
-      ]} />
-      <FilterDropdown label="库存" value={stockFilter} set={setStockFilter} options={[
-        { key: "has", label: "有库存" }, { key: "empty", label: "无库存" },
-      ]} />
-      <FilterDropdown label="登记" value={regFilter} set={setRegFilter} options={[
-        { key: "yes", label: "已登记" }, { key: "no", label: "未登记" },
-      ]} />
-      {filterCount > 0 && <button type="button" className="button button-ghost button-compact" onClick={() => { setPriceRange(""); setScoreRange(""); setEvalRange(""); setStockFilter(""); setRegFilter(""); }}>清空筛选</button>}
-    </div>}
     <section className="panel table-panel">
       {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !accounts.length ? <EmptyState title="请先配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥。" /> : !products.length ? <EmptyState title="橱窗商品为空" description="请点击右上角「同步橱窗」从微信拉取数据。" /> : <div className="data-table-wrap"><table className="data-table">
         <thead><tr>
@@ -259,16 +238,4 @@ export function WindowProductsView() {
       <p style={{ fontSize: 13, color: "var(--muted)" }}><ShieldCheck size={14} style={{ marginRight: 4 }} />还没有配置联盟带货机构账号。添加后可同步商品的好评率、店铺评分数据。<br />请超管在「系统管理 → 联盟带货机构」中添加 AppID 和密钥。</p>
     </section>}
   </>;
-}
-
-type FilterOption = { key: string; label: string };
-
-function FilterDropdown({ label, value, set, options }: { label: string; value: string; set: (v: string) => void; options: FilterOption[] }) {
-  const activeLabel = options.find((o) => o.key === value)?.label || label;
-  return <details className="window-filter-dropdown">
-    <summary><span>{activeLabel}</span><ChevronDown size={12} /></summary>
-    <div className="window-filter-menu">
-      {options.map((opt) => <label key={opt.key} className={value === opt.key ? "selected" : ""}><input type="radio" name={`filter-${label}`} checked={value === opt.key} onChange={() => set(value === opt.key ? "" : opt.key)} />{opt.label}</label>)}
-    </div>
-  </details>;
 }
