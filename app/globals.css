@@ -307,6 +307,12 @@ select { cursor: pointer; }
 .data-table-wrap { width: 100%; overflow-x: auto; }
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th { height: 47px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #f7f7f2; color: #6b7975; text-align: left; font-size: 11px; font-weight: 800; letter-spacing: .04em; white-space: nowrap; }
+.data-table th:has(.table-sort-th) { padding: 0; }
+.table-sort-th { height: 47px; padding: 0 14px; display: flex; align-items: center; gap: 4px; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; color: inherit; cursor: pointer; font: inherit; font-weight: 800; letter-spacing: .04em; white-space: nowrap; }
+.table-sort-th:hover { color: var(--green); }
+.sort-inactive { color: var(--muted); opacity: 0; }
+.table-sort-th:hover .sort-inactive { opacity: .35; }
+.sort-asc, .sort-desc { color: var(--green); }
 .data-table td { min-height: 62px; padding: 12px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 .data-table tbody tr:hover { background: #fbfcf9; }
 .data-table tbody tr:last-child td { border-bottom: 0; }

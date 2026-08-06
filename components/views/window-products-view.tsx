@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ExternalLink, PenLine, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowDownUp, ChevronDown, ExternalLink, PenLine, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
 type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null; serviceRatio?: number | null };
 type LeagueOption = { id: string; name: string; active: boolean };
+type SortField = "" | "price" | "score" | "eval";
 
 const fenToYuan = (fen?: number | null) => typeof fen === "number" ? (fen / 100).toFixed(2) : "";
 const ratioText = (ratio?: number | null) => typeof ratio === "number" ? `${(ratio / 1000).toFixed(1)}%` : "—";
@@ -21,6 +22,9 @@ export function WindowProductsView() {
   const [accountId, setAccountId] = useState("");
   const [leagueId, setLeagueId] = useState("");
   const [leagueOptions, setLeagueOptions] = useState<LeagueOption[]>([]);
+  const [search, setSearch] = useState("");
+  const [sortField, setSortField] = useState<SortField>("");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const url = accountId ? `/api/window-products?accountId=${accountId}` : "/api/window-products";
   const { data, loading, error, reload } = useRemote<{ accounts: WindowAccount[]; products: WindowProduct[] }>(url);
   const accounts = useMemo(() => data?.accounts || [], [data]);
@@ -35,6 +39,47 @@ export function WindowProductsView() {
     const timer = window.setInterval(() => void reload(), 4000);
     return () => window.clearInterval(timer);
   }, [activeAccount?.syncStatus, reload]);
+
+  const filteredProducts = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    let list = keyword
+      ? products.filter((item) =>
+          (item.title || "").toLowerCase().includes(keyword) ||
+          item.productId.includes(keyword) ||
+          (item.outProductId || "").includes(keyword) ||
+          (item.shopName || "").toLowerCase().includes(keyword))
+      : [...products];
+    if (sortField && sortDir) {
+      list.sort((a, b) => {
+        let va = 0; let vb = 0;
+        if (sortField === "price") { va = a.sellingPriceFen ?? 0; vb = b.sellingPriceFen ?? 0; }
+        else if (sortField === "score") { va = a.shopScore ?? 0; vb = b.shopScore ?? 0; }
+        else if (sortField === "eval") { va = a.goodEvaluationRatio ?? 0; vb = b.goodEvaluationRatio ?? 0; }
+        return sortDir === "asc" ? va - vb : vb - va;
+      });
+    }
+    return list;
+  }, [products, search, sortField, sortDir]);
+
+  function toggleSort(field: SortField) {
+    if (sortField === field) {
+      if (sortDir === "asc") setSortDir("desc");
+      else { setSortField(""); setSortDir("asc"); }
+    } else { setSortField(field); setSortDir("asc"); }
+  }
+
+  const sortLabel = () => {
+    if (!sortField) return "排序";
+    const labels: Record<SortField, string> = { price: "售价", score: "评分", eval: "好评率", "": "" };
+    return `${labels[sortField]}${sortDir === "asc" ? "↑" : "↓"}`;
+  };
+
+  const thSort = (field: SortField, label: string) => (
+    <button type="button" className="table-sort-th" onClick={() => toggleSort(field)}>
+      <span>{label}</span>
+      <ArrowDownUp size={12} className={sortField === field ? (sortDir === "asc" ? "sort-asc" : "sort-desc") : "sort-inactive"} />
+    </button>
+  );
 
   async function syncWindow() {
     if (!selectedId) return;
@@ -108,6 +153,8 @@ export function WindowProductsView() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", flex: 1 }}>
           <select value={selectedId} onChange={(event) => setAccountId(event.target.value)} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
           {leagueOptions.length > 1 && <select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={{ minWidth: 200 }}><option value="">选择机构账号</option>{leagueOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>}
+          <div className="search-box" style={{ flex: 1, minWidth: 180, maxWidth: 320 }}><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索商品名称、ID 或店铺" /></div>
+          <details className="price-filter"><summary><ArrowDownUp size={15} /><span>{sortLabel()}</span><ChevronDown size={14} /></summary><div className="price-filter-menu"><header><b>排序</b></header><div className="price-sort"><span>售价</span><button type="button" className={sortField !== "price" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "price" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "price" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>好评率</span><button type="button" className={sortField !== "eval" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "eval" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "eval" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>店铺评分</span><button type="button" className={sortField !== "score" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "score" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "score" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("desc"); }}>高→低</button></div></div></details>
           <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步橱窗与评分数据…" : activeAccount.syncedAt ? `最近同步：${formatDate(activeAccount.syncedAt, true)}` : "橱窗尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 失败：${activeAccount.syncError}` : ""}</span>
         </div>
       </>}
@@ -117,14 +164,14 @@ export function WindowProductsView() {
         <thead><tr>
           <th>商品</th>
           <th>店铺 / 评分</th>
-          <th>售价</th>
-          <th>好评率</th>
+          <th>{thSort("price", "售价")}</th>
+          <th>{thSort("eval", "好评率")}</th>
           <th>库存</th>
           <th>状态</th>
           <th>链接</th>
           <th>操作</th>
         </tr></thead>
-        <tbody>{products.map((item) => <tr key={item.id}>
+        <tbody>{filteredProducts.map((item) => <tr key={item.id}>
           <td><div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <ProductImage urls={item.imgUrl ? [item.imgUrl] : []} alt={item.title || "橱窗商品"} size="small" />
             <div style={{ minWidth: 0 }}>
@@ -132,7 +179,7 @@ export function WindowProductsView() {
               <small style={{ color: "var(--muted)" }}>{item.isHide ? "橱窗中已隐藏" : ""}{item.sales ? ` · 销量 ${item.sales}` : ""}</small>
             </div>
           </div></td>
-          <td><div>{item.shopName || "—"}{item.shopScore ? <small style={{ display: "block", color: "var(--muted)" }}>{scoreText(item.shopScore)}</small> : ""}</div></td>
+          <td><div>{item.shopScore ? <b>{scoreText(item.shopScore)}</b> : "—"}{item.shopName ? <small style={{ display: "block", color: "var(--muted)", fontSize: 11 }}>{item.shopName}</small> : ""}</div></td>
           <td><b className="money-cell">{fenToYuan(item.sellingPriceFen) ? `¥${fenToYuan(item.sellingPriceFen)}` : "—"}</b></td>
           <td><b style={{ color: (item.goodEvaluationRatio ?? 0) >= 90000 ? "var(--green)" : (item.goodEvaluationRatio ?? 0) > 0 ? "var(--amber)" : "inherit" }}>{ratioText(item.goodEvaluationRatio)}</b></td>
           <td><b>{typeof item.stock === "number" ? item.stock : "—"}</b></td>
