@@ -112,8 +112,10 @@ export function LinkIssuesView() {
                 </div>
                 <div className="issue-header-extra">
                   <span><Store size={13} />{issue.storeName || "未填店铺"}</span>
+                  {(issue.storeName || issue.supplyChain) && <button type="button" className="issue-copy-inline" onClick={() => copyText(issue.storeName || "", "店铺名")} title="复制店铺名"><Copy size={11} /></button>}
                   <span className="issue-header-sep" />
                   <span><MessagesSquare size={13} />供应链：{issue.supplyChain || "未填写"}</span>
+                  {issue.supplyChain && <button type="button" className="issue-copy-inline" onClick={() => copyText(issue.supplyChain || "", "供应链")} title="复制供应链"><Copy size={11} /></button>}
                 </div>
               </div>
               {issueStatus(issue.status)}
