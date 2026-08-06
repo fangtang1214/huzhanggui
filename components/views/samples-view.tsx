@@ -114,6 +114,7 @@ export function ScannerView() {
   return <>
     <PageHeader eyebrow="手机快捷操作" title="扫码流转" description="单件扫码适合查看并处理一件样品；批量流转可先统一选择操作，再连续扫描整批样品。" />
     <section className="scan-mode-grid"><button className="panel scan-mode-card" onClick={() => setMode("single")}><span><ScanLine size={32} /></span><div><p className="eyebrow">单件操作</p><h2>扫描一件样品</h2><p>扫码后进入样品详情，查看当前位置并单独修改。</p></div><MoveRight size={22} /></button>{can("samples:move") && <button className="panel scan-mode-card featured" onClick={() => setMode("batch")}><span><Layers3 size={32} /></span><div><p className="eyebrow">推荐：连续处理</p><h2>批量扫码流转</h2><p>先选统一目标，再连续扫描最多 100 件，最后一次确认。</p></div><MoveRight size={22} /></button>}</section>
+    <section className="panel" style={{ marginTop: 16, padding: 20, display: "flex", alignItems: "center", gap: 12 }}><History size={22} style={{ color: "var(--muted)" }} /><div><b>流转记录</b><p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>查看所有样品的完整流转历史，支持按样品、操作人筛选。</p></div><Link href="/movements" className="button button-secondary button-compact" style={{ marginLeft: "auto", flexShrink: 0 }}>查看记录</Link></section>
   </>;
 }
 

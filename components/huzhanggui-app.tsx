@@ -18,15 +18,14 @@ import { LeagueAccountsView } from "./views/league-accounts-view";
 import { WindowProductsView } from "./views/window-products-view";
 import { RecognitionView } from "./views/recognition-view";
 import { LinkIssuesView } from "./views/link-issues-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, ShoppingBag, Store, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, Link2, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, ShoppingBag, Store, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
   { href: "/products", key: "products", label: "商品档案", permission: "products:view", icon: FolderKanban },
-  { href: "/link-issues", key: "link-issues", label: "问题处理", permission: "", icon: CircleAlert },
-  { href: "/samples", key: "samples", label: "实物样品", permission: "samples:view", icon: Boxes },
+  { href: "/samples", key: "samples", label: "样品位置", permission: "samples:view", icon: Boxes },
   { href: "/scan", key: "scan", label: "扫码流转", permission: "samples:view", icon: ScanLine },
-  { href: "/movements", key: "movements", label: "流转记录", permission: "movements:view", icon: History },
+  { href: "/link-issues", key: "link-issues", label: "问题处理", permission: "", icon: CircleAlert },
 ];
 const manageNav = [
   { href: "/departments", key: "departments", label: "部门管理", permission: "departments:view", icon: LayoutGrid },
@@ -54,6 +53,7 @@ function viewTitle(path: string[]) {
   if (path[0] === "products" && path[1] === "new") return "登记新商品";
   if (path[0] === "products" && path[1]) return "商品详情";
   if (path[0] === "samples" && path[1]) return "样品详情";
+  if (path[0] === "movements") return "流转记录";
   return [...primaryNav, ...manageNav].find((item) => item.key === (path[0] || "dashboard"))?.label || "狐掌柜";
 }
 
