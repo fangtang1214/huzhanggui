@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiError, ok, readJson, requestIp } from "@/lib/api";
-import { authenticate, createSession, getCurrentUser, validateCsrf } from "@/lib/auth";
+import { authenticate, createSession, getCurrentUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { checkLoginLimit, clearLoginFailures, loginLimitKey, recordLoginFailure } from "@/lib/rate-limit";
 
@@ -12,7 +12,6 @@ const schema = z.object({
 export async function POST(request: Request) {
   try {
     const input = schema.parse(await readJson(request));
-    await validateCsrf(request);
     const ip = requestIp(request);
     const limitKey = loginLimitKey(ip, input.username);
     const limit = await checkLoginLimit(limitKey);
