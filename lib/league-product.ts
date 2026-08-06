@@ -156,13 +156,31 @@ export async function fetchLeagueProductDetail(
   };
 }
 
-export async function fetchLeaguePromotionLink(account: LeagueAccountRow, headSupplierItemLink: string): Promise<string | null> {
-  const payload = await callLeagueApi<{
-    item?: { cooperative_info?: { link?: string } };
-  }>(account, "/channels/ec/league/headsupplier/item/promotiondetail/get", {
-    head_supplier_item_link: headSupplierItemLink,
-  });
-  return safeText(payload.item?.cooperative_info?.link);
+export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, string>> {
+  const links = new Map<string, string>();
+  for (const commissionType of [0, 1]) {
+    let nextKey = "";
+    for (let page = 0; page < 500; page += 1) {
+      const payload = await callLeagueApi<{
+        list?: Array<{ product_id?: number | string; head_supplier_item_link?: string }>;
+        next_key?: string;
+      }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
+        commission_type: commissionType,
+        page_size: 20,
+        next_key: nextKey,
+      });
+      const list = Array.isArray(payload.list) ? payload.list : [];
+      for (const item of list) {
+        const productId = safeText(item.product_id);
+        const link = safeText(item.head_supplier_item_link);
+        if (productId && link) links.set(productId, link);
+      }
+      const next = safeText(payload.next_key);
+      if (!next || next === nextKey || list.length === 0) break;
+      nextKey = next;
+    }
+  }
+  return links;
 }
 
 export async function syncWindowQuality(leagueAccountId: string, talentAccountId: string): Promise<{ total: number; detailed: number; patchedShopIds: number; patchedLinks: number }> {
@@ -184,7 +202,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     try {
       const detail = await fetchWindowProductDetail(talentAccount, product.productId);
       if (detail.shopAppid) {
-        await sql`UPDATE talent_window_products SET shop_appid = ${detail.shopAppid}, out_product_id = coalesce(${detail.outProductId || null}, out_product_id), promotion_link = coalesce(${detail.promotionLink || null}, promotion_link) WHERE id = ${product.id}`;
+        await sql`UPDATE talent_window_products SET shop_appid = ${detail.shopAppid}, out_product_id = coalesce(${detail.outProductId || null}, out_product_id), promotion_link = coalesce(promotion_link, ${detail.promotionLink || null}) WHERE id = ${product.id}`;
         product.shopAppid = detail.shopAppid;
         if (detail.outProductId && !product.outProductId) product.outProductId = detail.outProductId;
         if (detail.promotionLink && !product.promotionLink) product.promotionLink = detail.promotionLink;
@@ -195,19 +213,21 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
 
   let patchedLinks = 0;
   const errors: string[] = [];
+  let itemLinks = new Map<string, string>();
+  try {
+    itemLinks = await fetchLeagueCooperativeItemLinks(leagueAccount);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : "合作商品列表获取失败");
+  }
   for (const product of products) {
-    if (product.promotionLink) continue;
     const sid = product.outProductId || product.productId;
-    if (!sid) continue;
-    try {
-      const link = await fetchLeaguePromotionLink(leagueAccount, `weixinstorehs/${sid}`);
-      if (link) {
+    const link = sid ? itemLinks.get(sid) : undefined;
+    if (link && link !== product.promotionLink) {
+      try {
         await sql`UPDATE talent_window_products SET promotion_link = ${link} WHERE id = ${product.id}`;
         product.promotionLink = link;
         patchedLinks += 1;
-      }
-    } catch (error) {
-      if (errors.length < 3) errors.push(error instanceof Error ? error.message : "推广链接获取失败");
+      } catch { /* skip individual link update failure */ }
     }
   }
 

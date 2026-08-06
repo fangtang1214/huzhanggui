@@ -237,7 +237,7 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
             stock = ${detail.stock}, sales = ${detail.sales}, status = ${detail.status}, is_hide = ${detail.isHide},
             out_product_id = coalesce(${detail.outProductId}, out_product_id),
             shop_appid = coalesce(${detail.shopAppid}, shop_appid),
-            promotion_link = coalesce(${detail.promotionLink}, promotion_link),
+            promotion_link = coalesce(promotion_link, ${detail.promotionLink}),
             synced_at = now()
         WHERE account_id = ${accountId} AND product_id = ${batch[offset].productId}
       `;
