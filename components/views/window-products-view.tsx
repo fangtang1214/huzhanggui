@@ -27,11 +27,20 @@ export function WindowProductsView() {
 
   useEffect(() => { apiFetch<LeagueOption[]>("/api/league-accounts?minimal=1").then((list) => { setLeagueOptions(list); if (list.length) setLeagueId(list[0].id); }).catch(() => {}); }, []);
 
+  useEffect(() => {
+    if (activeAccount?.syncStatus !== "syncing") return;
+    const timer = window.setInterval(() => void reload(), 4000);
+    return () => window.clearInterval(timer);
+  }, [activeAccount?.syncStatus, reload]);
+
   async function syncWindow() {
     if (!selectedId) return;
     try {
       await apiFetch(`/api/talent-accounts/${selectedId}/sync`, { method: "POST" });
       toast("已开始同步橱窗商品");
+      if (leagueId) {
+        apiFetch(`/api/league-accounts/${leagueId}/sync-quality?talentAccountId=${selectedId}`, { method: "POST" }).catch(() => {});
+      }
       setTimeout(() => reload(), 2000);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "同步失败", "error"); }
   }
@@ -53,15 +62,15 @@ export function WindowProductsView() {
 
   return <>
     <PageHeader eyebrow="系统管理" title="橱窗管理" description="查看带货账号橱窗中的所有商品，支持评分数据和已登记商品对照。" actions={accounts.length ? <div style={{ display: "flex", gap: 6 }}>
-      <button type="button" className="button button-secondary" disabled={!selectedId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "橱窗同步中…" : "同步橱窗"}</button>
-      {leagueOptions.length > 0 && <button type="button" className="button button-secondary" disabled={!selectedId} onClick={syncQuality}><ShieldCheck size={17} />同步评分</button>}
+      <button type="button" className="button button-secondary" disabled={!selectedId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "同步中…" : "同步橱窗"}</button>
+      {leagueOptions.length > 0 && <button type="button" className="button button-secondary button-compact" disabled={!selectedId} onClick={syncQuality}><ShieldCheck size={15} />仅同步评分</button>}
     </div> : undefined} />
     <section className="toolbar">
       {!accounts.length && !loading ? <EmptyState title="尚未配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥后，再回来查看。" /> : <>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", flex: 1 }}>
           <select value={selectedId} onChange={(event) => setAccountId(event.target.value)} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
           {leagueOptions.length > 1 && <select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={{ minWidth: 200 }}><option value="">选择机构账号</option>{leagueOptions.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>}
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步…" : activeAccount.syncedAt ? `橱窗同步：${formatDate(activeAccount.syncedAt, true)}` : "橱窗尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 失败：${activeAccount.syncError}` : ""}</span>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步橱窗与评分数据…" : activeAccount.syncedAt ? `最近同步：${formatDate(activeAccount.syncedAt, true)}` : "橱窗尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 失败：${activeAccount.syncError}` : ""}</span>
         </div>
       </>}
     </section>
