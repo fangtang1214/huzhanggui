@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, RefreshCw, ShieldCheck } from "lucide-react";
-import { apiFetch, copyToClipboard, formatDate, useRemote, useToast } from "../client-utils";
+import { useRouter } from "next/navigation";
+import { ExternalLink, PenLine, RefreshCw, ShieldCheck } from "lucide-react";
+import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
-type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null };
+type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null; serviceRatio?: number | null };
 type LeagueOption = { id: string; name: string; active: boolean };
 
 const fenToYuan = (fen?: number | null) => typeof fen === "number" ? (fen / 100).toFixed(2) : "";
@@ -14,6 +15,8 @@ const ratioText = (ratio?: number | null) => typeof ratio === "number" ? `${(rat
 const scoreText = (score?: number | null) => typeof score === "number" ? `${(score / 100).toFixed(2)}` : "—";
 
 export function WindowProductsView() {
+  const { user } = useAppData();
+  const router = useRouter();
   const toast = useToast();
   const [accountId, setAccountId] = useState("");
   const [leagueId, setLeagueId] = useState("");
@@ -60,6 +63,40 @@ export function WindowProductsView() {
     else toast("复制失败，请手动选择", "error");
   }
 
+  async function startRegistration(product: WindowProduct) {
+    const commission = typeof product.serviceRatio === "number" && product.serviceRatio > 0
+      ? `${parseFloat((product.serviceRatio / 10000).toFixed(2))}%` : "";
+    const draft = {
+      version: 1 as const,
+      form: {
+        imageUrls: product.imgUrl || "",
+        name: product.title || "",
+        price: typeof product.sellingPriceFen === "number" ? (product.sellingPriceFen / 100).toFixed(2) : "",
+        productUrl: product.link || "",
+        commission,
+        storeName: product.shopName || "",
+        storeRating: typeof product.shopScore === "number" ? (product.shopScore / 100).toFixed(2) : "",
+        quantity: "1",
+        arrivedAt: new Date().toISOString().slice(0, 10),
+        departmentIds: [] as string[],
+        tagIds: [] as string[],
+        categoryId: "",
+        businessContactId: "",
+        supplyChain: "",
+        cooperationMechanism: "",
+        notes: "",
+        initialLocationId: "",
+        initialDepartmentId: "",
+        sku: "",
+      },
+      savedAt: Date.now(),
+    };
+    try {
+      localStorage.setItem(`huzhanggui:product-draft:${user.id}`, JSON.stringify(draft));
+    } catch { /* localStorage unavailable */ }
+    router.push("/products/new");
+  }
+
   return <>
     <PageHeader eyebrow="系统管理" title="橱窗管理" description="查看带货账号橱窗中的所有商品，支持评分数据和已登记商品对照。" actions={accounts.length ? <div style={{ display: "flex", gap: 6 }}>
       <button type="button" className="button button-secondary" disabled={!selectedId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "同步中…" : "同步橱窗"}</button>
@@ -84,7 +121,7 @@ export function WindowProductsView() {
           <th>库存</th>
           <th>状态</th>
           <th>链接</th>
-          <th>狐掌柜</th>
+          <th>操作</th>
         </tr></thead>
         <tbody>{products.map((item) => <tr key={item.id}>
           <td><div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -103,7 +140,7 @@ export function WindowProductsView() {
             <code style={{ fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }} title={item.link}>{item.link}</code>
             <button type="button" className="icon-button" onClick={() => copyLink(item.link)} aria-label="复制链接" title="复制链接"><ExternalLink size={13} /></button>
           </div></td>
-          <td>{item.registeredProductId ? <span style={{ fontSize: 13 }}>{item.registeredSku || "已登记"}</span> : <span style={{ color: "var(--muted)", fontSize: 12 }}>未登记</span>}</td>
+          <td>{item.registeredProductId ? <span style={{ fontSize: 13 }}>{item.registeredSku || "已登记"}</span> : <button type="button" className="button button-primary button-compact" style={{ fontSize: 12 }} disabled={!item.title || !item.imgUrl} onClick={() => startRegistration(item)}><PenLine size={13} />登记</button>}</td>
         </tr>)}</tbody>
       </table></div>}
     </section>

@@ -235,66 +235,8 @@ const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [
 type ProductDraft = { version: 1; form: ProductFormState; savedAt: number };
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
-type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
-type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; commissionRatio?: number | null; normalCommissionRatio?: number | null; serviceRatio?: number | null };
-
-const fenToYuan = (fen?: number | null) => typeof fen === "number" ? (fen / 100).toFixed(2) : "";
-const windowCommissionText = (product: WindowProduct) => {
-  const ratio = product.serviceRatio;
-  return typeof ratio === "number" && ratio > 0 ? `${parseFloat((ratio / 10000).toFixed(2))}%` : "";
-};
-
-function WindowProductPicker({ onPick, onClose }: { onPick: (product: WindowProduct) => void; onClose: () => void }) {
-  const toast = useToast();
-  const [accountId, setAccountId] = useState("");
-  const [search, setSearch] = useState("");
-  const { data, loading, error, reload } = useRemote<{ accounts: WindowAccount[]; products: WindowProduct[] }>(`/api/window-products${accountId ? `?accountId=${accountId}` : ""}`);
-  const accounts = useMemo(() => data?.accounts || [], [data]);
-  const products = useMemo(() => data?.products || [], [data]);
-  const activeAccount = accounts.find((account) => account.id === accountId) || null;
-  useEffect(() => { if (!accountId && accounts.length) setAccountId(accounts[0].id); }, [accounts, accountId]);
-  useEffect(() => {
-    if (activeAccount?.syncStatus !== "syncing") return;
-    const timer = window.setInterval(() => { void reload(); }, 4000);
-    return () => window.clearInterval(timer);
-  }, [activeAccount?.syncStatus, reload]);
-  async function syncWindow() {
-    if (!accountId) return;
-    try {
-      await apiFetch(`/api/talent-accounts/${accountId}/sync`, { method: "POST" });
-      toast("已开始同步橱窗商品");
-      await reload();
-    } catch (reason) { toast(reason instanceof Error ? reason.message : "同步失败", "error"); }
-  }
-  const keyword = search.trim().toLowerCase();
-  const filtered = keyword ? products.filter((item) => (item.title || "").toLowerCase().includes(keyword) || item.productId.includes(keyword) || (item.outProductId || "").includes(keyword)) : products;
-  return <Modal title="从橱窗选择商品" onClose={onClose} wide>
-    <div className="modal-form">
-      {!accounts.length && !loading ? <EmptyState title="尚未配置带货账号" description="请超级管理员先在「系统管理 → 带货账号」中添加微信小店带货助手的 AppID 与密钥。" /> : <>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={accountId} onChange={(event) => { setAccountId(event.target.value); setSearch(""); }} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
-          <div className="search-box" style={{ flex: 1, minWidth: 180 }}><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索橱窗商品名称或 ID" /></div>
-          <button type="button" className="button button-secondary button-compact" disabled={!accountId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={15} />{activeAccount?.syncStatus === "syncing" ? "同步中…" : "同步橱窗"}</button>
-        </div>
-        {activeAccount && <small style={{ color: "var(--muted)" }}>{activeAccount.syncStatus === "syncing" ? "正在从微信同步橱窗商品，列表会自动刷新…" : activeAccount.syncedAt ? `最近同步：${formatDate(activeAccount.syncedAt, true)}` : "该账号还未同步过，请点击「同步橱窗」。"}{activeAccount.syncStatus === "failed" && activeAccount.syncError ? ` · 上次同步失败：${activeAccount.syncError}` : ""}</small>}
-        {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !filtered.length ? <EmptyState title={products.length ? "没有匹配的橱窗商品" : "橱窗商品为空"} description={products.length ? "换个关键词试试。" : "请先点「同步橱窗」拉取商品；刚加入橱窗的商品需要同步后才会出现。"} /> : <div style={{ display: "grid", gap: 8, maxHeight: "55vh", overflow: "auto" }}>{filtered.map((item) => <article key={item.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 12px", borderRadius: 10, border: "1px solid var(--line-soft)", background: "var(--paper-strong)" }}>
-          <ProductImage urls={item.imgUrl ? [item.imgUrl] : []} alt={item.title || "橱窗商品"} size="small" />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.title || `商品 ${item.productId}`}</b>
-            <small style={{ color: "var(--muted)" }}><code>{item.link}</code>{item.isHide ? " · 橱窗中隐藏" : ""}{item.status === 2 ? " · 已被禁止售卖" : ""}</small>
-            <div style={{ fontSize: 12, marginTop: 2 }}>{fenToYuan(item.sellingPriceFen) ? `¥${fenToYuan(item.sellingPriceFen)}` : "价格未知"}{typeof item.stock === "number" ? ` · 库存 ${item.stock}` : ""}{typeof item.sales === "number" ? ` · 销量 ${item.sales}` : ""}{windowCommissionText(item) ? ` · 佣金 ${windowCommissionText(item)}` : ""}{item.shopName ? ` · ${item.shopName}` : ""}</div>
-          </div>
-          {item.registeredProductId ? <span style={{ fontSize: 12, color: "var(--muted)", flexShrink: 0 }}>已登记 {item.registeredSku}</span> : <button type="button" className="button button-primary button-compact" style={{ flexShrink: 0 }} disabled={!item.title || !item.imgUrl} onClick={() => onPick(item)}>添加</button>}
-        </article>)}</div>}
-      </>}
-    </div>
-  </Modal>;
-}
-
 export function ProductFormView({ id }: { id?: string }) {
   const { user, lookups } = useAppData(); const router = useRouter(); const toast = useToast(); const [form, setForm] = useState<ProductFormState>(blankForm); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
-  const [entryMode, setEntryMode] = useState<"chooser" | "form">(id ? "form" : "chooser"); const [windowPickerOpen, setWindowPickerOpen] = useState(false); const [windowAccountCount, setWindowAccountCount] = useState<number | null>(id ? 0 : null);
-  useEffect(() => { if (id) return; apiFetch<{ accounts: WindowAccount[] }>("/api/window-products").then((result) => setWindowAccountCount(result.accounts.length)).catch(() => setWindowAccountCount(0)); }, [id]);
   const draftKey = `huzhanggui:product-draft:${user.id}`; const [draftReady, setDraftReady] = useState(Boolean(id)); const [draftCandidate, setDraftCandidate] = useState<ProductDraft | null>(null); const [draftTouched, setDraftTouched] = useState(false); const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const [checkedUrls, setCheckedUrls] = useState<string[]>([]); const [excludedProducts, setExcludedProducts] = useState<string[]>([]);
   const [recognition, setRecognition] = useState<{ phase: "waiting" | "checking" | "ready" | "failed"; runId: string; runUrl: string; decision: "" | "matched" | "new" | "failed_continue"; matchedProductId: string; message: string; timingText: string }>({ phase: id ? "ready" : "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "" });
@@ -309,7 +251,7 @@ export function ProductFormView({ id }: { id?: string }) {
       const draft = JSON.parse(raw) as ProductDraft;
       const valid = draft?.version === 1 && typeof draft.savedAt === "number" && Date.now() - draft.savedAt < PRODUCT_DRAFT_LIFETIME
         && draft.form && typeof draft.form.imageUrls === "string" && Array.isArray(draft.form.departmentIds) && Array.isArray(draft.form.tagIds);
-      if (valid) { setDraftCandidate(draft); setEntryMode("form"); }
+      if (valid) { setDraftCandidate(draft); }
       else { localStorage.removeItem(draftKey); setDraftReady(true); }
     } catch {
       localStorage.removeItem(draftKey); setDraftReady(true);
@@ -372,21 +314,6 @@ export function ProductFormView({ id }: { id?: string }) {
     localStorage.removeItem(draftKey); setDraftCandidate(null); setDraftSavedAt(null); setDraftTouched(false); setDraftReady(true);
   }
   async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { const payload = { ...form, price: form.price || null, storeRating: form.storeRating || null, businessContactId: form.businessContactId || null, categoryId: form.categoryId || null, productUrl: form.productUrl || "", imageUrls, initialLocationId: form.initialLocationId || null }; if (id) { const { quantity, arrivedAt, initialDepartmentId, initialLocationId, sku, ...update } = payload; void quantity; void arrivedAt; void initialDepartmentId; void initialLocationId; void sku; await apiFetch(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(update) }); toast("商品信息已保存"); router.push(`/products/${id}`); } else { if (!recognition.runId || !recognition.decision) throw new Error("请先完成图片识别"); const result = await apiFetch<{ id: string; matched?: boolean; sku: string }>("/api/products", { method: "POST", body: JSON.stringify({ ...payload, matchRunId: recognition.runId, matchDecision: recognition.decision, matchedProductId: recognition.matchedProductId || null }) }); localStorage.removeItem(draftKey); setDraftReady(false); toast(result.matched ? `已按同款 ${result.sku} 追加 ${form.quantity} 件样品` : `新商品 ${result.sku} 登记成功`); router.push(`/products/${result.id}`); } } catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); window.scrollTo({ top: 0, behavior: "smooth" }); } finally { setSaving(false); } }
-  function applyWindowProduct(product: WindowProduct) {
-    setDraftTouched(true);
-    const link = product.link || (product.outProductId ? `weixinstorehs/${product.outProductId}` : "");
-    const commission = windowCommissionText(product);
-    setForm((current) => ({ ...current, name: product.title || current.name, imageUrls: product.imgUrl || current.imageUrls, price: fenToYuan(product.sellingPriceFen) || current.price, productUrl: link || current.productUrl, storeName: product.shopName || current.storeName, storeRating: typeof product.shopScore === "number" ? (product.shopScore / 100).toFixed(2) : current.storeRating, commission: commission || current.commission }));
-    setWindowPickerOpen(false); setEntryMode("form");
-  }
-  if (!id && entryMode === "chooser") return <>
-    <PageHeader eyebrow="到样登记" title="登记新商品与实物样品" description="请选择本次登记方式，登记内容都会先进入表单由人工确认。" actions={<button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>} />
-    <section className="panel form-section"><div className="issue-result-picker">
-      <label className="selected" style={{ cursor: "pointer" }} onClick={() => setEntryMode("form")}><input type="radio" name="entryMode" readOnly style={{ display: "none" }} /><b><FilePenLine size={17} /> 手动登记</b><small>自己粘贴图片网址，逐项填写商品名称、价格、店铺等资料</small></label>
-      <label className={windowAccountCount ? "selected" : ""} style={{ cursor: windowAccountCount ? "pointer" : "not-allowed", opacity: windowAccountCount === 0 ? 0.55 : 1 }} onClick={() => { if (windowAccountCount) setWindowPickerOpen(true); }}><input type="radio" name="entryMode" readOnly style={{ display: "none" }} /><b><Store size={17} /> 从橱窗选择</b><small>{windowAccountCount === null ? "正在检查带货账号配置…" : windowAccountCount === 0 ? "尚未配置带货账号，请联系超级管理员在「系统管理 → 带货账号」中添加" : "从带货账号橱窗中选择商品，自动填入图片、名称、价格与商品链接"}</small></label>
-    </div></section>
-    {windowPickerOpen && <WindowProductPicker onPick={applyWindowProduct} onClose={() => setWindowPickerOpen(false)} />}
-  </>;
   if (id && detail.loading) return <LoadingState />;
   return <form onSubmit={submit}>
     <PageHeader eyebrow={id ? "编辑档案" : "到样登记"} title={id ? "修改商品信息" : "登记新商品与实物样品"} description={id ? "货号不可修改，其他字段的每次修改都会保留操作记录。" : "填写主图后会自动识别同款；识别期间可以继续填写其他资料。"} actions={<><button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>{id && <button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "保存修改"}</button>}</>} />

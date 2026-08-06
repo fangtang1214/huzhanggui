@@ -412,9 +412,7 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(productsRoute, /requireUser\("products:create"\)/);
   assert.match(productsRoute, /weixinstorehs/);
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
-  assert.match(form, /从橱窗选择/);
-  assert.match(form, /WindowProductPicker/);
-  assert.match(form, /registeredSku/);
+  assert.match(form, /draftCandidate/);
   const navigation = await readFile(new URL("../components/huzhanggui-app.tsx", import.meta.url), "utf8");
   assert.match(navigation, /\/talent-accounts/);
   assert.match(navigation, /\/window-products/);
@@ -422,6 +420,7 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   const windowView = await readFile(new URL("../components/views/window-products-view.tsx", import.meta.url), "utf8");
   assert.match(windowView, /同步橱窗/);
   assert.match(windowView, /同步评分/);
+  assert.match(windowView, /startRegistration/);
   assert.match(windowView, /goodEvaluationRatio/);
   assert.match(windowView, /shopScore/);
   const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
