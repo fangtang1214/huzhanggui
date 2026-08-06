@@ -4,6 +4,12 @@ const API_BASE = "https://api.weixin.qq.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const DETAIL_CONCURRENCY = 5;
 
+function safeText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const str = String(value).trim();
+  return str || null;
+}
+
 export type TalentAccountRow = {
   id: string;
   name: string;
@@ -135,9 +141,9 @@ export async function fetchWindowProductList(account: TalentAccountRow): Promise
     for (const item of products) {
       if (item.product_id === undefined || item.product_id === null) continue;
       items.push({
-        productId: String(item.product_id),
-        shopAppid: item.appid || null,
-        outProductId: item.out_product_id || null,
+        productId: safeText(item.product_id) || "",
+        shopAppid: safeText(item.appid),
+        outProductId: safeText(item.out_product_id),
         productSource: Number(item.product_source) || 0,
       });
     }
@@ -165,8 +171,8 @@ export async function fetchWindowProductDetail(account: TalentAccountRow, produc
   const product = payload.product || {};
   return {
     productId: String(product.product_id ?? productId),
-    shopAppid: product.appid || null,
-    outProductId: product.out_product_id || null,
+    shopAppid: safeText(product.appid),
+    outProductId: safeText(product.out_product_id),
     title: product.title || "",
     imgUrl: product.img_url || "",
     sellingPriceFen: typeof product.selling_price === "number" ? product.selling_price : null,

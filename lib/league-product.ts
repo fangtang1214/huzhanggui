@@ -1,8 +1,15 @@
 import { getDb } from "./db";
+import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 
 const API_BASE = "https://api.weixin.qq.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const QUALITY_CONCURRENCY = 5;
+
+function safeText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const str = String(value).trim();
+  return str || null;
+}
 
 export type LeagueAccountRow = {
   id: string;
@@ -136,24 +143,38 @@ export async function fetchLeagueProductDetail(
   };
 }
 
-export async function syncWindowQuality(leagueAccountId: string, talentAccountId: string): Promise<{ total: number; detailed: number }> {
+export async function syncWindowQuality(leagueAccountId: string, talentAccountId: string): Promise<{ total: number; detailed: number; patchedShopIds: number }> {
   const sql = getDb();
   const leagueAccount = await loadLeagueAccount(leagueAccountId);
   if (!leagueAccount) throw new Error("机构账号不存在");
   if (!leagueAccount.active) throw new Error("机构账号已停用");
 
-  const products = await sql`
-    SELECT id, product_id, out_product_id, product_source, shop_appid
-    FROM talent_window_products
-    WHERE account_id = ${talentAccountId} AND shop_appid IS NOT NULL
-    ORDER BY synced_at DESC
-  `;
+  const talentAccount = await loadTalentAccount(talentAccountId);
+  if (!talentAccount) throw new Error("带货账号不存在");
+
+  type ProductBrief = { id: string; productId: string; outProductId: string | null; productSource: number; shopAppid: string | null };
+  const rows = await sql`SELECT id, product_id, out_product_id, product_source, shop_appid FROM talent_window_products WHERE account_id = ${talentAccountId} ORDER BY synced_at DESC`;
+  const products: ProductBrief[] = rows as unknown as ProductBrief[];
+
+  let patchedShopIds = 0;
+  for (const product of products) {
+    if (product.shopAppid) continue;
+    try {
+      const detail = await fetchWindowProductDetail(talentAccount, product.productId);
+      if (detail.shopAppid) {
+        await sql`UPDATE talent_window_products SET shop_appid = ${detail.shopAppid}, out_product_id = coalesce(${detail.outProductId || null}, out_product_id) WHERE id = ${product.id}`;
+        product.shopAppid = detail.shopAppid;
+        if (detail.outProductId && !product.outProductId) product.outProductId = detail.outProductId;
+        patchedShopIds += 1;
+      }
+    } catch { /* skip individual detail failure */ }
+  }
 
   let detailed = 0;
   for (let index = 0; index < products.length; index += QUALITY_CONCURRENCY) {
     const batch = products.slice(index, index + QUALITY_CONCURRENCY);
     const results = await Promise.allSettled(batch.map((item) => {
-      const sid = item.productSource === 1 ? item.productId : item.outProductId;
+      const sid = item.productSource === 1 ? item.productId : (item.outProductId || item.productId);
       if (!sid || !item.shopAppid) return Promise.resolve(null);
       return fetchLeagueProductDetail(leagueAccount, item.shopAppid, sid);
     }));
@@ -174,5 +195,5 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
       detailed += 1;
     }
   }
-  return { total: products.length, detailed };
+  return { total: products.length, detailed, patchedShopIds };
 }
