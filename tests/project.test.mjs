@@ -415,4 +415,9 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(form, /registeredSku/);
   const navigation = await readFile(new URL("../components/huzhanggui-app.tsx", import.meta.url), "utf8");
   assert.match(navigation, /\/talent-accounts/);
+  assert.match(navigation, /\/window-products/);
+  assert.match(navigation, /ShoppingBag/);
+  const windowView = await readFile(new URL("../components/views/window-products-view.tsx", import.meta.url), "utf8");
+  assert.match(windowView, /同步橱窗/);
+  assert.match(windowView, /registeredSku/);
 });
