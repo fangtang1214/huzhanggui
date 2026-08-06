@@ -236,11 +236,11 @@ type ProductDraft = { version: 1; form: ProductFormState; savedAt: number };
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
-type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; commissionRatio?: number | null; normalCommissionRatio?: number | null };
+type WindowProduct = { id: string; productId: string; outProductId?: string | null; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link: string; registeredProductId?: string | null; registeredSku?: string | null; shopName?: string | null; shopScore?: number | null; commissionRatio?: number | null; normalCommissionRatio?: number | null; serviceRatio?: number | null };
 
 const fenToYuan = (fen?: number | null) => typeof fen === "number" ? (fen / 100).toFixed(2) : "";
 const windowCommissionText = (product: WindowProduct) => {
-  const ratio = (product.commissionRatio ?? 0) > 0 ? product.commissionRatio : product.normalCommissionRatio;
+  const ratio = product.serviceRatio;
   return typeof ratio === "number" && ratio > 0 ? `${parseFloat((ratio / 10000).toFixed(2))}%` : "";
 };
 
