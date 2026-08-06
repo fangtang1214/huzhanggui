@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     const effectiveAccountId = requestedAccountId || (accounts[0] as { id?: string } | undefined)?.id || null;
     if (!effectiveAccountId) return ok({ accounts, products: [] });
 
-    const productLinkFragment = sql`'weixinstorehs/' || coalesce(w.out_product_id, w.product_id)`;
+    const productLinkFragment = sql`coalesce(w.promotion_link, 'weixinstorehs/' || coalesce(w.out_product_id, w.product_id))`;
     const products = await sql`
       SELECT w.id, w.product_id, w.out_product_id, w.product_source, w.title, w.img_url,
              w.selling_price_fen, w.stock, w.sales, w.status, w.is_hide, w.synced_at,
@@ -26,6 +26,7 @@ export async function GET(request: Request) {
              p.id AS registered_product_id, p.sku AS registered_sku
       FROM talent_window_products w
       LEFT JOIN products p ON p.product_url IN (
+        w.promotion_link,
         'weixinstorehs/' || w.product_id,
         'weixinstorehs/' || coalesce(w.out_product_id, w.product_id),
         'weixinstoresubs/' || w.product_id,

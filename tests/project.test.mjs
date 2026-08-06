@@ -82,8 +82,10 @@ test("Excel 导出文件包含中文表头和数据", () => {
 test("商品链接支持标准网址和视频号内部格式", () => {
   assert.equal(productLinkSchema.parse("weixinstorehs/28512353738164"), "weixinstorehs/28512353738164");
   assert.equal(productLinkSchema.parse("https://example.com/product/1"), "https://example.com/product/1");
+  assert.equal(productLinkSchema.parse("v1=HAOHK025pGFF8tBx69zbwNpU473uiTNa5MOHrs_Hknqa_-Cjk9IbBHMHeKh5rSnIrQ"), "v1=HAOHK025pGFF8tBx69zbwNpU473uiTNa5MOHrs_Hknqa_-Cjk9IbBHMHeKh5rSnIrQ");
   assert.equal(isSupportedProductLink("javascript:alert(1)"), false);
   assert.equal(isWebProductLink("weixinstorehs/28512353738164"), false);
+  assert.equal(isWebProductLink("v1=HAOHK025pGFF8tBx69zbwNpU473uiTNa5MOHrs"), false);
 });
 
 test("扫码可读取条形码编号并兼容旧二维码网址", () => {
@@ -398,6 +400,7 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(api, /\/cgi-bin\/token\?appid=/);
   assert.match(api, /\/channels\/ec\/talent\/window\/product\/list\/get/);
   assert.match(api, /\/channels\/ec\/talent\/window\/product\/get/);
+  assert.match(api, /product_promotion_link/);
   assert.match(api, /40164/);
   const accountsRoute = await readFile(new URL("../app/api/talent-accounts/route.ts", import.meta.url), "utf8");
   assert.match(accountsRoute, /requireSuperAdmin/);
@@ -424,8 +427,12 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(windowView, /shopScore/);
   const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/productdetail\/get/);
+  assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/item\/promotiondetail\/get/);
   assert.match(leagueApi, /good_evaluation_ratio/);
   assert.match(leagueApi, /shop\.score/);
+  assert.match(leagueApi, /cooperative_info/);
+  const linkMigration = await readFile(new URL("../migrations/017_window_promotion_link.sql", import.meta.url), "utf8");
+  assert.match(linkMigration, /promotion_link/);
   const leagueMigration = await readFile(new URL("../migrations/016_league_quality.sql", import.meta.url), "utf8");
   assert.match(leagueMigration, /CREATE TABLE IF NOT EXISTS league_accounts/);
   assert.match(leagueMigration, /good_evaluation_ratio/);
