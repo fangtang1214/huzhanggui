@@ -19,7 +19,7 @@ export function WindowProductsView() {
   const { user } = useAppData();
   const router = useRouter();
   const toast = useToast();
-  const [accountId, setAccountId] = useState("");
+  const [accountId, setAccountId] = useState(() => { try { return localStorage.getItem("huzhanggui:window-account") || ""; } catch { return ""; } });
   const [leagueId, setLeagueId] = useState("");
   const [leagueOptions, setLeagueOptions] = useState<LeagueOption[]>([]);
   const [search, setSearch] = useState("");
@@ -38,6 +38,8 @@ export function WindowProductsView() {
   const activeAccount = accounts.find((a) => a.id === selectedId) || null;
 
   useEffect(() => { apiFetch<LeagueOption[]>("/api/league-accounts?minimal=1").then((list) => { setLeagueOptions(list); if (list.length) setLeagueId(list[0].id); }).catch(() => {}); }, []);
+
+  useEffect(() => { try { if (accountId) localStorage.setItem("huzhanggui:window-account", accountId); } catch { /* localStorage unavailable */ } }, [accountId]);
 
   useEffect(() => {
     if (activeAccount?.syncStatus !== "syncing") return;
