@@ -130,13 +130,56 @@ async function embed(imageUrl) {
   }
 }
 
+function base64ToBlob(base64) {
+  const match = base64.match(/^data:(image\/[^;]+);base64,(.+)$/i);
+  if (!match) throw new Error("图片数据格式无效，需要 data:image/...;base64 格式");
+  const mime = match[1];
+  try {
+    const binary = Buffer.from(match[2], "base64");
+    if (binary.length > maxBytes) throw new Error("图片超过 12MB，无法识别");
+    return new Blob([binary], { type: mime });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("12MB")) throw error;
+    throw new Error("Base64 图片解码失败");
+  }
+}
+
+async function embedBase64(imageBase64) {
+  const started = performance.now();
+  const timings = {};
+  try {
+    const runtime = Promise.all([import("@huggingface/transformers"), getExtractor()]);
+    let blob;
+    try { blob = base64ToBlob(imageBase64); }
+    catch (error) { throw error; }
+    const [{ RawImage }, extractor] = await runtime;
+    const decodeStarted = performance.now();
+    let image;
+    try { image = await RawImage.fromBlob(blob); }
+    finally { timings.decodeMs = elapsed(decodeStarted); }
+    const inferenceStarted = performance.now();
+    let tensor;
+    try { tensor = await extractor(image); }
+    finally { timings.inferenceMs = elapsed(inferenceStarted); }
+    timings.downloadMs = 0;
+    return { embedding: normalizedVector(tensor), timings };
+  } catch (error) {
+    const reason = error instanceof Error ? error : new Error(String(error));
+    reason.timings = timings;
+    throw reason;
+  } finally {
+    timings.totalMs = elapsed(started);
+  }
+}
+
 function drainQueue() {
   if (busy) return;
   const job = interactiveQueue.shift() || backgroundQueue.shift();
   if (!job) return;
   busy = true;
   const queueMs = elapsed(job.enqueuedAt);
-  Promise.resolve().then(() => embed(job.imageUrl)).then((result) => {
+  const runner = job.imageBase64 ? embedBase64(job.imageBase64) : embed(job.imageUrl);
+  Promise.resolve().then(() => runner).then((result) => {
     result.timings.queueMs = queueMs;
     result.timings.totalMs = elapsed(job.enqueuedAt);
     job.resolve(result);
@@ -158,6 +201,14 @@ function enqueue(imageUrl, priority) {
   });
 }
 
+function enqueueBase64(imageBase64, priority) {
+  return new Promise((resolve, reject) => {
+    const queue = priority === "background" ? backgroundQueue : interactiveQueue;
+    queue.push({ imageBase64, enqueuedAt: performance.now(), resolve, reject });
+    drainQueue();
+  });
+}
+
 function json(response, status, payload) {
   if (response.destroyed || response.writableEnded) return;
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -174,16 +225,40 @@ const server = http.createServer((request, response) => {
       queue: { interactive: interactiveQueue.length, background: backgroundQueue.length, busy },
     });
   }
-  if (request.method !== "POST" || request.url !== "/embed") return json(response, 404, { message: "Not found" });
-  let raw = "";
-  request.on("data", (chunk) => { raw += chunk; if (raw.length > 20_000) request.destroy(); });
-  request.on("end", () => {
-    let imageUrl;
-    try { imageUrl = JSON.parse(raw).imageUrl; if (typeof imageUrl !== "string") throw new Error(); }
-    catch { return json(response, 400, { message: "图片网址无效" }); }
-    const priority = request.headers["x-vision-priority"] === "background" ? "background" : "interactive";
-    enqueue(imageUrl, priority).then(({ embedding, timings }) => json(response, 200, { embedding, model: modelVersion, dimensions: embedding.length, timings })).catch((error) => json(response, 422, { message: error instanceof Error && error.name === "AbortError" ? "图片读取超时，请检查图片网址" : error instanceof Error ? error.message : "图片识别失败", timings: error.timings || {} }));
-  });
+  if (request.method === "POST" && request.url === "/embed") {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; if (raw.length > 20_000) request.destroy(); });
+    request.on("end", () => {
+      let imageUrl;
+      try { imageUrl = JSON.parse(raw).imageUrl; if (typeof imageUrl !== "string") throw new Error(); }
+      catch { return json(response, 400, { message: "图片网址无效" }); }
+      const priority = request.headers["x-vision-priority"] === "background" ? "background" : "interactive";
+      enqueue(imageUrl, priority).then(({ embedding, timings }) => json(response, 200, { embedding, model: modelVersion, dimensions: embedding.length, timings })).catch((error) => json(response, 422, { message: error instanceof Error && error.name === "AbortError" ? "图片读取超时，请检查图片网址" : error instanceof Error ? error.message : "图片识别失败", timings: error.timings || {} }));
+    });
+    return;
+  }
+  if (request.method === "POST" && request.url === "/embed-base64") {
+    const chunks = []; let size = 0;
+    const maxBase64 = 20 * 1024 * 1024;
+    request.on("data", (chunk) => {
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      size += buf.byteLength;
+      if (size > maxBase64) request.destroy();
+      else chunks.push(buf);
+    });
+    request.on("end", () => {
+      let imageBase64;
+      try {
+        const raw = Buffer.concat(chunks).toString("utf-8");
+        imageBase64 = JSON.parse(raw).imageBase64;
+        if (typeof imageBase64 !== "string" || !imageBase64.startsWith("data:image/")) throw new Error();
+      } catch { return json(response, 400, { message: "图片数据无效，需要 data:image/...;base64 格式" }); }
+      const priority = request.headers["x-vision-priority"] === "background" ? "background" : "interactive";
+      enqueueBase64(imageBase64, priority).then(({ embedding, timings }) => json(response, 200, { embedding, model: modelVersion, dimensions: embedding.length, timings })).catch((error) => json(response, 422, { message: error instanceof Error ? error.message : "图片识别失败", timings: error.timings || {} }));
+    });
+    return;
+  }
+  json(response, 404, { message: "Not found" });
 });
 
 server.listen(port, "0.0.0.0", () => {

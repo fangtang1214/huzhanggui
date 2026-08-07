@@ -58,6 +58,28 @@ export async function embedImage(imageUrl: string) {
   }
 }
 
+export async function embedImageBase64(imageBase64: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180_000);
+  try {
+    const response = await fetch(`${process.env.VISION_URL || "http://127.0.0.1:3100"}/embed-base64`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ imageBase64 }),
+      signal: controller.signal,
+    });
+    const payload = await response.json() as VisionPayload;
+    if (!response.ok || !Array.isArray(payload.embedding)) {
+      const error = new Error(payload.message || "图片识别服务暂时不可用") as Error & { timings?: RecognitionTimings };
+      error.timings = payload.timings;
+      throw error;
+    }
+    return { embedding: payload.embedding, timings: payload.timings || {}, model: payload.model || IMAGE_MODEL };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function syncProductImageQueue(productId: string, imageUrls: string[], existingTx?: unknown) {
   const unique = Array.from(new Set(imageUrls.map((url) => url.trim()).filter(Boolean)));
   const run = (existingTx as { unsafe(query: string, params?: unknown[]): Promise<Record<string, unknown>[]> }) || getDb();

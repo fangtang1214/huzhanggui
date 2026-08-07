@@ -24,9 +24,12 @@ const productSchema = z.object({
   supplyChain: optionalText, cooperationMechanism: optionalText,
   categoryId: z.string().uuid().optional().nullable(), tagIds: z.array(z.string().uuid()).default([]),
   imageUrls: z.array(imageUrlSchema).min(1, "请先填写至少一张商品图片").max(100), notes: optionalText,
-  quantity: z.coerce.number().int().min(1, "到样数量至少为 1").max(500), arrivedAt: z.string().date("请选择到样日期"),
+  specs: z.array(z.object({
+    spec: z.string().trim().max(100).optional().nullable(),
+    quantity: z.coerce.number().int().min(1, "每行数量至少为 1").max(500),
+  })).min(1, "请至少添加一行规格与数量").max(100),
+  arrivedAt: z.string().date("请选择到样日期"),
   initialDepartmentId: z.string().uuid(), initialLocationId: z.string().uuid().optional().nullable(),
-  initialSampleSpec: z.string().trim().max(100).optional().nullable(),
   matchRunId: z.string().uuid(), matchDecision: z.enum(["matched", "new", "failed_continue"]),
   matchedProductId: z.string().uuid().optional().nullable(),
 }).superRefine((input, context) => {
@@ -42,12 +45,12 @@ export async function GET(request: Request) {
     const searchFrag = productSearchConditions(sql, search);
     const archived = url.searchParams.get("view") === "archived";
     const departmentId = url.searchParams.get("departmentId") || null; const categoryId = url.searchParams.get("categoryId") || null;
-    const locationId = url.searchParams.get("locationId") || null;
+    const storageDepartmentId = url.searchParams.get("storageDepartmentId") || null;
     const selectedPrices = Array.from(new Set(url.searchParams.getAll("price").filter((value) => /^\d+(?:\.\d{1,2})?$/.test(value)))).slice(0, 10000);
     const priceOrder = url.searchParams.get("priceOrder");
     const page = Math.max(1, Number(url.searchParams.get("page") || 1)); const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize") || 20))); const offset = (page - 1) * pageSize;
     const priceFilter = selectedPrices.length ? sql`AND p.price = ANY(${selectedPrices}::numeric[])` : sql``;
-    const locationFilter = locationId ? sql`AND EXISTS (SELECT 1 FROM samples sloc WHERE sloc.product_id = p.id AND (p.archived = true OR sloc.archived = false) AND sloc.current_location_id = ${locationId}::uuid)` : sql``;
+    const storageDepartmentFilter = storageDepartmentId ? sql`AND EXISTS (SELECT 1 FROM samples sdept WHERE sdept.product_id = p.id AND (p.archived = true OR sdept.archived = false) AND sdept.current_department_id = ${storageDepartmentId}::uuid)` : sql``;
     const orderBy = priceOrder === "asc" ? sql`p.price ASC NULLS LAST, p.created_at DESC` : priceOrder === "desc" ? sql`p.price DESC NULLS LAST, p.created_at DESC` : sql`p.created_at DESC`;
     const rows = await sql`
       SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.archived,
@@ -65,12 +68,12 @@ export async function GET(request: Request) {
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
        WHERE p.archived = ${archived} AND ${searchFrag}
          AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-         ${priceFilter} ${locationFilter}
+         ${priceFilter} ${storageDepartmentFilter}
        GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = ${archived} AND ${searchFrag}
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-      ${priceFilter} ${locationFilter}`;
+      ${priceFilter} ${storageDepartmentFilter}`;
     const priceOptions = await sql`
       SELECT p.price::text AS price, count(DISTINCT p.id)::int AS count
       FROM products p
@@ -78,7 +81,7 @@ export async function GET(request: Request) {
       WHERE p.archived = ${archived} AND p.price IS NOT NULL
         AND ${searchFrag}
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-        ${locationFilter}
+        ${storageDepartmentFilter}
       GROUP BY p.price ORDER BY p.price ASC`;
     return ok({ rows, total: countRow.total, page, pageSize, priceOptions });
   } catch (error) { return apiError(error); }
@@ -130,21 +133,24 @@ export async function POST(request: Request) {
       await tx`DELETE FROM product_tags WHERE product_id = ${product.id}`;
       for (const tagId of input.tagIds) await tx`INSERT INTO product_tags(product_id,tag_id) VALUES(${product.id},${tagId})`;
       const codes: string[] = []; const sampleIds: string[] = [];
-      for (let index = 0; index < input.quantity; index += 1) {
-        const code = await nextProductSampleCode(tx, String(product.id), String(product.sku));
-        const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,spec,created_by)
-          VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${input.initialSampleSpec || null},${user.id}) RETURNING id`;
-        await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)
-          VALUES(${sample.id},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id},${input.matchDecision === "matched" ? "同款再次到样登记" : "样品到货登记"})`;
-        codes.push(code); sampleIds.push(String(sample.id));
+      for (const specRow of input.specs) {
+        for (let index = 0; index < specRow.quantity; index += 1) {
+          const code = await nextProductSampleCode(tx, String(product.id), String(product.sku));
+          const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,spec,created_by)
+            VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${specRow.spec || null},${user.id}) RETURNING id`;
+          await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)
+            VALUES(${sample.id},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id},${input.matchDecision === "matched" ? "同款再次到样登记" : "样品到货登记"})`;
+          codes.push(code); sampleIds.push(String(sample.id));
+        }
       }
+      const totalQuantity = codes.length;
       if (input.matchDecision === "matched") await tx`INSERT INTO product_intake_batches(product_id,match_run_id,user_id,sample_ids,submitted_data,previous_product_data,merged_product_version)
         VALUES(${product.id},${input.matchRunId},${user.id},${tx.json(sampleIds)},${tx.json(input)},${tx.json(previousProductData as never)},${mergedProductVersion})`;
       await tx`UPDATE image_match_runs SET selected_product_id=${input.matchedProductId || null}, decision=${input.matchDecision}, decided_at=now() WHERE id=${input.matchRunId}`;
       await syncProductImageQueue(String(product.id), product.imageUrls as string[], tx);
       return { id: String(product.id), sku: String(product.sku), name: String(product.name), codes, imageUrls: product.imageUrls as string[], matched: input.matchDecision === "matched" };
     });
-    await writeAudit(user, result.matched ? "product.match_merge" : "product.create", "product", result.id, result.matched ? `确认同款 ${result.sku}，追加 ${input.quantity} 件样品` : `登记新商品 ${result.sku}，到样 ${input.quantity} 件`, input, requestIp(request));
+    await writeAudit(user, result.matched ? "product.match_merge" : "product.create", "product", result.id, result.matched ? `确认同款 ${result.sku}，追加 ${result.codes.length} 件样品` : `登记新商品 ${result.sku}，到样 ${result.codes.length} 件`, input, requestIp(request));
     return created(result);
   } catch (error) { return apiError(error); }
 }

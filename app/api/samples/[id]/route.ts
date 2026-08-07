@@ -119,10 +119,18 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     const { id } = await context.params;
     const sample = await findSample(id);
     if (!sample) return Response.json({ ok: false, message: "样品不存在" }, { status: 404 });
-    if (sample.status === "active") return Response.json({ ok: false, message: "请先将样品处理为结束状态，再归档" }, { status: 409 });
+    let reason: string | null = null;
+    try {
+      const body = await readJson(request).catch(() => ({})) as Record<string, unknown>;
+      if (typeof body?.reason === "string" && body.reason.trim()) reason = body.reason.trim();
+    } catch { /* no body */ }
+    if (!reason) {
+      if (sample.status === "active") return Response.json({ ok: false, message: "请先将样品处理为结束状态，再归档" }, { status: 409 });
+    }
     const sql = getDb();
     await sql`UPDATE samples SET archived = true, archived_with_product = false, updated_at = now() WHERE id = ${sample.id}`;
-    await writeAudit(user, "sample.archive", "sample", sample.id, `归档样品 ${sample.code}`, undefined, requestIp(request));
+    const summary = reason ? `删除样品 ${sample.code}，原因：${reason}` : `归档样品 ${sample.code}`;
+    await writeAudit(user, reason ? "sample.delete" : "sample.archive", "sample", sample.id, summary, undefined, requestIp(request));
     return ok({ archived: true });
   } catch (error) {
     return apiError(error);

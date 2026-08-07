@@ -1,4 +1,4 @@
-import { apiError, ok, requestIp } from "@/lib/api";
+import { apiError, ok, readJson, requestIp } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
@@ -10,6 +10,8 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const user = await requireUser("products:create");
     const { id } = await context.params;
+    const body = await readJson(request).catch(() => ({})) as Record<string, unknown>;
+    const leagueAccountId = typeof body?.leagueAccountId === "string" && body.leagueAccountId ? body.leagueAccountId : null;
     const sql = getDb();
     const claimed = await sql`
       UPDATE talent_accounts
@@ -24,7 +26,7 @@ export async function POST(request: Request, context: RouteContext) {
       return Response.json({ ok: false, message: "该账号正在同步中，请稍候" }, { status: 409 });
     }
     await writeAudit(user, "talent_account.sync", "talent_account", id, `同步橱窗商品 ${claimed[0].name}`, null, requestIp(request));
-    void runTalentWindowSync(id).catch((error) => console.error("橱窗同步失败", error));
-    return ok({ id, syncing: true });
+    void runTalentWindowSync(id, leagueAccountId).catch((error) => console.error("橱窗同步失败", error));
+    return ok({ id, syncing: true, leagueAccountId });
   } catch (error) { return apiError(error); }
 }

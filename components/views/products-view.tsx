@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Fragment, useEffect, useRef, useState } from "react";
 import { Archive, ArrowDownUp, ArrowLeft, Boxes, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Clipboard, Download, ExternalLink, FilePenLine, FileSpreadsheet, Filter, GripVertical, History, Image, ImagePlus, Link2, LoaderCircle, MapPin, PackagePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Store, Trash2, TriangleAlert, Upload, UserRound, X } from "lucide-react";
 import { activeLocationLabel } from "@/lib/constants";
 import { COMMISSION_INPUT_PATTERN, formatCommission, normalizeCommission } from "@/lib/commission";
@@ -50,7 +50,7 @@ function ExpandedProductSamples({ productId }: { productId: string }) {
 }
 
 export function ProductsView() {
-  const { lookups, can, user } = useAppData(); const router = useRouter(); const toast = useToast();   const [search, setSearch] = useState(""); const [departmentId, setDepartmentId] = useState(""); const [categoryId, setCategoryId] = useState(""); const [locationDepartmentId, setLocationDepartmentId] = useState(""); const [locationId, setLocationId] = useState(""); const [prices, setPrices] = useState<string[]>([]); const [priceOrder, setPriceOrder] = useState<"" | "asc" | "desc">(""); const [page, setPage] = useState(1); const [expandedIds, setExpandedIds] = useState<string[]>([]);
+  const { lookups, can, user } = useAppData(); const router = useRouter(); const toast = useToast();   const [search, setSearch] = useState(""); const [departmentId, setDepartmentId] = useState(""); const [categoryId, setCategoryId] = useState(""); const [storageDepartmentId, setStorageDepartmentId] = useState(""); const [prices, setPrices] = useState<string[]>([]); const [priceOrder, setPriceOrder] = useState<"" | "asc" | "desc">(""); const [page, setPage] = useState(1); const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [archiveView, setArchiveView] = useState(false); const [restoringId, setRestoringId] = useState("");
   const [reportingProduct, setReportingProduct] = useState<ProductRow | null>(null); const [reportNote, setReportNote] = useState(""); const [reporting, setReporting] = useState(false);
   const [copyConfig, setCopyConfig] = useState<ProductCopyConfig>(() => normalizeProductCopyConfig(user.productCopyConfig));
@@ -59,13 +59,17 @@ export function ProductsView() {
   const [importOpen, setImportOpen] = useState(false); const [importing, setImporting] = useState(false); const [importResult, setImportResult] = useState<{ imported: number; total: number; failures: Array<{ row: number; message: string }> } | null>(null); const [importFile, setImportFile] = useState<File | null>(null);
   const [imageSearchOpen, setImageSearchOpen] = useState(false);
   const [imageSearchUrl, setImageSearchUrl] = useState("");
+  const [imageSearchBase64, setImageSearchBase64] = useState("");
+  const [imageSearchPreview, setImageSearchPreview] = useState("");
   const [imageSearching, setImageSearching] = useState(false);
+  const imageFileRef = useRef<HTMLInputElement>(null);
+  const imagePasteRef = useRef<HTMLDivElement>(null);
   const [imageResults, setImageResults] = useState<Array<{id:string;sku:string;name:string;imageUrls:string[];price:string;storeName?:string;productUrl?:string;sampleCount:number;similarity:number}> | null>(null);
   useEffect(() => { setArchiveView(new URLSearchParams(window.location.search).get("view") === "archived"); }, []);
   const queryParams = new URLSearchParams({ search, departmentId, categoryId, page: String(page), view: archiveView ? "archived" : "active" });
   prices.forEach((price) => queryParams.append("price", price));
   if (priceOrder) queryParams.set("priceOrder", priceOrder);
-  if (locationId) queryParams.set("locationId", locationId);
+  if (storageDepartmentId) queryParams.set("storageDepartmentId", storageDepartmentId);
   const query = queryParams.toString();
   const { data, loading, error, reload } = useRemote<ProductListData>(`/api/products?${query}`);
   const autoExpandKeyRef = useRef("");
@@ -80,17 +84,6 @@ export function ProductsView() {
   const priceOptions = new Map<string, PriceOption>(prices.map((price) => [price, { price, count: 0 }]));
   for (const option of data?.priceOptions || []) priceOptions.set(option.price, option);
   const availablePrices = Array.from(priceOptions.values()).sort((left, right) => Number(left.price) - Number(right.price));
-  const locationGroups = useMemo(() => {
-    const locations = lookups?.locations?.filter(loc => !locationDepartmentId || loc.departmentId === locationDepartmentId) ?? [];
-    if (!locations.length) return [];
-    const grouped: Record<string, typeof locations> = {};
-    for (const loc of locations) {
-      const dept = (loc as Record<string, unknown>).departmentName as string || "未分类";
-      if (!grouped[dept]) grouped[dept] = [];
-      grouped[dept].push(loc);
-    }
-    return grouped;
-  }, [lookups, locationDepartmentId]);
   function switchArchiveView(nextArchived: boolean) {
     setArchiveView(nextArchived); setPage(1); setPrices([]); setPriceOrder("");
     const url = new URL(window.location.href);
@@ -120,12 +113,68 @@ export function ProductsView() {
       URL.revokeObjectURL(url);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "下载失败", "error"); }
   }
+  function openImageSearch() {
+    setImageSearchOpen(!imageSearchOpen);
+    setImageResults(null);
+    setImageSearchUrl("");
+    setImageSearchBase64("");
+    setImageSearchPreview("");
+  }
+  function clearImageInput() {
+    setImageSearchBase64("");
+    setImageSearchPreview("");
+    setImageSearchUrl("");
+    setImageResults(null);
+    if (imageFileRef.current) imageFileRef.current.value = "";
+  }
+  function handleImageFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast("请选择图片文件", "error"); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result as string;
+      setImageSearchBase64(base64);
+      setImageSearchPreview(base64);
+      setImageSearchUrl("");
+    };
+    reader.onerror = () => { toast("图片读取失败", "error"); };
+    reader.readAsDataURL(file);
+  }
+  function handleImagePaste(event: React.ClipboardEvent) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        event.preventDefault();
+        const file = items[i].getAsFile();
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64 = reader.result as string;
+          setImageSearchBase64(base64);
+          setImageSearchPreview(base64);
+          setImageSearchUrl("");
+        };
+        reader.onerror = () => { toast("图片读取失败", "error"); };
+        reader.readAsDataURL(file);
+        return;
+      }
+    }
+  }
   async function searchByImage(event: FormEvent) {
     event.preventDefault();
-    if (!imageSearchUrl.trim()) return;
+    const body: Record<string, string> = {};
+    if (imageSearchBase64) {
+      body.imageBase64 = imageSearchBase64;
+    } else if (imageSearchUrl.trim()) {
+      body.imageUrl = imageSearchUrl.trim();
+    } else {
+      return;
+    }
     setImageSearching(true); setImageResults(null);
     try {
-      const result = await apiFetch<{ candidates: Array<{id:string;sku:string;name:string;imageUrls:string[];price:string;storeName?:string;productUrl?:string;sampleCount:number;similarity:number}> }>("/api/image-search", { method: "POST", body: JSON.stringify({ imageUrl: imageSearchUrl.trim() }) });
+      const result = await apiFetch<{ candidates: Array<{id:string;sku:string;name:string;imageUrls:string[];price:string;storeName?:string;productUrl?:string;sampleCount:number;similarity:number}> }>("/api/image-search", { method: "POST", body: JSON.stringify(body) });
       setImageResults(result.candidates);
       if (!result.candidates.length) toast("未找到相似商品");
     } catch (reason) { toast(reason instanceof Error ? reason.message : "搜索失败", "error"); }
@@ -207,11 +256,11 @@ export function ProductsView() {
       <div className="toolbar-filters">
         <div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部选品部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div>
         <select value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}><option value="">全部分类</option>{lookups?.categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>
-<select value={locationDepartmentId} onChange={(event) => { setLocationDepartmentId(event.target.value); setLocationId(""); setPage(1); }}><option value="">全部部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><select value={locationId} onChange={(event) => { setLocationId(event.target.value); setPage(1); }}><option value="">全部存放位置</option>{Object.entries(locationGroups).map(([dept, locs]) => <optgroup key={dept} label={dept}>{locs.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</optgroup>)}</select>
+<select value={storageDepartmentId} onChange={(event) => { setStorageDepartmentId(event.target.value); setPage(1); }}><option value="">全部存放位置</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>
       </div>
     </section>
     <section className="panel table-panel archived-products-panel">
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.rows.length ? <EmptyState title="没有已归档商品" description={search || departmentId || categoryId || locationId ? "没有符合当前筛选条件的归档记录。" : "归档的商品会集中显示在这里。"} /> : <>
+      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.rows.length ? <EmptyState title="没有已归档商品" description={search || departmentId || categoryId || storageDepartmentId ? "没有符合当前筛选条件的归档记录。" : "归档的商品会集中显示在这里。"} /> : <>
         <div className="data-table-wrap"><table className="data-table product-table"><thead><tr><th>商品</th><th>选品部门</th><th>商务信息</th><th>价格</th><th>佣金</th><th>归档样品</th><th>归档时间</th><th /></tr></thead><tbody>{data.rows.map((product) => <Fragment key={product.id}><tr className="archived-product-row">
           <td><div style={{ display: "flex", gap: 6, alignItems: "center" }}><button type="button" className="icon-button" style={{ flexShrink: 0, width: 26, height: 26 }} onClick={() => toggleExpand(product.id)} aria-label="展开样品位置" title="展开样品位置">{expandedIds.includes(product.id) ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button><Link href={"/products/" + product.id} className="table-product"><ProductImage urls={product.imageUrls} alt={product.name} size="small" /><div><b>{product.name}</b><span>{product.sku} {product.categoryName && "· " + product.categoryName}</span>{product.tags && <small>{product.tags}</small>}</div></Link></div></td>
           <td><span className="table-departments">{product.selectedDepartments || "—"}</span></td>
@@ -230,11 +279,38 @@ export function ProductsView() {
   return <>
     <PageHeader eyebrow="商品档案" title={archiveView ? "已归档商品" : "所有商品款式"} description={archiveView ? "归档内容会完整保留，可查看档案或恢复继续使用。" : "一个基础货号对应一个款式，每件实物在基础货号后追加独立序号。"} actions={<>{!archiveView && <button className="button button-secondary" type="button" onClick={openCopySettings}><Settings2 size={17} />复制设置</button>}{!archiveView && can("products:export") && <Link className="button button-secondary" href="/api/export?type=products"><Download size={17} />导出 Excel</Link>}{can("products:create") && <button className="button button-secondary" onClick={() => { setImportFile(null); setImportResult(null); setImportOpen(true); }}><Upload size={17} />批量导入</button>}{can("products:create") && <Link className="button button-primary" href="/products/new"><PackagePlus size={18} />登记新商品</Link>}</>} />
     <nav className="archive-view-switch" aria-label="商品档案范围"><button type="button" className={!archiveView ? "active" : ""} onClick={() => switchArchiveView(false)}><Boxes size={17} />在用商品</button><button type="button" className={archiveView ? "active" : ""} onClick={() => switchArchiveView(true)}><Archive size={17} />已归档</button></nav>
-    <section className="toolbar"><button type="button" className={`button button-compact ${imageSearchOpen ? "button-primary" : "button-ghost"}`} onClick={() => { setImageSearchOpen(!imageSearchOpen); setImageResults(null); setImageSearchUrl(""); }}><Image size={16} />以图搜商品</button><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索货号、序号、商品名、店铺或链接" /></div><div className="toolbar-filters"><div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部选品部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div><select value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}><option value="">全部分类</option>{lookups?.categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><select value={locationDepartmentId} onChange={(event) => { setLocationDepartmentId(event.target.value); setLocationId(""); setPage(1); }}><option value="">全部部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><select value={locationId} onChange={(event) => { setLocationId(event.target.value); setPage(1); }}><option value="">全部存放位置</option>{Object.entries(locationGroups).map(([dept, locs]) => <optgroup key={dept} label={dept}>{locs.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</optgroup>)}</select><details className="price-filter"><summary><ArrowDownUp size={16} /><span>{prices.length ? `已选 ${prices.length} 个价格` : "价格筛选"}</span><ChevronDown size={15} /></summary><div className="price-filter-menu"><header><div><b>商品价格</b><small>勾选已有价格，可同时选择多个</small></div>{(prices.length > 0 || priceOrder) && <button type="button" onClick={() => { setPrices([]); setPriceOrder(""); setPage(1); }}>清空</button>}</header><div className="price-sort"><span>排序</span><button type="button" className={!priceOrder ? "selected" : ""} onClick={() => { setPriceOrder(""); setPage(1); }}>默认</button><button type="button" className={priceOrder === "asc" ? "selected" : ""} onClick={() => { setPriceOrder("asc"); setPage(1); }}>从低到高</button><button type="button" className={priceOrder === "desc" ? "selected" : ""} onClick={() => { setPriceOrder("desc"); setPage(1); }}>从高到低</button></div><div className="price-option-list">{availablePrices.length ? availablePrices.map((option) => <label className={prices.includes(option.price) ? "selected" : ""} key={option.price}><input type="checkbox" checked={prices.includes(option.price)} onChange={() => togglePrice(option.price)} /><span>¥{option.price}</span><small>{option.count} 件商品</small></label>) : <p>暂无已填写的商品价格</p>}</div></div></details></div></section>
+    <section className="toolbar"><button type="button" className={`button button-compact ${imageSearchOpen ? "button-primary" : "button-ghost"}`} onClick={openImageSearch}><Image size={16} />以图搜商品</button><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="搜索货号、序号、商品名、店铺或链接" /></div><div className="toolbar-filters"><div className="select-wrap"><Filter size={16} /><select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}><option value="">全部选品部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div><select value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}><option value="">全部分类</option>{lookups?.categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><select value={storageDepartmentId} onChange={(event) => { setStorageDepartmentId(event.target.value); setPage(1); }}><option value="">全部存放位置</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><details className="price-filter"><summary><ArrowDownUp size={16} /><span>{prices.length ? `已选 ${prices.length} 个价格` : "价格筛选"}</span><ChevronDown size={15} /></summary><div className="price-filter-menu"><header><div><b>商品价格</b><small>勾选已有价格，可同时选择多个</small></div>{(prices.length > 0 || priceOrder) && <button type="button" onClick={() => { setPrices([]); setPriceOrder(""); setPage(1); }}>清空</button>}</header><div className="price-sort"><span>排序</span><button type="button" className={!priceOrder ? "selected" : ""} onClick={() => { setPriceOrder(""); setPage(1); }}>默认</button><button type="button" className={priceOrder === "asc" ? "selected" : ""} onClick={() => { setPriceOrder("asc"); setPage(1); }}>从低到高</button><button type="button" className={priceOrder === "desc" ? "selected" : ""} onClick={() => { setPriceOrder("desc"); setPage(1); }}>从高到低</button></div><div className="price-option-list">{availablePrices.length ? availablePrices.map((option) => <label className={prices.includes(option.price) ? "selected" : ""} key={option.price}><input type="checkbox" checked={prices.includes(option.price)} onChange={() => togglePrice(option.price)} /><span>¥{option.price}</span><small>{option.count} 件商品</small></label>) : <p>暂无已填写的商品价格</p>}</div></div></details></div></section>
     {imageSearchOpen && <section className="panel image-search-panel">
-  <form onSubmit={searchByImage} style={{display:"flex",gap:"8px",alignItems:"center"}}>
-    <div className="search-box" style={{flex:1}}><Search size={18} /><input value={imageSearchUrl} onChange={(e) => setImageSearchUrl(e.target.value)} placeholder="粘贴商品图片的公开URL，搜索相似商品…" /></div>
-    <button className="button button-primary" disabled={imageSearching || !imageSearchUrl.trim()}>{imageSearching ? "搜索中…" : "搜索"}</button>
+  {(imageSearchBase64 || imageSearchUrl) && <div className="image-search-input-bar" style={{display:"flex",gap:"8px",alignItems:"center",marginBottom:"10px"}}>
+    {imageSearchPreview && <img src={imageSearchPreview} alt="预览" style={{width:"48px",height:"48px",borderRadius:"6px",objectFit:"cover",flexShrink:0}} />}
+    <span style={{fontSize:"13px",color:"var(--muted)",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{imageSearchBase64 ? "已选择图片" : imageSearchUrl}</span>
+    <button type="button" className="button button-compact button-ghost" onClick={clearImageInput}><X size={15} /></button>
+  </div>}
+  <form onSubmit={searchByImage}>
+    <div className="image-search-tabs" style={{display:"flex",gap:"4px",marginBottom:"10px"}}>
+      <button type="button" className={`button button-compact ${!imageSearchBase64 ? "button-primary" : "button-ghost"}`} onClick={() => { setImageSearchBase64(""); setImageSearchPreview(""); if (imageFileRef.current) imageFileRef.current.value = ""; }}>图片网址</button>
+      <button type="button" className={`button button-compact ${imageSearchBase64 || imageSearchPreview ? "button-primary" : "button-ghost"}`} onClick={() => setImageSearchUrl("")}>上传 / 粘贴</button>
+    </div>
+    {!imageSearchBase64 ? (
+      <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+        <div className="search-box" style={{flex:1}}><Search size={18} /><input value={imageSearchUrl} onChange={(e) => setImageSearchUrl(e.target.value)} placeholder="粘贴商品图片的公开URL…" /></div>
+      </div>
+    ) : (
+      <div ref={imagePasteRef} onPaste={handleImagePaste} className="image-search-upload-zone" tabIndex={0} style={{border:"2px dashed var(--line-soft)",borderRadius:"10px",padding:"16px",textAlign:"center",color:"var(--muted)",fontSize:"13px",cursor:"pointer",outline:"none",marginBottom:"10px"}} onClick={() => imageFileRef.current?.click()}>
+        {imageSearchPreview ? (
+          <img src={imageSearchPreview} alt="预览" style={{maxWidth:"100%",maxHeight:"160px",borderRadius:"6px",objectFit:"contain",marginBottom:"8px"}} />
+        ) : (
+          <>
+            <Upload size={24} style={{marginBottom:"8px",display:"block",margin:"0 auto 8px"}} />
+            <p>点击选择图片，或在此处粘贴剪贴板中的图片</p>
+          </>
+        )}
+        <input ref={imageFileRef} type="file" accept="image/*" onChange={handleImageFile} style={{display:"none"}} />
+      </div>
+    )}
+    <div style={{display:"flex",gap:"8px",alignItems:"center",marginTop: imageSearchBase64 ? 0 : "8px"}}>
+      <button className="button button-primary" type="submit" disabled={imageSearching || (!imageSearchUrl.trim() && !imageSearchBase64)}>{imageSearching ? "搜索中…" : "搜索"}</button>
+    </div>
   </form>
   {imageResults && <div style={{marginTop:"12px"}}>
     {imageResults.length === 0 ? <EmptyState title="未找到相似商品" description="可以尝试换一张更清晰的图片。" /> : <div style={{display:"grid",gap:"8px"}}>
@@ -250,7 +326,7 @@ export function ProductsView() {
   </div>}
 </section>}
     <section className="panel table-panel">
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.rows.length ? <EmptyState title="没有找到商品" description={search || prices.length || locationId ? "试试更换筛选条件。" : "登记第一款商品后会显示在这里。"} action={can("products:create") ? <Link href="/products/new" className="button button-primary">登记商品</Link> : undefined} /> : <><div className="data-table-wrap"><table className="data-table product-table"><thead><tr><th>商品</th><th>选品部门</th><th>商务信息</th><th>价格</th><th>佣金</th><th>实物数量</th><th>最近更新</th><th /></tr></thead><tbody>{data.rows.map((product) => <Fragment key={product.id}><tr><td><div style={{ display: "flex", gap: 6, alignItems: "center" }}><button type="button" className="icon-button" style={{ flexShrink: 0, width: 26, height: 26 }} onClick={() => toggleExpand(product.id)} aria-label="展开样品位置" title="展开样品位置">{expandedIds.includes(product.id) ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button><Link href={`/products/${product.id}`} className="table-product"><ProductImage urls={product.imageUrls} alt={product.name} size="small" /><div><b>{product.name}</b><span>{product.sku} {product.categoryName && `· ${product.categoryName}`}</span>{product.tags && <small>{product.tags}</small>}</div></Link></div></td><td><span className="table-departments">{product.selectedDepartments || "—"}</span></td><td><div className="stacked-cell"><span>{product.storeName || "未填店铺"}</span><small>{product.businessContactName || "未指定对接人"}</small></div></td><td><b className="money-cell">{product.price ? `¥${product.price}` : "—"}</b></td><td><b className="commission-cell">{product.commission ? formatCommission(product.commission) : "—"}</b></td><td><b className="quantity-number">{product.sampleCount}</b><small className="quantity-sub">{product.activeCount} 件在库/在用</small></td><td>{formatDate(product.updatedAt || product.createdAt)}</td><td><div className="table-actions"><button type="button" className="button button-compact button-secondary" disabled={copyingId === product.id} onClick={() => copyProduct(product)}><Clipboard size={15} />{copyingId === product.id ? "复制中" : "一键复制"}</button><Link className="row-link" href={`/products/${product.id}`}>查看</Link><button type="button" className={`button button-compact ${product.pendingIssueId ? "button-warning" : "button-secondary"}`} onClick={() => openIssue(product)}><CircleAlert size={15} />{product.pendingIssueId ? "查看报障" : product.latestResolvedIssueId ? "历史报障" : "链接报障"}</button>{product.productUrl && <button type="button" className="button button-compact button-secondary" onClick={async () => { const ok = await copyToClipboard(product.productUrl || ""); if (ok) toast("链接已复制"); else toast("复制失败", "error"); }}><Link2 size={15} />复制链接</button>}</div></td></tr>{expandedIds.includes(product.id) && <tr className="expand-row"><td colSpan={8} style={{ padding: "0 14px" }}><ExpandedProductSamples productId={product.id} /></td></tr>}</Fragment>)}</tbody></table></div><div className="mobile-record-list">{data.rows.map((product) => <div className="mobile-record product-mobile-record" key={product.id}><Link href={`/products/${product.id}`}><ProductImage urls={product.imageUrls} alt={product.name} size="medium" /><div className="mobile-record-main"><div><span className="sku-chip">{product.sku}</span><b>{product.name}</b></div><p>{product.selectedDepartments || "未指定直播间"}</p><small>{product.price ? `¥${product.price} · ` : ""}{product.commission ? `${formatCommission(product.commission)} · ` : ""}{product.sampleCount} 件样品 · {formatDate(product.updatedAt)}</small></div></Link><div className="product-mobile-actions"><button type="button" className="icon-button" aria-label={`复制 ${product.name}`} disabled={copyingId === product.id} onClick={() => copyProduct(product)}><Clipboard size={18} /></button><button type="button" className={`icon-button issue-mobile-button ${product.pendingIssueId ? "has-pending" : ""}`} aria-label={product.pendingIssueId ? "查看待处理报障" : product.latestResolvedIssueId ? "查看历史报障" : "链接报障"} onClick={() => openIssue(product)}><CircleAlert size={19} /></button>{product.productUrl && <button type="button" className="icon-button" aria-label="复制链接" onClick={async () => { const ok = await copyToClipboard(product.productUrl || ""); if (ok) toast("链接已复制"); else toast("复制失败", "error"); }}><Link2 size={18} /></button>}</div></div>)}</div><Pagination page={data.page} pageSize={data.pageSize} total={data.total} onChange={setPage} /></>}
+      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.rows.length ? <EmptyState title="没有找到商品" description={search || prices.length || storageDepartmentId ? "试试更换筛选条件。" : "登记第一款商品后会显示在这里。"} action={can("products:create") ? <Link href="/products/new" className="button button-primary">登记商品</Link> : undefined} /> : <><div className="data-table-wrap"><table className="data-table product-table"><thead><tr><th>商品</th><th>选品部门</th><th>商务信息</th><th>价格</th><th>佣金</th><th>实物数量</th><th>最近更新</th><th /></tr></thead><tbody>{data.rows.map((product) => <Fragment key={product.id}><tr><td><div style={{ display: "flex", gap: 6, alignItems: "center" }}><button type="button" className="icon-button" style={{ flexShrink: 0, width: 26, height: 26 }} onClick={() => toggleExpand(product.id)} aria-label="展开样品位置" title="展开样品位置">{expandedIds.includes(product.id) ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button><Link href={`/products/${product.id}`} className="table-product"><ProductImage urls={product.imageUrls} alt={product.name} size="small" /><div><b>{product.name}</b><span>{product.sku} {product.categoryName && `· ${product.categoryName}`}</span>{product.tags && <small>{product.tags}</small>}</div></Link></div></td><td><span className="table-departments">{product.selectedDepartments || "—"}</span></td><td><div className="stacked-cell"><span>{product.storeName || "未填店铺"}</span><small>{product.businessContactName || "未指定对接人"}</small></div></td><td><b className="money-cell">{product.price ? `¥${product.price}` : "—"}</b></td><td><b className="commission-cell">{product.commission ? formatCommission(product.commission) : "—"}</b></td><td><b className="quantity-number">{product.sampleCount}</b><small className="quantity-sub">{product.activeCount} 件在库/在用</small></td><td>{formatDate(product.updatedAt || product.createdAt)}</td><td><div className="table-actions"><button type="button" className="button button-compact button-secondary" disabled={copyingId === product.id} onClick={() => copyProduct(product)}><Clipboard size={15} />{copyingId === product.id ? "复制中" : "一键复制"}</button><Link className="row-link" href={`/products/${product.id}`}>查看</Link><button type="button" className={`button button-compact ${product.pendingIssueId ? "button-warning" : "button-secondary"}`} onClick={() => openIssue(product)}><CircleAlert size={15} />{product.pendingIssueId ? "查看报障" : product.latestResolvedIssueId ? "历史报障" : "链接报障"}</button>{product.productUrl && <button type="button" className="button button-compact button-secondary" onClick={async () => { const ok = await copyToClipboard(product.productUrl || ""); if (ok) toast("链接已复制"); else toast("复制失败", "error"); }}><Link2 size={15} />复制链接</button>}</div></td></tr>{expandedIds.includes(product.id) && <tr className="expand-row"><td colSpan={8} style={{ padding: "0 14px" }}><ExpandedProductSamples productId={product.id} /></td></tr>}</Fragment>)}</tbody></table></div><div className="mobile-record-list">{data.rows.map((product) => <div className="mobile-record product-mobile-record" key={product.id}><Link href={`/products/${product.id}`}><ProductImage urls={product.imageUrls} alt={product.name} size="medium" /><div className="mobile-record-main"><div><span className="sku-chip">{product.sku}</span><b>{product.name}</b></div><p>{product.selectedDepartments || "未指定直播间"}</p><small>{product.price ? `¥${product.price} · ` : ""}{product.commission ? `${formatCommission(product.commission)} · ` : ""}{product.sampleCount} 件样品 · {formatDate(product.updatedAt)}</small></div></Link><div className="product-mobile-actions"><button type="button" className="icon-button" aria-label={`复制 ${product.name}`} disabled={copyingId === product.id} onClick={() => copyProduct(product)}><Clipboard size={18} /></button><button type="button" className={`icon-button issue-mobile-button ${product.pendingIssueId ? "has-pending" : ""}`} aria-label={product.pendingIssueId ? "查看待处理报障" : product.latestResolvedIssueId ? "查看历史报障" : "链接报障"} onClick={() => openIssue(product)}><CircleAlert size={19} /></button>{product.productUrl && <button type="button" className="icon-button" aria-label="复制链接" onClick={async () => { const ok = await copyToClipboard(product.productUrl || ""); if (ok) toast("链接已复制"); else toast("复制失败", "error"); }}><Link2 size={18} /></button>}</div></div>)}</div><Pagination page={data.page} pageSize={data.pageSize} total={data.total} onChange={setPage} /></>}
     </section>
     {reportingProduct && <Modal title="链接报障" onClose={() => { if (!reporting) setReportingProduct(null); }}><form className="modal-form" onSubmit={submitIssue}><div className="issue-product-summary"><ProductImage urls={reportingProduct.imageUrls} alt={reportingProduct.name} size="small" /><div><b>{reportingProduct.name}</b><span>{reportingProduct.sku} · {reportingProduct.storeName || "未填店铺"}</span></div></div><Field label="问题备注" required hint="请说明链接失效、商品下架或其他需要商务核实的情况。"><textarea rows={5} required maxLength={2000} value={reportNote} onChange={(event) => setReportNote(event.target.value)} placeholder="例如：直播间点击后显示商品已下架，请提供可用的新链接。" /></Field><div className="modal-actions"><button type="button" className="button button-ghost" disabled={reporting} onClick={() => setReportingProduct(null)}>取消</button><button className="button button-primary" disabled={reporting || !reportNote.trim()}>{reporting ? "正在提交…" : "提交报障"}</button></div></form></Modal>}
     {copySettingsOpen && <Modal title="设置一键复制内容" onClose={() => { if (!savingCopyConfig) setCopySettingsOpen(false); }} wide><div className="copy-settings">{(() => { const selectedKeys = copyDraft.order.filter((key) => copyDraft.enabled.includes(key)); const availableFields = PRODUCT_COPY_FIELDS.filter((field) => !copyDraft.enabled.includes(field.key)); return <><div className="copy-order-preview"><div className="copy-preview-title"><b>粘贴后的单元格顺序</b><span>从左到右，共 {selectedKeys.length} 列</span></div>{selectedKeys.length ? <div className="copy-preview-flow">{selectedKeys.map((key, index) => { const field = PRODUCT_COPY_FIELDS.find((item) => item.key === key); return <span className="copy-preview-step" key={key}><i>{index + 1}</i>{field?.label}{index < selectedKeys.length - 1 && <b>→</b>}</span>; })}</div> : <p className="copy-empty-preview">尚未选择内容，请从下方添加。</p>}</div><section className="copy-config-section"><header className="copy-section-head"><div><b>已选内容和顺序</b><p>最上面的内容会粘贴到第 1 列。拖动卡片或点击箭头可以调整顺序。</p></div></header><div className="copy-selected-list">{selectedKeys.map((key, index) => { const field = PRODUCT_COPY_FIELDS.find((item) => item.key === key); if (!field) return null; return <div className={`copy-selected-item ${draggingField === key ? "dragging" : ""}`} draggable onDragStart={() => setDraggingField(key)} onDragEnd={() => setDraggingField(null)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (draggingField) reorderCopyField(draggingField, key); setDraggingField(null); }} key={key}><GripVertical className="copy-drag-handle" size={20} /><span className="copy-order-number">{index + 1}</span><div className="copy-selected-copy"><b>{field.label}</b><small>粘贴到第 {index + 1} 列</small></div><div className="copy-item-actions"><button type="button" className="icon-button" disabled={index === 0} onClick={() => moveCopyField(key, -1)} aria-label={`上移${field.label}`} title="上移一列"><ChevronUp size={17} /></button><button type="button" className="icon-button" disabled={index === selectedKeys.length - 1} onClick={() => moveCopyField(key, 1)} aria-label={`下移${field.label}`} title="下移一列"><ChevronDown size={17} /></button><button type="button" className="icon-button danger" onClick={() => removeCopyField(key)} aria-label={`移除${field.label}`} title="不再复制此项"><X size={17} /></button></div></div>; })}</div></section><section className="copy-config-section"><header className="copy-section-head"><div><b>添加其他内容</b><p>点击后会添加到复制顺序的最后一列。</p></div><span>{availableFields.length} 项可添加</span></header>{availableFields.length ? <div className="copy-available-grid">{availableFields.map((field) => <button type="button" className="copy-add-field" onClick={() => addCopyField(field.key)} key={field.key}><Plus size={16} /><span>{field.label}</span></button>)}</div> : <div className="copy-all-selected">所有内容都已添加</div>}</section><div className="modal-actions"><span className="copy-selected-count">将复制 {selectedKeys.length} 项内容</span><button type="button" className="button button-ghost" disabled={savingCopyConfig} onClick={() => setCopySettingsOpen(false)}>取消</button><button type="button" className="button button-primary" disabled={savingCopyConfig || !selectedKeys.length} onClick={saveCopyConfig}>{savingCopyConfig ? "保存中…" : "保存设置"}</button></div></>; })()}</div></Modal>}
@@ -260,10 +336,11 @@ export function ProductsView() {
   </>;
 }
 
-type ProductFormState = { sku: string; name: string; departmentIds: string[]; businessContactId: string; storeName: string; price: string; productUrl: string; commission: string; storeRating: string; supplyChain: string; cooperationMechanism: string; categoryId: string; tagIds: string[]; imageUrls: string; notes: string; quantity: string; arrivedAt: string; initialDepartmentId: string; initialLocationId: string; spec?: string };
+type ProductFormSpecRow = { spec: string; quantity: string };
+type ProductFormState = { sku: string; name: string; departmentIds: string[]; businessContactId: string; storeName: string; price: string; productUrl: string; commission: string; storeRating: string; supplyChain: string; cooperationMechanism: string; categoryId: string; tagIds: string[]; imageUrls: string; notes: string; specs: ProductFormSpecRow[]; arrivedAt: string; initialDepartmentId: string; initialLocationId: string };
 const today = () => { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); };
-const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", quantity: "1", arrivedAt: today(), initialDepartmentId: "", initialLocationId: "", spec: "" });
-type ProductDraft = { version: 1; form: ProductFormState; savedAt: number; autoRestore?: boolean };
+const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" });
+type ProductDraft = { version: 1; form: ProductFormState & { quantity?: string; spec?: string }; savedAt: number; autoRestore?: boolean };
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
 export function ProductFormView({ id }: { id?: string }) {
@@ -284,7 +361,13 @@ export function ProductFormView({ id }: { id?: string }) {
         && draft.form && typeof draft.form.imageUrls === "string" && Array.isArray(draft.form.departmentIds) && Array.isArray(draft.form.tagIds);
       if (valid) {
         if (draft.autoRestore) {
-          setForm({ ...blankForm(), ...draft.form, departmentIds: draft.form.departmentIds || [], tagIds: draft.form.tagIds || [] });
+          const migrated = { ...draft.form };
+          if (!migrated.specs && migrated.quantity) {
+            migrated.specs = [{ spec: migrated.spec || "", quantity: migrated.quantity }];
+          } else if (!Array.isArray(migrated.specs) || !migrated.specs.length) {
+            migrated.specs = [{ spec: "", quantity: "1" }];
+          }
+          setForm({ ...blankForm(), ...migrated, departmentIds: migrated.departmentIds || [], tagIds: migrated.tagIds || [] });
           setCheckedUrls([]); setExcludedProducts([]); setConfirmedMatch(null); setCandidates([]); setRecognizingUrl("");
           setRecognition({ phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "" });
           setDraftSavedAt(draft.savedAt); setDraftTouched(true); setDraftReady(true);
@@ -322,7 +405,7 @@ export function ProductFormView({ id }: { id?: string }) {
     } catch { /* ignore */ }
     restoredDeptDefaults.current = true;
   }, [id, draftReady, user.id]);
-  useEffect(() => { if (id && detail.data) { const p = detail.data.product; setForm({ sku: p.sku, name: p.name, departmentIds: p.departments.map((item) => item.id), businessContactId: p.businessContactId || "", storeName: p.storeName || "", price: p.price || "", productUrl: p.productUrl || "", commission: p.commission || "", storeRating: p.storeRating || "", supplyChain: p.supplyChain || "", cooperationMechanism: p.cooperationMechanism || "", categoryId: p.categoryId || "", tagIds: p.tags.map((item) => item.id), imageUrls: (p.imageUrls || []).join("\n"), notes: p.notes || "", quantity: "1", arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" }); } }, [id, detail.data]);
+  useEffect(() => { if (id && detail.data) { const p = detail.data.product; setForm({ sku: p.sku, name: p.name, departmentIds: p.departments.map((item) => item.id), businessContactId: p.businessContactId || "", storeName: p.storeName || "", price: p.price || "", productUrl: p.productUrl || "", commission: p.commission || "", storeRating: p.storeRating || "", supplyChain: p.supplyChain || "", cooperationMechanism: p.cooperationMechanism || "", categoryId: p.categoryId || "", tagIds: p.tags.map((item) => item.id), imageUrls: (p.imageUrls || []).join("\n"), notes: p.notes || "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" }); } }, [id, detail.data]);
   const set = (key: keyof ProductFormState, value: string | string[]) => { setDraftTouched(true); setForm((current) => ({ ...current, [key]: value })); };
   const imageUrls = form.imageUrls.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
   const primaryImageUrl = imageUrls.find((url) => { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; } }) || "";
@@ -371,7 +454,7 @@ export function ProductFormView({ id }: { id?: string }) {
   function discardDraft() {
     localStorage.removeItem(draftKey); setDraftCandidate(null); setDraftSavedAt(null); setDraftTouched(false); setDraftReady(true);
   }
-  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { const payload = { ...form, price: form.price || null, storeRating: form.storeRating || null, businessContactId: form.businessContactId || null, categoryId: form.categoryId || null, productUrl: form.productUrl || "", imageUrls, initialLocationId: form.initialLocationId || null, initialSampleSpec: form.spec || null }; if (id) { const { quantity, arrivedAt, initialDepartmentId, initialLocationId, spec, sku, ...update } = payload; void quantity; void arrivedAt; void initialDepartmentId; void initialLocationId; void spec; void sku; await apiFetch(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(update) }); toast("商品信息已保存"); router.push(`/products/${id}`); } else { if (!recognition.runId || !recognition.decision) throw new Error("请先完成图片识别"); const result = await apiFetch<{ id: string; matched?: boolean; sku: string; codes: string[] }>("/api/products", { method: "POST", body: JSON.stringify({ ...payload, matchRunId: recognition.runId, matchDecision: recognition.decision, matchedProductId: recognition.matchedProductId || null }) }); localStorage.removeItem(draftKey); setDraftReady(false); toast(result.matched ? `已按同款 ${result.sku} 追加 ${form.quantity} 件样品` : `新商品 ${result.sku} 登记成功`); try { localStorage.setItem(`huzhanggui:product-form-defaults:${user.id}`, JSON.stringify({ departmentIds: form.departmentIds, initialDepartmentId: form.initialDepartmentId })); } catch { /* ignore */ } const returnUrl = new URLSearchParams(window.location.search).get("returnUrl"); if (returnUrl) { router.push(`/samples/${result.codes[0]}`); } else { router.push(`/products/${result.id}`); } } } catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); window.scrollTo({ top: 0, behavior: "smooth" }); } finally { setSaving(false); } }
+  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { const totalQuantity = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); const payload = { ...form, price: form.price || null, storeRating: form.storeRating || null, businessContactId: form.businessContactId || null, categoryId: form.categoryId || null, productUrl: form.productUrl || "", imageUrls, initialLocationId: form.initialLocationId || null, specs: form.specs.filter(r => r.spec.trim() || Number(r.quantity) > 0).map(r => ({ spec: r.spec.trim() || null, quantity: Number(r.quantity) || 1 })) }; if (id) { const { specs, arrivedAt, initialDepartmentId, initialLocationId, sku, ...update } = payload; void specs; void arrivedAt; void initialDepartmentId; void initialLocationId; void sku; await apiFetch(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(update) }); toast("商品信息已保存"); router.push(`/products/${id}`); } else { if (!totalQuantity) throw new Error("请至少添加到样数量"); if (!recognition.runId || !recognition.decision) throw new Error("请先完成图片识别"); const result = await apiFetch<{ id: string; matched?: boolean; sku: string; codes: string[] }>("/api/products", { method: "POST", body: JSON.stringify({ ...payload, matchRunId: recognition.runId, matchDecision: recognition.decision, matchedProductId: recognition.matchedProductId || null }) }); localStorage.removeItem(draftKey); setDraftReady(false); toast(result.matched ? `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品` : `新商品 ${result.sku} 登记成功`); try { localStorage.setItem(`huzhanggui:product-form-defaults:${user.id}`, JSON.stringify({ departmentIds: form.departmentIds, initialDepartmentId: form.initialDepartmentId })); } catch { /* ignore */ } const returnUrl = new URLSearchParams(window.location.search).get("returnUrl"); if (returnUrl) { router.push(`/samples/${result.codes[0]}`); } else { router.push(`/products/${result.id}`); } } } catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); window.scrollTo({ top: 0, behavior: "smooth" }); } finally { setSaving(false); } }
   if (id && detail.loading) return <LoadingState />;
   return <form onSubmit={submit}>
     <PageHeader eyebrow={id ? "编辑档案" : "到样登记"} title={id ? "修改商品信息" : "登记新商品与实物样品"} description={id ? "货号不可修改，其他字段的每次修改都会保留操作记录。" : "填写主图后会自动识别同款；识别期间可以继续填写其他资料。"} actions={<><button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>{id && <button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "保存修改"}</button>}</>} />
@@ -393,9 +476,20 @@ export function ProductFormView({ id }: { id?: string }) {
       </div></section>
     </div><aside className="form-side">
       {!id && <section className="panel form-section arrival-card"><header><span className="section-number">04</span><div><h2>本次到样</h2><p>每件实物会获得独立编号。</p></div></header><div className="form-grid single">
-        <Field label="到样数量" required><div className="input-suffix"><input type="number" min="1" max="500" value={form.quantity} onChange={(event) => set("quantity", event.target.value)} /><span>件</span></div></Field><Field label="到样日期" required><input type="date" value={form.arrivedAt} onChange={(event) => set("arrivedAt", event.target.value)} /></Field>
-        <Field label="初始所在部门" required><select value={form.initialDepartmentId} onChange={(event) => { set("initialDepartmentId", event.target.value); set("initialLocationId", ""); }}><option value="">请选择部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field>        <Field label="具体存放位置"><select value={form.initialLocationId} onChange={(event) => set("initialLocationId", event.target.value)}><option value="">暂不细分</option>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field><Field label="样品规格" hint="例如颜色、尺码"><input value={form.spec} onChange={(event) => set("spec", event.target.value)} placeholder="例如 白色" /></Field>
-      </div><div className="arrival-result"><Boxes size={20} /><div><b>将创建 {Number(form.quantity) || 0} 个独立编号</b><span>例如 HZG-{today().slice(0, 4)}-0001-001</span></div></div><div className="arrival-submit"><button className="button button-primary" disabled={saving || recognition.phase !== "ready" || !recognition.decision || candidates.length > 0}>{saving ? "正在保存…" : recognition.decision === "matched" ? "按同款追加到样" : "完成登记"}</button><small>{recognition.phase === "checking" ? "图片识别完成后即可提交" : "确认以上信息后完成本次到样登记"}</small></div></section>}
+        <Field label="到样日期" required><input type="date" value={form.arrivedAt} onChange={(event) => set("arrivedAt", event.target.value)} /></Field>
+        <Field label="初始所在部门" required><select value={form.initialDepartmentId} onChange={(event) => { set("initialDepartmentId", event.target.value); set("initialLocationId", ""); }}><option value="">请选择部门</option>{lookups?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field>
+        <Field label="具体存放位置"><select value={form.initialLocationId} onChange={(event) => set("initialLocationId", event.target.value)}><option value="">暂不细分</option>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field>
+      </div>
+      <div className="specs-section">
+        <div className="specs-header"><span>样品规格与数量</span><small>不同规格会分配各自的实物编号。</small></div>
+        {form.specs.map((row, index) => <div className="spec-row" key={index}>
+          <Field label="规格" hint="例如颜色、尺码"><input value={row.spec} onChange={(event) => { const specs = [...form.specs]; specs[index] = { ...specs[index], spec: event.target.value }; setForm({ ...form, specs }); }} placeholder="例如 白色 M 码" /></Field>
+          <Field label="数量"><input type="number" min="1" max="500" value={row.quantity} onChange={(event) => { const specs = [...form.specs]; specs[index] = { ...specs[index], quantity: event.target.value }; setForm({ ...form, specs }); }} /></Field>
+          {form.specs.length > 1 && <button type="button" className="icon-button spec-remove" onClick={() => setForm({ ...form, specs: form.specs.filter((_, i) => i !== index) })} aria-label="移除此规格"><X size={16} /></button>}
+        </div>)}
+        <button type="button" className="button button-secondary button-compact" onClick={() => setForm({ ...form, specs: [...form.specs, { spec: "", quantity: "1" }] })} disabled={form.specs.length >= 100}><Plus size={15} />添加规格</button>
+      </div>
+      {(() => { const total = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); return <div className="arrival-result"><Boxes size={20} /><div><b>将创建 {total} 个独立编号</b><span>例如 HZG-{today().slice(0, 4)}-0001-001</span></div></div>; })()}<div className="arrival-submit"><button className="button button-primary" disabled={saving || recognition.phase !== "ready" || !recognition.decision || candidates.length > 0}>{saving ? "正在保存…" : recognition.decision === "matched" ? "按同款追加到样" : "完成登记"}</button><small>{recognition.phase === "checking" ? "图片识别完成后即可提交" : "确认以上信息后完成本次到样登记"}</small></div></section>}
       <section className="panel form-section"><header><div><h2>备注</h2><p>可记录选品或合作补充信息。</p></div></header><Field label="内部备注"><textarea rows={6} value={form.notes} onChange={(event) => set("notes", event.target.value)} /></Field></section>
     </aside></div>}
     {candidates.length > 0 && <Modal title="发现疑似同款，请人工确认" onClose={rejectCandidates} wide><div className="match-intro"><img src={recognizingUrl || imageUrls[0]} alt="本次新图片" referrerPolicy="no-referrer" /><div><b>本次填写的主图</b><p>请逐一对比。颜色、尺码或规格不同，请选择“都不是同款”。</p>{recognition.timingText && <small>{recognition.timingText}</small>}</div></div><div className="match-candidate-list">{candidates.map((candidate) => <article className="match-candidate" key={candidate.id}><div className="match-images"><img src={recognizingUrl || imageUrls[0]} alt="新图片" referrerPolicy="no-referrer" /><img src={candidate.imageUrls?.[0]} alt={candidate.name} referrerPolicy="no-referrer" /></div><div className="match-candidate-copy"><span className="similarity-chip">相似度 {Math.round(candidate.similarity * 100)}%</span><b>{candidate.name}</b><p>{candidate.sku} · {candidate.storeName || "未填店铺"}{candidate.archived ? " · 已归档" : ""}</p><button type="button" className="button button-primary button-compact" onClick={() => chooseCandidate(candidate)}>确认是同款</button></div></article>)}</div><div className="modal-actions"><button type="button" className="button button-secondary" onClick={rejectCandidates}>都不是同款，创建新款</button></div></Modal>}

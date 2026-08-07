@@ -128,22 +128,12 @@ export function WindowProductsView() {
   async function syncWindow() {
     if (!selectedId) return;
     try {
-      await apiFetch(`/api/talent-accounts/${selectedId}/sync`, { method: "POST" });
-      toast("已开始同步橱窗商品");
-      if (leagueId) {
-        apiFetch(`/api/league-accounts/${leagueId}/sync-quality?talentAccountId=${selectedId}`, { method: "POST" }).catch(() => {});
-      }
+      const body: Record<string, string> = {};
+      if (leagueId) body.leagueAccountId = leagueId;
+      await apiFetch(`/api/talent-accounts/${selectedId}/sync`, { method: "POST", body: JSON.stringify(body) });
+      toast(leagueId ? "已开始同步橱窗与评分数据" : "已开始同步橱窗商品");
       setTimeout(() => reload(), 2000);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "同步失败", "error"); }
-  }
-
-  async function syncQuality() {
-    if (!leagueId || !selectedId) return;
-    try {
-      await apiFetch(`/api/league-accounts/${leagueId}/sync-quality?talentAccountId=${selectedId}`, { method: "POST" });
-      toast("已开始同步商品评分数据");
-      setTimeout(() => reload(), 2000);
-    } catch (reason) { toast(reason instanceof Error ? reason.message : "评分同步失败", "error"); }
   }
 
   async function copyLink(link: string) {
@@ -190,7 +180,6 @@ export function WindowProductsView() {
   return <>
     <PageHeader eyebrow="系统管理" title="橱窗管理" description="查看带货账号橱窗中的所有商品，支持评分数据和已登记商品对照。" actions={accounts.length ? <div style={{ display: "flex", gap: 6 }}>
       <button type="button" className="button button-secondary" disabled={!selectedId || activeAccount?.syncStatus === "syncing"} onClick={syncWindow}><RefreshCw size={17} />{activeAccount?.syncStatus === "syncing" ? "同步中…" : "同步橱窗"}</button>
-      {leagueOptions.length > 0 && <button type="button" className="button button-secondary button-compact" disabled={!selectedId} onClick={syncQuality}><ShieldCheck size={15} />仅同步评分</button>}
     </div> : undefined} />
     <section className="toolbar">
       {!accounts.length && !loading ? <EmptyState title="尚未配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥后，再回来查看。" /> : <>

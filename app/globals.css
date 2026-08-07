@@ -404,7 +404,18 @@ select { cursor: pointer; }
 .arrival-submit { margin-top: 16px; padding-top: 16px; display: grid; gap: 7px; border-top: 1px solid var(--line-soft); }
 .arrival-submit .button { width: 100%; }
 .arrival-submit small { color: var(--muted); text-align: center; }
+.specs-section { margin-top: 14px; border: 1px solid var(--line-soft); border-radius: 10px; padding: 12px; }
+.specs-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.specs-header span { font-size: 13px; font-weight: 600; }
+.specs-header small { font-size: 11px; color: var(--muted); }
+.spec-row { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line-faint); }
+.spec-row:last-of-type { margin-bottom: 4px; padding-bottom: 0; border-bottom: none; }
+.spec-row .field { flex: 1; }
+.spec-row .field:last-of-type { max-width: 90px; flex: none; }
+.spec-remove { flex-shrink: 0; margin-bottom: 2px; color: var(--muted); }
+.spec-remove:hover { color: var(--red); }
 .inline-hint { margin: 7px 0; color: var(--muted); font-size: 12px; }
+.timeline-footer-actions { display: flex; gap: 10px; align-items: center; padding: 10px 4px 0; border-top: 1px solid var(--line-faint); margin-top: 8px; }
 .page-form-error { margin: -8px 0 15px; }
 .draft-save-state { margin: -8px 0 15px; padding: 9px 12px; display: flex; align-items: center; gap: 8px; border: 1px solid #c5d8d1; border-radius: 9px; color: var(--green); background: var(--green-pale); }
 .draft-save-state span { font-weight: 700; }

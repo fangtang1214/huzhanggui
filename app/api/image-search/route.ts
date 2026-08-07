@@ -2,18 +2,21 @@ import { z } from "zod";
 import { apiError, ok, readJson } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { embedImage, getMatchSettings, RecognitionTimings, urlHash } from "@/lib/image-matching";
+import { embedImage, embedImageBase64, getMatchSettings, RecognitionTimings, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 
+const imageBase64Regex = /^data:image\/(png|jpeg|jpg|webp|bmp|gif);base64,/i;
+
 const schema = z.object({
-  imageUrl: imageUrlSchema,
-});
+  imageUrl: imageUrlSchema.optional(),
+  imageBase64: z.string().regex(imageBase64Regex, "图片数据格式无效").optional(),
+}).refine((data) => data.imageUrl || data.imageBase64, { message: "请提供图片网址或图片数据" });
 
 const elapsed = (started: number) => Math.round((performance.now() - started) * 10) / 10;
 const vectorLiteral = (values: number[]) => `[${values.map(Number).join(",")}]`;
 
-async function cachedEmbedding(imageUrl: string, model: string) {
-  const sql = getDb(); const hash = urlHash(imageUrl);
+async function cachedEmbedding(urlOrBase64: string, model: string) {
+  const sql = getDb(); const hash = urlHash(urlOrBase64);
   const [cached] = await sql`
     UPDATE image_embedding_cache SET hits=hits+1,last_used_at=now()
     WHERE url_hash=${hash} AND model=${model}
@@ -29,10 +32,16 @@ async function cachedEmbedding(imageUrl: string, model: string) {
   const embedding = String(feature.embedding);
   await sql`
     INSERT INTO image_embedding_cache(url_hash,model,image_url,embedding,hits)
-    VALUES(${hash},${model},${imageUrl},${embedding}::vector(512),1)
+    VALUES(${hash},${model},${urlOrBase64.slice(0, 500)},${embedding}::vector(512),1)
     ON CONFLICT(url_hash,model) DO UPDATE SET hits=image_embedding_cache.hits+1,last_used_at=now()
   `;
   return embedding;
+}
+
+async function cleanupCache(source: string, model: string) {
+  try {
+    await getDb()`DELETE FROM image_embedding_cache WHERE url_hash=${urlHash(source)} AND model=${model}`;
+  } catch { /* non-critical cleanup */ }
 }
 
 export async function POST(request: Request) {
@@ -42,19 +51,22 @@ export async function POST(request: Request) {
     const input = schema.parse(await readJson(request));
     const sql = getDb();
     const settings = await getMatchSettings();
+    const source = input.imageUrl || input.imageBase64!;
+    const isBase64 = Boolean(input.imageBase64);
     let embedding: string | null = null;
     const timings: RecognitionTimings = {};
     const cacheStarted = performance.now();
-    embedding = await cachedEmbedding(input.imageUrl, settings.model);
+    embedding = await cachedEmbedding(source, settings.model);
     timings.cacheHit = Boolean(embedding);
     timings.cacheMs = elapsed(cacheStarted);
     if (!embedding) {
-      const result = await embedImage(input.imageUrl);
+      const result = isBase64 ? await embedImageBase64(input.imageBase64!) : await embedImage(input.imageUrl!);
       embedding = vectorLiteral(result.embedding);
       Object.assign(timings, result.timings, { cacheHit: false });
+      const cacheImageUrl = isBase64 ? source.slice(0, 500) : input.imageUrl!;
       await sql`
         INSERT INTO image_embedding_cache(url_hash,model,image_url,embedding)
-        VALUES(${urlHash(input.imageUrl)},${settings.model},${input.imageUrl},${embedding}::vector(512))
+        VALUES(${urlHash(source)},${settings.model},${cacheImageUrl},${embedding}::vector(512))
         ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,embedding=excluded.embedding,last_used_at=now()
       `;
     }
@@ -89,6 +101,7 @@ export async function POST(request: Request) {
     });
     timings.lookupMs = elapsed(lookupStarted);
     timings.totalMs = elapsed(totalStarted);
+    cleanupCache(source, settings.model);
     return ok({ candidates, mode: settings.mode, timings });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {

@@ -266,7 +266,7 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
   return { total: items.length, detailed: detailRows.length };
 }
 
-export async function runTalentWindowSync(accountId: string) {
+export async function runTalentWindowSync(accountId: string, leagueAccountId?: string | null) {
   const sql = getDb();
   try {
     const result = await syncTalentWindow(accountId);
@@ -275,6 +275,11 @@ export async function runTalentWindowSync(accountId: string) {
       SET sync_status = 'idle', sync_error = null, synced_at = now(), updated_at = now()
       WHERE id = ${accountId}
     `;
+    if (leagueAccountId) {
+      const { syncWindowQuality } = await import("./league-product");
+      try { await syncWindowQuality(leagueAccountId, accountId); }
+      catch (error) { console.error("橱窗同步后评分同步失败", error); }
+    }
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "同步失败";
