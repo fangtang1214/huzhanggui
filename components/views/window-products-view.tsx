@@ -169,7 +169,7 @@ export function WindowProductsView() {
         departmentIds: [] as string[],
         tagIds: [] as string[],
         categoryId: "",
-        businessContactId: "",
+        businessContactId: user.id,
         supplyChain: "",
         cooperationMechanism: "",
         notes: "",
@@ -182,7 +182,7 @@ export function WindowProductsView() {
     try {
       localStorage.setItem(`huzhanggui:product-draft:${user.id}`, JSON.stringify(draft));
     } catch { /* localStorage unavailable */ }
-    router.push("/products/new");
+    router.push("/products/new?returnUrl=/window-products");
   }
 
   return <>
