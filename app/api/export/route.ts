@@ -50,7 +50,7 @@ export async function GET(request: Request) {
       ], formatted as unknown as Record<string, unknown>[]);
     } else {
       const rows = await sql`
-        SELECT s.code, s.arrived_at, s.status, s.note, p.sku, p.name AS product_name, p.store_name,
+        SELECT s.code, s.arrived_at, s.status, s.note, s.spec, p.sku, p.name AS product_name, p.store_name,
                d.name AS department_name, l.name AS location_name, s.updated_at
         FROM samples s JOIN products p ON p.id = s.product_id LEFT JOIN departments d ON d.id = s.current_department_id LEFT JOIN locations l ON l.id = s.current_location_id
         WHERE s.archived = false AND p.archived = false
@@ -60,7 +60,7 @@ export async function GET(request: Request) {
       const formatted = rows.map((row) => ({ ...row, statusText: statusLabel(String(row.status)), place: activeLocationLabel({ status: String(row.status), department_name: row.departmentName ? String(row.departmentName) : null, location_name: row.locationName ? String(row.locationName) : null }) }));
       workbook = createXlsx("实物样品", [
         { header: "实物编号", key: "code", width: 24 }, { header: "货号", key: "sku", width: 18 }, { header: "商品名称", key: "productName", width: 28 }, { header: "店铺名", key: "storeName", width: 22 },
-        { header: "到样日期", key: "arrivedAt", width: 14 }, { header: "状态", key: "statusText", width: 14 }, { header: "当前位置", key: "place", width: 24 }, { header: "备注", key: "note", width: 24 }, { header: "最后更新", key: "updatedAt", width: 21 },
+        { header: "规格", key: "spec", width: 14 }, { header: "到样日期", key: "arrivedAt", width: 14 }, { header: "状态", key: "statusText", width: 14 }, { header: "当前位置", key: "place", width: 24 }, { header: "备注", key: "note", width: 24 }, { header: "最后更新", key: "updatedAt", width: 21 },
       ], formatted as unknown as Record<string, unknown>[]);
     }
     const date = new Date().toISOString().slice(0, 10); const filename = encodeURIComponent(`狐掌柜样品-${type}-${date}.xlsx`);

@@ -2,7 +2,7 @@ import { getDb } from "./db";
 
 const API_BASE = "https://api.weixin.qq.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-const DETAIL_CONCURRENCY = 5;
+const DETAIL_CONCURRENCY = 10;
 
 function safeText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -203,44 +203,67 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
   const items = await fetchWindowProductList(account);
   const keepIds = items.map((item) => item.productId);
 
-  await sql.begin(async (tx) => {
-    for (const item of items) {
-      await tx`
-        INSERT INTO talent_window_products (account_id, product_id, out_product_id, shop_appid, product_source, synced_at)
-        VALUES (${accountId}, ${item.productId}, ${item.outProductId}, ${item.shopAppid}, ${item.productSource}, now())
-        ON CONFLICT (account_id, product_id) DO UPDATE
-        SET out_product_id = EXCLUDED.out_product_id, shop_appid = EXCLUDED.shop_appid,
-            product_source = EXCLUDED.product_source, synced_at = now()
-      `;
-    }
-    if (keepIds.length) {
-      await tx`DELETE FROM talent_window_products WHERE account_id = ${accountId} AND product_id <> ALL (${keepIds})`;
-    } else {
-      await tx`DELETE FROM talent_window_products WHERE account_id = ${accountId}`;
-    }
-  });
+  if (items.length > 0) {
+    const productIds = items.map(i => i.productId);
+    const outProductIds = items.map(i => i.outProductId);
+    const shopAppids = items.map(i => i.shopAppid);
+    const productSources = items.map(i => i.productSource);
 
-  let detailed = 0;
+    await sql`
+      INSERT INTO talent_window_products (account_id, product_id, out_product_id, shop_appid, product_source, synced_at)
+      SELECT ${accountId}, t.pid, t.oid, t.said, t.ps, now()
+      FROM unnest(${productIds}::text[], ${outProductIds}::text[], ${shopAppids}::text[], ${productSources}::int[]) AS t(pid, oid, said, ps)
+      ON CONFLICT (account_id, product_id) DO UPDATE
+      SET out_product_id = EXCLUDED.out_product_id, shop_appid = EXCLUDED.shop_appid,
+          product_source = EXCLUDED.product_source, synced_at = now()
+    `;
+  }
+
+  if (keepIds.length) {
+    await sql`DELETE FROM talent_window_products WHERE account_id = ${accountId} AND product_id <> ALL (${keepIds})`;
+  } else {
+    await sql`DELETE FROM talent_window_products WHERE account_id = ${accountId}`;
+  }
+
+  const detailRows: Array<{ productId: string; detail: WindowProductDetail }> = [];
   for (let index = 0; index < items.length; index += DETAIL_CONCURRENCY) {
     const batch = items.slice(index, index + DETAIL_CONCURRENCY);
     const results = await Promise.allSettled(batch.map((item) => fetchWindowProductDetail(account, item.productId)));
     for (let offset = 0; offset < batch.length; offset += 1) {
       const result = results[offset];
       if (result.status !== "fulfilled") continue;
-      const detail = result.value;
-      await sql`
-        UPDATE talent_window_products
-        SET title = ${detail.title}, img_url = ${detail.imgUrl}, selling_price_fen = ${detail.sellingPriceFen},
-            stock = ${detail.stock}, sales = ${detail.sales}, status = ${detail.status}, is_hide = ${detail.isHide},
-            out_product_id = coalesce(${detail.outProductId}, out_product_id),
-            shop_appid = coalesce(${detail.shopAppid}, shop_appid),
-            synced_at = now()
-        WHERE account_id = ${accountId} AND product_id = ${batch[offset].productId}
-      `;
-      detailed += 1;
+      detailRows.push({ productId: batch[offset].productId, detail: result.value });
     }
   }
-  return { total: items.length, detailed };
+
+  if (detailRows.length > 0) {
+    const uProductIds = detailRows.map(r => r.productId);
+    const titles = detailRows.map(r => r.detail.title);
+    const imgUrls = detailRows.map(r => r.detail.imgUrl);
+    const spfs = detailRows.map(r => r.detail.sellingPriceFen);
+    const stocks = detailRows.map(r => r.detail.stock);
+    const sales = detailRows.map(r => r.detail.sales);
+    const statuses = detailRows.map(r => r.detail.status);
+    const isHides = detailRows.map(r => r.detail.isHide);
+    const outProdIds = detailRows.map(r => r.detail.outProductId);
+    const shopApps = detailRows.map(r => r.detail.shopAppid);
+
+    await sql`
+      UPDATE talent_window_products wp
+      SET title = t.title, img_url = t.img_url, selling_price_fen = t.spf,
+          stock = t.stock, sales = t.sales, status = t.status, is_hide = t.is_hide,
+          out_product_id = coalesce(t.oid, out_product_id),
+          shop_appid = coalesce(t.said, shop_appid),
+          synced_at = now()
+      FROM unnest(${uProductIds}::text[], ${titles}::text[], ${imgUrls}::text[],
+                   ${spfs}::int[], ${stocks}::int[], ${sales}::int[],
+                   ${statuses}::int[], ${isHides}::boolean[],
+                   ${outProdIds}::text[], ${shopApps}::text[]) AS t(id, title, img_url, spf, stock, sales, status, is_hide, oid, said)
+      WHERE wp.account_id = ${accountId} AND wp.product_id = t.id
+    `;
+  }
+
+  return { total: items.length, detailed: detailRows.length };
 }
 
 export async function runTalentWindowSync(accountId: string) {

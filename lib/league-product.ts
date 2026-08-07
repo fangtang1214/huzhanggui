@@ -3,7 +3,7 @@ import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 
 const API_BASE = "https://api.weixin.qq.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-const QUALITY_CONCURRENCY = 5;
+const QUALITY_CONCURRENCY = 10;
 
 function safeText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -198,7 +198,7 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
         next_key?: string;
       }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
         commission_type: commissionType,
-        page_size: 20,
+        page_size: 100,
         next_key: nextKey,
       });
       const list = Array.isArray(payload.list) ? payload.list : [];
@@ -229,17 +229,36 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   const products: ProductBrief[] = rows as unknown as ProductBrief[];
 
   let patchedShopIds = 0;
-  for (const product of products) {
-    if (product.shopAppid) continue;
-    try {
-      const detail = await fetchWindowProductDetail(talentAccount, product.productId);
-      if (detail.shopAppid) {
-        await sql`UPDATE talent_window_products SET shop_appid = ${detail.shopAppid}, out_product_id = coalesce(${detail.outProductId || null}, out_product_id) WHERE id = ${product.id}`;
+  {
+    const shopPatchConcurrency = 10;
+    const missingShop = products.filter(p => !p.shopAppid);
+    const shopPatches: Array<{ id: string; shopAppid: string; outProductId: string | null }> = [];
+    for (let index = 0; index < missingShop.length; index += shopPatchConcurrency) {
+      const batch = missingShop.slice(index, index + shopPatchConcurrency);
+      const results = await Promise.allSettled(batch.map((p) =>
+        fetchWindowProductDetail(talentAccount, p.productId).then((detail) => ({ id: p.id, detail, product: p }))
+      ));
+      for (const r of results) {
+        if (r.status !== "fulfilled") continue;
+        const { id, detail, product } = r.value;
+        if (!detail.shopAppid) continue;
+        shopPatches.push({ id, shopAppid: detail.shopAppid, outProductId: detail.outProductId });
         product.shopAppid = detail.shopAppid;
         if (detail.outProductId && !product.outProductId) product.outProductId = detail.outProductId;
         patchedShopIds += 1;
       }
-    } catch { /* skip individual detail failure */ }
+    }
+    if (shopPatches.length > 0) {
+      const patchIds = shopPatches.map(s => s.id);
+      const patchApps = shopPatches.map(s => s.shopAppid);
+      const patchOutIds = shopPatches.map(s => s.outProductId);
+      await sql`
+        UPDATE talent_window_products wp
+        SET shop_appid = t.said, out_product_id = coalesce(t.oid, out_product_id)
+        FROM unnest(${patchIds}::uuid[], ${patchApps}::text[], ${patchOutIds}::text[]) AS t(id, said, oid)
+        WHERE wp.id = t.id
+      `;
+    }
   }
 
   let patchedLinks = 0;
@@ -250,19 +269,36 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   } catch (error) {
     errors.push(error instanceof Error ? error.message : "合作商品列表获取失败");
   }
+
+  const linkPatches: Array<{ id: string; link: string }> = [];
   for (const product of products) {
     const sid = product.outProductId || product.productId;
     const link = sid ? itemLinks.get(sid) : undefined;
     if (link && link !== product.promotionLink) {
-      try {
-        await sql`UPDATE talent_window_products SET promotion_link = ${link} WHERE id = ${product.id}`;
-        product.promotionLink = link;
-        patchedLinks += 1;
-      } catch { /* skip individual link update failure */ }
+      linkPatches.push({ id: product.id, link });
+      product.promotionLink = link;
+      patchedLinks += 1;
     }
+  }
+  if (linkPatches.length > 0) {
+    const lpIds = linkPatches.map(l => l.id);
+    const lpLinks = linkPatches.map(l => l.link);
+    await sql`
+      UPDATE talent_window_products wp
+      SET promotion_link = t.link
+      FROM unnest(${lpIds}::uuid[], ${lpLinks}::text[]) AS t(id, link)
+      WHERE wp.id = t.id
+    `;
   }
 
   let detailed = 0;
+  const qualityRows: Array<{
+    id: string;
+    shopName: string | null; shopScore: number | null; shopIcon: string | null; goodEvaluationRatio: number | null;
+    commissionRatio: number | null; normalCommissionRatio: number | null; serviceRatio: number | null;
+    commissionType: number | null; planType: number | null;
+  }> = [];
+
   for (let index = 0; index < products.length; index += QUALITY_CONCURRENCY) {
     const batch = products.slice(index, index + QUALITY_CONCURRENCY);
     const results = await Promise.all(batch.map(async (item) => {
@@ -281,22 +317,53 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
       const quality = qualityResult.status === "fulfilled" ? qualityResult.value : null;
       const promotion = promotionResult.status === "fulfilled" ? promotionResult.value : null;
       if (!quality && !promotion) continue;
-      await sql`
-        UPDATE talent_window_products
-        SET shop_name = coalesce(${quality?.shopName ?? null}, shop_name),
-            shop_score = coalesce(${quality?.shopScore ?? null}, shop_score),
-            shop_icon = coalesce(${quality?.shopIcon ?? null}, shop_icon),
-            good_evaluation_ratio = coalesce(${quality?.goodEvaluationRatio ?? null}, good_evaluation_ratio),
-            commission_ratio = coalesce(${promotion?.commissionRatio ?? null}, commission_ratio),
-            normal_commission_ratio = coalesce(${promotion?.normalCommissionRatio ?? null}, normal_commission_ratio),
-            service_ratio = coalesce(${promotion?.serviceRatio ?? null}, service_ratio),
-            commission_type = coalesce(${promotion?.commissionType ?? null}, commission_type),
-            plan_type = coalesce(${promotion?.planType ?? null}, plan_type),
-            quality_synced_at = now()
-        WHERE id = ${item.id}
-      `;
-      detailed += 1;
+      qualityRows.push({
+        id: item.id,
+        shopName: quality?.shopName ?? null,
+        shopScore: quality?.shopScore ?? null,
+        shopIcon: quality?.shopIcon ?? null,
+        goodEvaluationRatio: quality?.goodEvaluationRatio ?? null,
+        commissionRatio: promotion?.commissionRatio ?? null,
+        normalCommissionRatio: promotion?.normalCommissionRatio ?? null,
+        serviceRatio: promotion?.serviceRatio ?? null,
+        commissionType: promotion?.commissionType ?? null,
+        planType: promotion?.planType ?? null,
+      });
     }
+  }
+
+  if (qualityRows.length > 0) {
+    const qIds = qualityRows.map(r => r.id);
+    const shopNames = qualityRows.map(r => r.shopName);
+    const shopScores = qualityRows.map(r => r.shopScore);
+    const shopIcons = qualityRows.map(r => r.shopIcon);
+    const goodRatios = qualityRows.map(r => r.goodEvaluationRatio);
+    const commRatios = qualityRows.map(r => r.commissionRatio);
+    const normalCommRatios = qualityRows.map(r => r.normalCommissionRatio);
+    const serviceRatios = qualityRows.map(r => r.serviceRatio);
+    const commTypes = qualityRows.map(r => r.commissionType);
+    const planTypes = qualityRows.map(r => r.planType);
+
+    await sql`
+      UPDATE talent_window_products wp
+      SET shop_name = coalesce(t.sn, shop_name),
+          shop_score = coalesce(t.ss, shop_score),
+          shop_icon = coalesce(t.si, shop_icon),
+          good_evaluation_ratio = coalesce(t.gr, good_evaluation_ratio),
+          commission_ratio = coalesce(t.cr, commission_ratio),
+          normal_commission_ratio = coalesce(t.ncr, normal_commission_ratio),
+          service_ratio = coalesce(t.sr, service_ratio),
+          commission_type = coalesce(t.ct, commission_type),
+          plan_type = coalesce(t.pt, plan_type),
+          quality_synced_at = now()
+      FROM unnest(${qIds}::uuid[], ${shopNames}::text[], ${shopScores}::int[],
+                   ${shopIcons}::text[], ${goodRatios}::int[],
+                   ${commRatios}::int[], ${normalCommRatios}::int[],
+                   ${serviceRatios}::int[], ${commTypes}::int[], ${planTypes}::int[])
+           AS t(id, sn, ss, si, gr, cr, ncr, sr, ct, pt)
+      WHERE wp.id = t.id
+    `;
+    detailed = qualityRows.length;
   }
   const eligible = products.filter((item) => (item.shopAppid && (item.outProductId || item.productId)) || item.promotionLink).length;
   if (detailed === 0 && eligible > 0 && errors.length) {

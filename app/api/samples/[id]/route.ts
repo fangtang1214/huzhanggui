@@ -13,6 +13,7 @@ const schema = z.object({
   locationId: z.string().uuid().optional().nullable(),
   remark: z.string().trim().max(500).optional().nullable(),
   note: z.string().trim().max(500).optional().nullable(),
+  spec: z.string().trim().max(100).optional().nullable(),
 });
 
 async function findSample(id: string) {
@@ -94,7 +95,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     await sql.begin(async (tx) => {
       await tx`
         UPDATE samples SET status = ${input.status}, current_department_id = ${departmentId},
-          current_location_id = ${locationId}, note = coalesce(${input.note || null}, note), updated_at = now()
+          current_location_id = ${locationId}, note = coalesce(${input.note || null}, note), spec = coalesce(${input.spec || null}, spec), updated_at = now()
         WHERE id = ${sample.id}
       `;
       await tx`

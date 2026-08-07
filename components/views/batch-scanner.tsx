@@ -12,6 +12,7 @@ type BatchSample = {
   id: string;
   code: string;
   status: string;
+  spec?: string;
   arrivedAt: string;
   productId: string;
   sku: string;

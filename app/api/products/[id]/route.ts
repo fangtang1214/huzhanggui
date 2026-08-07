@@ -49,7 +49,7 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
     `;
     if (rows.length === 0) return Response.json({ ok: false, message: "商品不存在" }, { status: 404 });
     const samples = await sql`
-      SELECT s.id, s.code, s.arrived_at, s.status, s.note, s.archived,
+      SELECT s.id, s.code, s.arrived_at, s.status, s.note, s.spec, s.archived,
              d.name AS department_name, l.name AS location_name, s.updated_at
       FROM samples s
       LEFT JOIN departments d ON d.id = s.current_department_id

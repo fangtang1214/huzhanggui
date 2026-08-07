@@ -15,7 +15,7 @@ export async function GET(request: Request) {
 
     const sql = getDb();
     const rows = await sql`
-      SELECT s.id, s.code, s.status, s.arrived_at,
+      SELECT s.id, s.code, s.status, s.spec, s.arrived_at,
              p.id AS product_id, p.sku, p.name AS product_name, p.image_urls,
              d.id AS department_id, d.name AS department_name,
              l.id AS location_id, l.name AS location_name

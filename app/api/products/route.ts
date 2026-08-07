@@ -26,6 +26,7 @@ const productSchema = z.object({
   imageUrls: z.array(imageUrlSchema).min(1, "请先填写至少一张商品图片").max(100), notes: optionalText,
   quantity: z.coerce.number().int().min(1, "到样数量至少为 1").max(500), arrivedAt: z.string().date("请选择到样日期"),
   initialDepartmentId: z.string().uuid(), initialLocationId: z.string().uuid().optional().nullable(),
+  initialSampleSpec: z.string().trim().max(100).optional().nullable(),
   matchRunId: z.string().uuid(), matchDecision: z.enum(["matched", "new", "failed_continue"]),
   matchedProductId: z.string().uuid().optional().nullable(),
 }).superRefine((input, context) => {
@@ -128,8 +129,8 @@ export async function POST(request: Request) {
       const codes: string[] = []; const sampleIds: string[] = [];
       for (let index = 0; index < input.quantity; index += 1) {
         const code = await nextProductSampleCode(tx, String(product.id), String(product.sku));
-        const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,created_by)
-          VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id}) RETURNING id`;
+        const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,spec,created_by)
+          VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${input.initialSampleSpec || null},${user.id}) RETURNING id`;
         await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)
           VALUES(${sample.id},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id},${input.matchDecision === "matched" ? "同款再次到样登记" : "样品到货登记"})`;
         codes.push(code); sampleIds.push(String(sample.id));

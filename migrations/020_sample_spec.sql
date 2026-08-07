@@ -1,0 +1,1 @@
+ALTER TABLE samples ADD COLUMN IF NOT EXISTS spec varchar(100);

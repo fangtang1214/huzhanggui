@@ -11,6 +11,7 @@ const schema = z.object({
   departmentId: z.string().uuid(),
   locationId: z.string().uuid().optional().nullable(),
   note: z.string().trim().max(500).optional().nullable(),
+  spec: z.string().trim().max(100).optional().nullable(),
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -30,8 +31,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       for (let index = 0; index < input.quantity; index += 1) {
         const code = await nextProductSampleCode(tx as never, String(product.id), String(product.sku));
         const [sample] = await tx`
-          INSERT INTO samples (code, product_id, arrived_at, status, current_department_id, current_location_id, note, created_by)
-          VALUES (${code}, ${id}, ${input.arrivedAt}, 'active', ${input.departmentId}, ${input.locationId || null}, ${input.note || null}, ${user.id})
+          INSERT INTO samples (code, product_id, arrived_at, status, current_department_id, current_location_id, note, spec, created_by)
+          VALUES (${code}, ${id}, ${input.arrivedAt}, 'active', ${input.departmentId}, ${input.locationId || null}, ${input.note || null}, ${input.spec || null}, ${user.id})
           RETURNING id
         `;
         await tx`

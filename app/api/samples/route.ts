@@ -18,7 +18,7 @@ export async function GET(request: Request) {
     const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize") || 30)));
     const offset = (page - 1) * pageSize;
     const rows = await sql`
-      SELECT s.id, s.code, s.arrived_at, s.status, s.note, s.updated_at,
+      SELECT s.id, s.code, s.arrived_at, s.status, s.note, s.spec, s.updated_at,
              p.id AS product_id, p.sku, p.name AS product_name, p.image_urls, p.store_name, p.price,
              p.product_url, p.commission, p.store_rating, p.supply_chain, p.cooperation_mechanism, p.notes,
              p.created_at AS product_created_at, p.updated_at AS product_updated_at,
