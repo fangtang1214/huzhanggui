@@ -8,7 +8,7 @@ import type { CurrentUser } from "@/lib/auth";
 import { AppDataProvider, ToastProvider, apiFetch } from "./client-utils";
 import { DashboardView } from "./views/dashboard-view";
 import { ProductsView, ProductFormView, ProductDetailView } from "./views/products-view";
-import { SamplesView, SampleDetailView, ScannerView } from "./views/samples-view";
+import { SampleDetailView, ScannerView } from "./views/samples-view";
 import { MovementsView } from "./views/movements-view";
 import { OrganizationView } from "./views/organization-view";
 import { UsersView } from "./views/access-view";
@@ -23,7 +23,6 @@ import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardLi
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
   { href: "/products", key: "products", label: "商品档案", permission: "products:view", icon: FolderKanban },
-  { href: "/samples", key: "samples", label: "样品位置", permission: "samples:view", icon: Boxes },
   { href: "/scan", key: "scan", label: "扫码流转", permission: "samples:view", icon: ScanLine },
   { href: "/link-issues", key: "link-issues", label: "问题处理", permission: "", icon: CircleAlert },
 ];
@@ -66,7 +65,6 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "products") return <ProductsView />;
   if (view === "link-issues") return <LinkIssuesView />;
   if (view === "samples" && path[1]) return <SampleDetailView id={path[1]} />;
-  if (view === "samples") return <SamplesView />;
   if (view === "scan") return <ScannerView />;
   if (view === "movements") return <MovementsView />;
   if (view === "departments" || view === "locations" || view === "catalog") return <OrganizationView section={view} />;

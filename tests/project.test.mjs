@@ -234,8 +234,11 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   assert.match(productsView, /粘贴后的单元格顺序/);
   assert.match(productsView, /添加其他内容/);
   assert.match(productsView, /copyProductToClipboard/);
+  assert.match(productsView, /copyProduct/);
+  assert.match(productsView, /一键复制/);
+  assert.match(productsView, /\/api\/auth\/product-copy/);
   assert.match(productsView, /draggable/);
-  assert.doesNotMatch(productsView, /className="table-place"><MapPin/);
+  assert.match(productsView, /className="table-place"><MapPin/);
   assert.match(productsView, /<th>价格<\/th><th>佣金<\/th>/);
 
   const copyRoute = await readFile(new URL("../app/api/auth/product-copy/route.ts", import.meta.url), "utf8");
@@ -265,10 +268,6 @@ test("问题处理、商品复制、流转图片和状态精简按新流程实�
   const linkHistoryMigration = await readFile(new URL("../migrations/012_product_link_history.sql", import.meta.url), "utf8");
   assert.match(linkHistoryMigration, /CREATE TABLE product_link_history/);
   assert.doesNotMatch(linkHistoryMigration, /INSERT INTO product_link_history/);
-  const samplesView = await readFile(new URL("../components/views/samples-view.tsx", import.meta.url), "utf8");
-  assert.match(samplesView, /copySampleProduct/);
-  assert.match(samplesView, /一键复制/);
-  assert.match(samplesView, /\/api\/auth\/product-copy/);
   const issueView = await readFile(new URL("../components/views/link-issues-view.tsx", import.meta.url), "utf8");
   assert.match(issueView, /供应链：/);
   assert.match(issueView, /等待商务处理/);

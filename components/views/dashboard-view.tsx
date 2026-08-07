@@ -28,7 +28,7 @@ export function DashboardView() {
       <article className="summary-card"><div><span>异常样品</span><strong>{data.summary.exceptionSamples}</strong><small>损坏、丢失或报废</small></div><div className="summary-icon icon-amber"><CircleAlert size={23} /></div></article>
     </section>
     <section className="dashboard-grid">
-      <article className="panel panel-location"><header className="panel-header"><div><p className="eyebrow">当前位置</p><h2>各部门样品分布</h2></div><Link href="/samples">查看全部 <ArrowRight size={15} /></Link></header>
+      <article className="panel panel-location"><header className="panel-header"><div><p className="eyebrow">当前位置</p><h2>各部门样品分布</h2></div><Link href="/products">查看全部 <ArrowRight size={15} /></Link></header>
         {data.locations.length === 0 ? <EmptyState title="还没有在库样品" description="登记到样后，位置分布会显示在这里。" /> : <div className="location-bars">{data.locations.map((item) => <div className="location-row" key={item.id}><div><span>{item.name}</span><b>{item.count} 件</b></div><div className="bar-track"><i style={{ width: `${Math.max(5, item.count / maxLocation * 100)}%` }} /></div></div>)}</div>}
       </article>
       <article className="panel"><header className="panel-header"><div><p className="eyebrow">最新动态</p><h2>最近流转记录</h2></div><Link href="/movements">全部记录 <ArrowRight size={15} /></Link></header>
