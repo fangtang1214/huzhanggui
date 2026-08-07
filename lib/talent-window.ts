@@ -277,8 +277,10 @@ export async function runTalentWindowSync(accountId: string, leagueAccountId?: s
     `;
     if (leagueAccountId) {
       const { syncWindowQuality } = await import("./league-product");
-      try { await syncWindowQuality(leagueAccountId, accountId); }
-      catch (error) { console.error("橱窗同步后评分同步失败", error); }
+      try {
+        const qualityResult = await syncWindowQuality(leagueAccountId, accountId);
+        if (qualityResult.backfilledLinks > 0) console.log(`商品链接回填完成：${qualityResult.backfilledLinks} 个商品`);
+      } catch (error) { console.error("橱窗同步后评分同步失败", error); }
     }
     return result;
   } catch (error) {

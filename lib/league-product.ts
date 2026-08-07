@@ -215,7 +215,7 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
   return links;
 }
 
-export async function syncWindowQuality(leagueAccountId: string, talentAccountId: string): Promise<{ total: number; detailed: number; patchedShopIds: number; patchedLinks: number }> {
+export async function syncWindowQuality(leagueAccountId: string, talentAccountId: string): Promise<{ total: number; detailed: number; patchedShopIds: number; patchedLinks: number; backfilledLinks: number }> {
   const sql = getDb();
   const leagueAccount = await loadLeagueAccount(leagueAccountId);
   if (!leagueAccount) throw new Error("机构账号不存在");
@@ -370,5 +370,39 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     throw new Error(`评分同步失败：${errors[0]}`);
   }
   if (errors.length) console.warn("联盟数据同步部分失败", { leagueAccountId, talentAccountId, errors });
-  return { total: products.length, detailed, patchedShopIds, patchedLinks };
+  let backfilledLinks = 0;
+  try {
+    const candidates = await sql`
+      SELECT p.id AS product_id, p.product_url AS old_url, wp.promotion_link AS new_link
+      FROM talent_window_products wp
+      JOIN products p ON p.product_url IS DISTINCT FROM wp.promotion_link
+        AND (p.product_url = 'weixinstorehs/' || wp.product_id
+          OR (wp.out_product_id IS NOT NULL AND p.product_url = 'weixinstorehs/' || wp.out_product_id))
+      WHERE wp.account_id = ${talentAccountId}
+        AND wp.promotion_link IS NOT NULL
+    ` as Array<{ productId: string; oldUrl: string; newLink: string }>;
+    if (candidates.length > 0) {
+      const pIds = candidates.map(c => c.productId);
+      const newLinks = candidates.map(c => c.newLink);
+      await sql`
+        UPDATE products p SET product_url = t.new_link, updated_at = now()
+        FROM unnest(${pIds}::uuid[], ${newLinks}::text[]) AS t(id, new_link)
+        WHERE p.id = t.id
+      `;
+      const oldUrls = candidates.map(c => c.oldUrl);
+      await sql`
+        INSERT INTO product_link_history(product_id, url, replaced_by_url, source, changed_at)
+        SELECT t.id, t.old_url, t.new_link, 'league_backfill', now()
+        FROM unnest(${pIds}::uuid[], ${oldUrls}::text[], ${newLinks}::text[]) AS t(id, old_url, new_link)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM product_link_history h
+          WHERE h.product_id = t.id AND h.replaced_by_url = t.new_link AND h.source = 'league_backfill'
+        )
+      `;
+      backfilledLinks = candidates.length;
+    }
+  } catch (error) {
+    console.error("商品链接回填失败", error);
+  }
+  return { total: products.length, detailed, patchedShopIds, patchedLinks, backfilledLinks };
 }
