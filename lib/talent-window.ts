@@ -244,20 +244,20 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
     const stocks = detailRows.map(r => r.detail.stock);
     const sales = detailRows.map(r => r.detail.sales);
     const statuses = detailRows.map(r => r.detail.status);
-    const isHides = detailRows.map(r => r.detail.isHide);
+    const isHides = detailRows.map(r => r.detail.isHide === true ? 1 : r.detail.isHide === false ? 0 : null);
     const outProdIds = detailRows.map(r => r.detail.outProductId);
     const shopApps = detailRows.map(r => r.detail.shopAppid);
 
     await sql`
       UPDATE talent_window_products wp
       SET title = t.title, img_url = t.img_url, selling_price_fen = t.spf,
-          stock = t.stock, sales = t.sales, status = t.status, is_hide = t.is_hide,
+          stock = t.stock, sales = t.sales, status = t.status, is_hide = (t.is_hide = 1),
           out_product_id = coalesce(t.oid, out_product_id),
           shop_appid = coalesce(t.said, shop_appid),
           synced_at = now()
       FROM unnest(${uProductIds}::text[], ${titles}::text[], ${imgUrls}::text[],
                    ${spfs}::int[], ${stocks}::int[], ${sales}::int[],
-                   ${statuses}::int[], ${isHides}::boolean[],
+                   ${statuses}::int[], ${isHides}::int[],
                    ${outProdIds}::text[], ${shopApps}::text[]) AS t(id, title, img_url, spf, stock, sales, status, is_hide, oid, said)
       WHERE wp.account_id = ${accountId} AND wp.product_id = t.id
     `;

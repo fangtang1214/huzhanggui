@@ -42,10 +42,12 @@ export async function GET(request: Request) {
     const searchFrag = productSearchConditions(sql, search);
     const archived = url.searchParams.get("view") === "archived";
     const departmentId = url.searchParams.get("departmentId") || null; const categoryId = url.searchParams.get("categoryId") || null;
+    const locationId = url.searchParams.get("locationId") || null;
     const selectedPrices = Array.from(new Set(url.searchParams.getAll("price").filter((value) => /^\d+(?:\.\d{1,2})?$/.test(value)))).slice(0, 10000);
     const priceOrder = url.searchParams.get("priceOrder");
     const page = Math.max(1, Number(url.searchParams.get("page") || 1)); const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize") || 20))); const offset = (page - 1) * pageSize;
     const priceFilter = selectedPrices.length ? sql`AND p.price = ANY(${selectedPrices}::numeric[])` : sql``;
+    const locationFilter = locationId ? sql`AND EXISTS (SELECT 1 FROM samples sloc WHERE sloc.product_id = p.id AND (p.archived = true OR sloc.archived = false) AND sloc.current_location_id = ${locationId}::uuid)` : sql``;
     const orderBy = priceOrder === "asc" ? sql`p.price ASC NULLS LAST, p.created_at DESC` : priceOrder === "desc" ? sql`p.price DESC NULLS LAST, p.created_at DESC` : sql`p.created_at DESC`;
     const rows = await sql`
       SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.archived,
@@ -61,14 +63,14 @@ export async function GET(request: Request) {
       FROM products p LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users u ON u.id = p.business_contact_id
       LEFT JOIN samples s ON s.product_id = p.id AND (p.archived = true OR s.archived = false) LEFT JOIN product_departments pd ON pd.product_id = p.id
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
-      WHERE p.archived = ${archived} AND ${searchFrag}
-        AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-        ${priceFilter}
-      GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
+       WHERE p.archived = ${archived} AND ${searchFrag}
+         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
+         ${priceFilter} ${locationFilter}
+       GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = ${archived} AND ${searchFrag}
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-      ${priceFilter}`;
+      ${priceFilter} ${locationFilter}`;
     const priceOptions = await sql`
       SELECT p.price::text AS price, count(DISTINCT p.id)::int AS count
       FROM products p
@@ -76,6 +78,7 @@ export async function GET(request: Request) {
       WHERE p.archived = ${archived} AND p.price IS NOT NULL
         AND ${searchFrag}
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
+        ${locationFilter}
       GROUP BY p.price ORDER BY p.price ASC`;
     return ok({ rows, total: countRow.total, page, pageSize, priceOptions });
   } catch (error) { return apiError(error); }
