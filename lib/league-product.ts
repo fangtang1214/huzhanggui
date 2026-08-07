@@ -311,10 +311,10 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     const batch = products.slice(index, index + QUALITY_CONCURRENCY);
     const results = await Promise.all(batch.map(async (item) => {
       const sid = item.outProductId || item.productId;
-      const headSupplierLink = itemLinks.get(sid) || item.promotionLink;
+      const headSupplierLink = `weixinstorehs/${sid}`;
       const [qualityResult, promotionResult] = await Promise.allSettled([
         sid && item.shopAppid ? fetchLeagueProductDetail(leagueAccount, item.shopAppid, sid) : Promise.resolve(null),
-        headSupplierLink ? fetchLeagueItemPromotion(leagueAccount, headSupplierLink) : Promise.resolve(null),
+        sid ? fetchLeagueItemPromotion(leagueAccount, headSupplierLink) : Promise.resolve(null),
       ]);
       return { item, qualityResult, promotionResult };
     }));
