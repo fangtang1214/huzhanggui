@@ -162,6 +162,7 @@ export type LeagueItemPromotion = {
   serviceRatio: number | null;
   commissionType: number | null;
   planType: number | null;
+  promotionLink: string | null;
 };
 
 export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSupplierItemLink: string): Promise<LeagueItemPromotion> {
@@ -174,17 +175,23 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
         service_ratio?: number;
         normal_commission_info?: { ratio?: number };
       };
+      cooperative_info?: {
+        cooperative_status?: number;
+        link?: string;
+      };
     };
   }>(account, "/channels/ec/league/headsupplier/item/promotiondetail/get", {
     head_supplier_item_link: headSupplierItemLink,
   });
   const info = payload.item?.commission_info;
+  const coopLink = payload.item?.cooperative_info?.link?.trim() || null;
   return {
     commissionRatio: typeof info?.ratio === "number" ? info.ratio : null,
     normalCommissionRatio: typeof info?.normal_commission_info?.ratio === "number" ? info.normal_commission_info.ratio : null,
     serviceRatio: typeof info?.service_ratio === "number" ? info.service_ratio : null,
     commissionType: typeof info?.commission_type === "number" ? info.commission_type : null,
     planType: typeof info?.plan_type === "number" ? info.plan_type : null,
+    promotionLink: coopLink,
   };
 }
 
@@ -274,7 +281,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   for (const product of products) {
     const sid = product.outProductId || product.productId;
     const link = sid ? itemLinks.get(sid) : undefined;
-    if (link && link !== product.promotionLink) {
+    if (link && !product.promotionLink) {
       linkPatches.push({ id: product.id, link });
       product.promotionLink = link;
       patchedLinks += 1;
@@ -297,15 +304,17 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     shopName: string | null; shopScore: number | null; shopIcon: string | null; goodEvaluationRatio: number | null;
     commissionRatio: number | null; normalCommissionRatio: number | null; serviceRatio: number | null;
     commissionType: number | null; planType: number | null;
+    promotionLink: string | null;
   }> = [];
 
   for (let index = 0; index < products.length; index += QUALITY_CONCURRENCY) {
     const batch = products.slice(index, index + QUALITY_CONCURRENCY);
     const results = await Promise.all(batch.map(async (item) => {
       const sid = item.outProductId || item.productId;
+      const headSupplierLink = itemLinks.get(sid) || item.promotionLink;
       const [qualityResult, promotionResult] = await Promise.allSettled([
         sid && item.shopAppid ? fetchLeagueProductDetail(leagueAccount, item.shopAppid, sid) : Promise.resolve(null),
-        item.promotionLink ? fetchLeagueItemPromotion(leagueAccount, item.promotionLink) : Promise.resolve(null),
+        headSupplierLink ? fetchLeagueItemPromotion(leagueAccount, headSupplierLink) : Promise.resolve(null),
       ]);
       return { item, qualityResult, promotionResult };
     }));
@@ -328,6 +337,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
         serviceRatio: promotion?.serviceRatio ?? null,
         commissionType: promotion?.commissionType ?? null,
         planType: promotion?.planType ?? null,
+        promotionLink: promotion?.promotionLink ?? null,
       });
     }
   }
@@ -343,6 +353,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     const serviceRatios = qualityRows.map(r => r.serviceRatio);
     const commTypes = qualityRows.map(r => r.commissionType);
     const planTypes = qualityRows.map(r => r.planType);
+    const realLinks = qualityRows.map(r => r.promotionLink);
 
     await sql`
       UPDATE talent_window_products wp
@@ -355,12 +366,14 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
           service_ratio = coalesce(t.sr, service_ratio),
           commission_type = coalesce(t.ct, commission_type),
           plan_type = coalesce(t.pt, plan_type),
+          promotion_link = coalesce(t.rl, promotion_link),
           quality_synced_at = now()
       FROM unnest(${qIds}::uuid[], ${shopNames}::text[], ${shopScores}::int[],
                    ${shopIcons}::text[], ${goodRatios}::int[],
                    ${commRatios}::int[], ${normalCommRatios}::int[],
-                   ${serviceRatios}::int[], ${commTypes}::int[], ${planTypes}::int[])
-           AS t(id, sn, ss, si, gr, cr, ncr, sr, ct, pt)
+                   ${serviceRatios}::int[], ${commTypes}::int[], ${planTypes}::int[],
+                   ${realLinks}::text[])
+           AS t(id, sn, ss, si, gr, cr, ncr, sr, ct, pt, rl)
       WHERE wp.id = t.id
     `;
     detailed = qualityRows.length;
