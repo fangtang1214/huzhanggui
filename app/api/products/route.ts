@@ -9,7 +9,7 @@ import { productSearchConditions } from "@/lib/search";
 import { syncProductImageQueue, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission";
-import { setCurrentProductApiIds } from "@/lib/product-api-ids";
+import { setCurrentProductApiId } from "@/lib/product-api-ids";
 import { mergeWindowRegistrationCooperation } from "@/lib/window-registration";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
@@ -37,7 +37,6 @@ const productSchema = z.object({
   submissionMode: z.enum(["add_samples", "update_only"]).default("add_samples"),
   windowProductId: z.string().uuid().optional().nullable(),
   apiProductId: z.string().trim().max(100).optional().nullable(),
-  apiOutProductId: z.string().trim().max(100).optional().nullable(),
 }).superRefine((input, context) => {
   if (input.matchDecision === "matched" && !input.matchedProductId) context.addIssue({ code: "custom", path: ["matchedProductId"], message: "请选择确认的同款商品" });
   if (input.submissionMode === "add_samples" && !input.specs.length) context.addIssue({ code: "custom", path: ["specs"], message: "请至少添加一行规格与数量" });
@@ -103,14 +102,12 @@ export async function POST(request: Request) {
     const arrivedAt = input.arrivedAt || null;
     const initialDepartmentId = input.initialDepartmentId || null;
     const [windowRegistration] = input.windowProductId ? await sql`
-      SELECT w.id, w.product_id, w.out_product_id, w.promotion_product_id, w.promotion_out_product_id,
-             w.shop_name, w.selling_price_fen, w.promotion_link, w.service_ratio, w.shop_score
+      SELECT w.id, w.product_id, w.shop_name, w.selling_price_fen, w.promotion_link, w.service_ratio, w.shop_score
       FROM talent_window_products w
       WHERE w.id = ${input.windowProductId}
     ` : [null];
     if (input.windowProductId && !windowRegistration) return Response.json({ ok: false, message: "橱窗商品已不存在，请返回橱窗重新登记" }, { status: 404 });
-    const registrationApiProductId = windowRegistration?.promotionProductId || windowRegistration?.productId || input.apiProductId;
-    const registrationApiOutProductId = windowRegistration?.promotionOutProductId || windowRegistration?.outProductId || input.apiOutProductId;
+    const registrationApiProductId = windowRegistration?.productId || input.apiProductId;
     const cooperation = mergeWindowRegistrationCooperation(windowRegistration, {
       storeName: nullable(input.storeName),
       price: input.price ?? null,
@@ -123,14 +120,11 @@ export async function POST(request: Request) {
     const [location] = !updateOnly && input.initialLocationId ? await sql`SELECT id FROM locations WHERE id = ${input.initialLocationId} AND department_id = ${initialDepartmentId} AND active = true` : [null];
     if (!updateOnly && input.initialLocationId && !location) return Response.json({ ok: false, message: "初始存放位置不属于所选部门" }, { status: 400 });
     const [run] = await sql`SELECT * FROM image_match_runs WHERE id = ${input.matchRunId} AND user_id = ${user.id}`;
-    const apiProductIds = [registrationApiProductId, registrationApiOutProductId].filter(Boolean) as string[];
-    const [apiMatchedProduct] = apiProductIds.length ? await sql`
+    const [apiMatchedProduct] = registrationApiProductId ? await sql`
       SELECT p.id, p.sku
       FROM product_api_ids pai JOIN products p ON p.id = pai.product_id
       WHERE pai.is_current = true AND p.archived = false
-        AND ((pai.id_type = 'product_id' AND pai.value = ${registrationApiProductId || null})
-          OR (pai.id_type = 'out_product_id' AND pai.value = ${registrationApiOutProductId || null}))
-      ORDER BY CASE WHEN pai.id_type = 'product_id' THEN 0 ELSE 1 END
+        AND pai.value = ${registrationApiProductId}
       LIMIT 1
     ` : [null];
     const effectiveMatchDecision = apiMatchedProduct ? "matched" : input.matchDecision;
@@ -171,7 +165,7 @@ export async function POST(request: Request) {
           VALUES(${sku},${input.name},${input.businessContactId || null},${cooperation.storeName},${cooperation.price},${cooperation.productUrl},${cooperation.commission},${cooperation.storeRating},${cooperation.supplyChain},${cooperation.cooperationMechanism},${input.categoryId || null},${tx.json(input.imageUrls)},${nullable(input.notes)},${user.id}) RETURNING *`;
         product = inserted[0];
       }
-      await setCurrentProductApiIds(tx, String(product.id), { productId: registrationApiProductId, outProductId: registrationApiOutProductId });
+      await setCurrentProductApiId(tx, String(product.id), registrationApiProductId);
       if (input.windowProductId) await tx`
         UPDATE talent_window_products
         SET promotion_confirmed = promotion_link IS NOT NULL,

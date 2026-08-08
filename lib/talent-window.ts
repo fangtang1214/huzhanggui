@@ -26,14 +26,12 @@ export type TalentAccountRow = {
 export type WindowListItem = {
   productId: string;
   shopAppid: string | null;
-  outProductId: string | null;
   productSource: number;
 };
 
 export type WindowProductDetail = {
   productId: string;
   shopAppid: string | null;
-  outProductId: string | null;
   title: string;
   imgUrl: string;
   sellingPriceFen: number | null;
@@ -141,7 +139,7 @@ export async function fetchWindowProductList(account: TalentAccountRow): Promise
     const body: Record<string, unknown> = { page_size: 500 };
     if (lastBuffer) body.last_buffer = lastBuffer;
     const payload = await callWindowApi<{
-      products?: Array<{ product_id?: string | number; appid?: string; out_product_id?: string; product_source?: number }>;
+      products?: Array<{ product_id?: string | number; appid?: string; product_source?: number }>;
       last_buffer?: string;
     }>(account, "/channels/ec/talent/window/product/list/get", body);
     const products = Array.isArray(payload.products) ? payload.products : [];
@@ -150,7 +148,6 @@ export async function fetchWindowProductList(account: TalentAccountRow): Promise
       items.push({
         productId: safeText(item.product_id) || "",
         shopAppid: safeText(item.appid),
-        outProductId: safeText(item.out_product_id),
         productSource: Number(item.product_source) || 0,
       });
     }
@@ -165,7 +162,6 @@ export async function fetchWindowProductDetail(account: TalentAccountRow, produc
     product?: {
       product_id?: string | number;
       appid?: string;
-      out_product_id?: string;
       title?: string;
       img_url?: string;
       selling_price?: number;
@@ -179,7 +175,6 @@ export async function fetchWindowProductDetail(account: TalentAccountRow, produc
   return {
     productId: String(product.product_id ?? productId),
     shopAppid: safeText(product.appid),
-    outProductId: safeText(product.out_product_id),
     title: product.title || "",
     imgUrl: product.img_url || "",
     sellingPriceFen: typeof product.selling_price === "number" ? product.selling_price : null,
@@ -201,16 +196,15 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
 
   if (items.length > 0) {
     const productIds = items.map(i => i.productId);
-    const outProductIds = items.map(i => i.outProductId);
     const shopAppids = items.map(i => i.shopAppid);
     const productSources = items.map(i => i.productSource);
 
     await sql`
-      INSERT INTO talent_window_products (account_id, product_id, out_product_id, shop_appid, product_source, synced_at)
-      SELECT ${accountId}, t.pid, t.oid, t.said, t.ps, now()
-      FROM unnest(${productIds}::text[], ${outProductIds}::text[], ${shopAppids}::text[], ${productSources}::int[]) AS t(pid, oid, said, ps)
+      INSERT INTO talent_window_products (account_id, product_id, shop_appid, product_source, synced_at)
+      SELECT ${accountId}, t.pid, t.said, t.ps, now()
+      FROM unnest(${productIds}::text[], ${shopAppids}::text[], ${productSources}::int[]) AS t(pid, said, ps)
       ON CONFLICT (account_id, product_id) DO UPDATE
-      SET out_product_id = EXCLUDED.out_product_id, shop_appid = EXCLUDED.shop_appid,
+      SET shop_appid = EXCLUDED.shop_appid,
           product_source = EXCLUDED.product_source, synced_at = now()
     `;
   }
@@ -241,20 +235,18 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
     const sales = detailRows.map(r => r.detail.sales);
     const statuses = detailRows.map(r => r.detail.status);
     const isHides = detailRows.map(r => r.detail.isHide === true ? 1 : r.detail.isHide === false ? 0 : null);
-    const outProdIds = detailRows.map(r => r.detail.outProductId);
     const shopApps = detailRows.map(r => r.detail.shopAppid);
 
     await sql`
       UPDATE talent_window_products wp
       SET title = t.title, img_url = t.img_url, selling_price_fen = t.spf,
           stock = t.stock, sales = t.sales, status = t.status, is_hide = (t.is_hide = 1),
-          out_product_id = coalesce(t.oid, out_product_id),
           shop_appid = coalesce(t.said, shop_appid),
           synced_at = now()
       FROM unnest(${uProductIds}::text[], ${titles}::text[], ${imgUrls}::text[],
                    ${spfs}::int[], ${stocks}::int[], ${sales}::int[],
                    ${statuses}::int[], ${isHides}::int[],
-                   ${outProdIds}::text[], ${shopApps}::text[]) AS t(id, title, img_url, spf, stock, sales, status, is_hide, oid, said)
+                   ${shopApps}::text[]) AS t(id, title, img_url, spf, stock, sales, status, is_hide, said)
       WHERE wp.account_id = ${accountId} AND wp.product_id = t.id
     `;
   }

@@ -5,7 +5,7 @@ import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { IMAGE_MODEL, MATCH_THRESHOLDS, syncProductImageQueue } from "@/lib/image-matching";
 import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
-import { setCurrentProductApiIds } from "@/lib/product-api-ids";
+import { setCurrentProductApiId } from "@/lib/product-api-ids";
 
 function dbValue(value: unknown): string | number | boolean | null {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null;
@@ -71,10 +71,7 @@ export async function POST(request: Request) {
         VALUES(${sku},${String(submitted.name || "纠正后的商品")},${dbValue(submitted.businessContactId)},${dbValue(submitted.storeName)},${dbValue(submitted.price)},${dbValue(submitted.productUrl)},${dbValue(submitted.commission)},${dbValue(submitted.storeRating)},${dbValue(submitted.supplyChain)},${dbValue(submitted.cooperationMechanism)},${dbValue(submitted.categoryId)},${tx.json(images)},${dbValue(submitted.notes)},${user.id}) RETURNING id,sku`;
       for (const departmentId of (submitted.departmentIds as string[] || [])) await tx`INSERT INTO product_departments(product_id,department_id) VALUES(${newProduct.id},${departmentId})`;
       for (const tagId of (submitted.tagIds as string[] || [])) await tx`INSERT INTO product_tags(product_id,tag_id) VALUES(${newProduct.id},${tagId})`;
-      await setCurrentProductApiIds(tx, String(newProduct.id), {
-        productId: typeof submitted.apiProductId === "string" ? submitted.apiProductId : null,
-        outProductId: typeof submitted.apiOutProductId === "string" ? submitted.apiOutProductId : null,
-      });
+      await setCurrentProductApiId(tx, String(newProduct.id), typeof submitted.apiProductId === "string" ? submitted.apiProductId : null);
       const sampleIds = (batch.sampleIds as string[] || []);
       if (sampleIds.length) {
         const movedSamples = await tx`SELECT id,code FROM samples WHERE id=ANY(${sampleIds}::uuid[]) AND product_id=${current.id}`;

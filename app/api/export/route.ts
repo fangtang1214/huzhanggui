@@ -14,8 +14,7 @@ export async function GET(request: Request) {
       const rows = await sql`
         SELECT p.sku, p.name, c.name AS category_name, u.name AS business_contact_name, p.store_name, p.price,
                p.product_url,
-               (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'product_id' AND pai.is_current = true LIMIT 1) AS api_product_id,
-               (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'out_product_id' AND pai.is_current = true LIMIT 1) AS api_out_product_id,
+               (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.is_current = true LIMIT 1) AS api_product_id,
                p.commission, p.store_rating, p.supply_chain, p.cooperation_mechanism,
                p.notes AS product_notes, p.created_at AS product_created_at, p.updated_at AS product_updated_at,
                (SELECT string_agg(DISTINCT department.name, '、')
@@ -49,7 +48,7 @@ export async function GET(request: Request) {
       workbook = createXlsx("商品与样品明细", [
         { header: "货号", key: "sku", width: 18 }, { header: "商品名称", key: "name", width: 28 }, { header: "分类", key: "categoryName", width: 14 },
         { header: "选品部门", key: "departments", width: 24 }, { header: "商务对接人", key: "businessContactName", width: 16 }, { header: "店铺名", key: "storeName", width: 22 },
-        { header: "价格", key: "price", width: 12 }, { header: "商品链接", key: "productUrl", width: 36 }, { header: "product_id", key: "apiProductId", width: 20 }, { header: "out_product_id", key: "apiOutProductId", width: 20 }, { header: "佣金 / 服务费率", key: "commission", width: 16 },
+        { header: "价格", key: "price", width: 12 }, { header: "商品链接", key: "productUrl", width: 36 }, { header: "商品 ID", key: "apiProductId", width: 20 }, { header: "佣金 / 服务费率", key: "commission", width: 16 },
         { header: "店铺评分", key: "storeRating", width: 12 }, { header: "供应链/机构", key: "supplyChain", width: 20 }, { header: "合作机制", key: "cooperationMechanism", width: 28 },
         { header: "标签", key: "tags", width: 18 }, { header: "商品备注", key: "productNotes", width: 28 }, { header: "商品创建时间", key: "productCreatedAt", width: 21 }, { header: "商品更新时间", key: "productUpdatedAt", width: 21 },
         { header: "实物编号", key: "sampleCode", width: 24 }, { header: "样品规格", key: "sampleSpec", width: 16 }, { header: "到样日期", key: "sampleArrivedAt", width: 14 },

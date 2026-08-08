@@ -21,7 +21,7 @@ export async function GET(request: Request) {
     `;
     const runId = requestedRunId || runs[0]?.id || null;
     const items = runId ? await sql`
-      SELECT i.id, i.product_id, i.old_product_url, i.new_product_url, i.api_product_id, i.api_out_product_id, i.status, i.error,
+      SELECT i.id, i.product_id, i.old_product_url, i.new_product_url, i.api_product_id, i.status, i.error,
              p.sku, p.name AS product_name
       FROM product_link_correction_items i JOIN products p ON p.id = i.product_id
       WHERE i.run_id = ${runId}

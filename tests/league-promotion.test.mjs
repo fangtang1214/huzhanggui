@@ -1,12 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { selectLeaguePromotionCandidate } from "../lib/league-product.ts";
+import { parseLeagueProductQuality, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
 
 function candidate(overrides = {}) {
   return {
     promotionLink: "weixinstorehs/100",
-    productId: "product-1",
-    outProductId: "out-1",
     commissionRatio: 1000,
     normalCommissionRatio: 800,
     serviceRatio: 10000,
@@ -59,4 +57,18 @@ test("没有机构推广候选时保持待确认", () => {
   const selection = selectLeaguePromotionCandidate([]);
   assert.equal(selection.selected, null);
   assert.equal(selection.requiresChoice, false);
+});
+
+test("按官方商品详情层级解析店铺评分与好评率", () => {
+  assert.deepEqual(parseLeagueProductQuality({
+    product: {
+      product_info: { good_evaluation_ratio: 92900 },
+      shop: { name: "测试小店", score: 472, icon: "https://example.com/shop.png" },
+    },
+  }), {
+    shopName: "测试小店",
+    shopScore: 472,
+    shopIcon: "https://example.com/shop.png",
+    goodEvaluationRatio: 92900,
+  });
 });

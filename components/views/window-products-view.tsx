@@ -8,8 +8,8 @@ import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast 
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
-type PromotionCandidate = { id: string; accountId: string; accountName: string; accountIsPrimary: boolean; headSupplierItemLink: string; promotionLink: string; productId?: string | null; outProductId?: string | null; serviceRatio?: number | null; commissionRatio?: number | null };
-type WindowProduct = { id: string; productId: string; outProductId?: string | null; promotionProductId?: string | null; promotionOutProductId?: string | null; promotionError?: string | null; promotionSyncedAt?: string | null; promotionStatus: "pending" | "selected" | "confirmed" | "needs_choice" | "needs_replacement"; promotionConfirmed?: boolean; promotionAccountName?: string | null; promotionCandidates: PromotionCandidate[]; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link?: string | null; registeredProductId?: string | null; registeredSku?: string | null; registeredProductUrl?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null; serviceRatio?: number | null };
+type PromotionCandidate = { id: string; accountId: string; accountName: string; accountIsPrimary: boolean; headSupplierItemLink: string; promotionLink: string; serviceRatio?: number | null; commissionRatio?: number | null };
+type WindowProduct = { id: string; productId: string; promotionError?: string | null; promotionSyncedAt?: string | null; promotionStatus: "pending" | "selected" | "confirmed" | "needs_choice" | "needs_replacement"; promotionConfirmed?: boolean; promotionAccountName?: string | null; promotionCandidates: PromotionCandidate[]; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link?: string | null; registeredProductId?: string | null; registeredSku?: string | null; registeredProductUrl?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null; serviceRatio?: number | null };
 type LeagueState = { activeCount: number; hasPrimary: boolean };
 type SortField = "" | "price" | "score" | "eval";
 
@@ -61,7 +61,6 @@ export function WindowProductsView() {
       ? products.filter((item) =>
           (item.title || "").toLowerCase().includes(keyword) ||
           item.productId.includes(keyword) ||
-          (item.outProductId || "").includes(keyword) ||
           (item.shopName || "").toLowerCase().includes(keyword) ||
           (item.link || "").toLowerCase().includes(keyword))
       : [...products];
@@ -170,8 +169,7 @@ export function WindowProductsView() {
         price: typeof product.sellingPriceFen === "number" ? (product.sellingPriceFen / 100).toFixed(2) : "",
          productUrl: product.link || "",
          windowProductId: product.id,
-         apiProductId: product.promotionProductId || product.productId || "",
-         apiOutProductId: product.promotionOutProductId || product.outProductId || "",
+         apiProductId: product.productId || "",
         commission,
         storeName: product.shopName || "",
         storeRating: typeof product.shopScore === "number" ? (product.shopScore / 100).toFixed(2) : "",
@@ -239,7 +237,7 @@ export function WindowProductsView() {
               <small style={{ color: "var(--muted)" }}>{item.isHide ? "橱窗中已隐藏" : ""}{item.sales ? ` · 销量 ${item.sales}` : ""}</small>
             </div>
           </div></td>
-          <td><div>{item.shopScore ? <b>{scoreText(item.shopScore)}</b> : "—"}{item.shopName ? <small style={{ display: "block", color: "var(--muted)", fontSize: 11 }}>{item.shopName}</small> : ""}</div></td>
+          <td><div>{item.shopScore != null ? <b>{scoreText(item.shopScore)}</b> : "—"}{item.shopName ? <small style={{ display: "block", color: "var(--muted)", fontSize: 11 }}>{item.shopName}</small> : ""}</div></td>
           <td><b className="money-cell">{fenToYuan(item.sellingPriceFen) ? `¥${fenToYuan(item.sellingPriceFen)}` : "—"}</b></td>
           <td><b style={{ color: (item.goodEvaluationRatio ?? 0) >= 90000 ? "var(--green)" : (item.goodEvaluationRatio ?? 0) > 0 ? "var(--amber)" : "inherit" }}>{ratioText(item.goodEvaluationRatio)}</b></td>
           <td><b>{typeof item.stock === "number" ? item.stock : "—"}</b></td>

@@ -1,6 +1,5 @@
 import { getDb } from "./db";
 import { fetchLeagueCooperativeItemLinks, loadActiveLeagueAccounts, resolveLeaguePromotion, type CooperativeItem } from "./league-product";
-import { setCurrentProductApiIds } from "./product-api-ids";
 
 const ITEM_CONCURRENCY = 5;
 
@@ -27,14 +26,13 @@ export async function processProductLinkCorrection(runId: string) {
     }));
     const items = await sql`
       SELECT i.id, i.product_id, i.old_product_url, p.sku,
-             (SELECT value FROM product_api_ids WHERE product_id = p.id AND id_type = 'product_id' AND is_current = true LIMIT 1) AS api_product_id,
-             (SELECT value FROM product_api_ids WHERE product_id = p.id AND id_type = 'out_product_id' AND is_current = true LIMIT 1) AS api_out_product_id
+             (SELECT value FROM product_api_ids WHERE product_id = p.id AND is_current = true LIMIT 1) AS api_product_id
       FROM product_link_correction_items i
       JOIN products p ON p.id = i.product_id
       WHERE i.run_id = ${runId} AND i.status = 'pending'
       ORDER BY i.created_at, i.id
     `;
-    const typedItems = items as unknown as Array<{ id: string; productId: string; oldProductUrl: string | null; sku: string; apiProductId: string | null; apiOutProductId: string | null }>;
+    const typedItems = items as unknown as Array<{ id: string; productId: string; oldProductUrl: string | null; sku: string; apiProductId: string | null }>;
     for (let index = 0; index < typedItems.length; index += ITEM_CONCURRENCY) {
       const batch = typedItems.slice(index, index + ITEM_CONCURRENCY);
       await Promise.all(batch.map((item) => processCorrectionItem(sql, runId, run?.requestedBy || null, accounts, directLookupMaps, item)));
@@ -59,21 +57,19 @@ async function processCorrectionItem(
   changedBy: string | null,
   accounts: Awaited<ReturnType<typeof loadActiveLeagueAccounts>>,
   directLookupMaps: Map<string, CooperativeItem[]>[],
-  item: { id: string; productId: string; oldProductUrl: string | null; sku: string; apiProductId: string | null; apiOutProductId: string | null },
+  item: { id: string; productId: string; oldProductUrl: string | null; sku: string; apiProductId: string | null },
 ) {
   try {
     const result = await resolveLeaguePromotion(accounts, {
       productId: item.apiProductId || "",
-      outProductId: item.apiOutProductId,
       existingLink: item.oldProductUrl,
     }, directLookupMaps);
-    const hasId = Boolean(result.productId || result.outProductId);
+    const hasId = Boolean(item.apiProductId);
     const hasLink = Boolean(result.promotionLink);
     const succeeded = await sql.begin(async (tx) => {
       const [product] = await tx`SELECT id, product_url, archived FROM products WHERE id = ${item.productId} FOR UPDATE`;
       if (!product || product.archived) throw new Error("商品已归档或不存在");
       if (String(product.productUrl || "") !== String(item.oldProductUrl || "")) throw new Error("商品当前链接已发生变化，请重新校正");
-      await setCurrentProductApiIds(tx, item.productId, { productId: result.productId, outProductId: result.outProductId });
       if (hasLink && result.promotionLink !== product.productUrl) {
         if (product.productUrl) await tx`
           INSERT INTO product_link_history(product_id, url, replaced_by_url, source, source_entity_id, changed_by)
@@ -84,7 +80,7 @@ async function processCorrectionItem(
       if (!hasLink) {
         await tx`
           UPDATE product_link_correction_items
-          SET status = 'failed', api_product_id = ${result.productId}, api_out_product_id = ${result.outProductId},
+          SET status = 'failed', api_product_id = ${item.apiProductId},
               error = ${hasId ? "接口返回商品 ID，但未返回推广链接" : result.error || "未获取到机构推广链接"}, completed_at = now(), updated_at = now()
           WHERE id = ${item.id}
         `;
@@ -92,7 +88,7 @@ async function processCorrectionItem(
       }
       await tx`
         UPDATE product_link_correction_items
-        SET status = 'success', new_product_url = ${result.promotionLink}, api_product_id = ${result.productId}, api_out_product_id = ${result.outProductId}, error = null, completed_at = now(), updated_at = now()
+        SET status = 'success', new_product_url = ${result.promotionLink}, api_product_id = ${item.apiProductId}, error = null, completed_at = now(), updated_at = now()
         WHERE id = ${item.id}
       `;
       return true;

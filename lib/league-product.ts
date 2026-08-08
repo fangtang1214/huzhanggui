@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { setCurrentProductApiIds } from "./product-api-ids";
+import { setCurrentProductApiId } from "./product-api-ids";
 import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 
 const API_BASE = "https://api.weixin.qq.com";
@@ -29,6 +29,31 @@ export type LeagueProductQuality = {
   shopIcon: string | null;
   goodEvaluationRatio: number | null;
 };
+
+type LeagueProductDetailItem = {
+  product_info?: {
+    title?: string;
+    head_imgs?: string[];
+    good_evaluation_ratio?: number;
+  };
+  shop?: {
+    name?: string;
+    score?: number;
+    icon?: string;
+  };
+};
+
+export function parseLeagueProductQuality(payload: { product?: LeagueProductDetailItem; item?: LeagueProductDetailItem }): LeagueProductQuality {
+  const detail = payload.product || payload.item;
+  const info = detail?.product_info;
+  const shop = detail?.shop;
+  return {
+    shopName: safeText(shop?.name),
+    shopScore: typeof shop?.score === "number" ? shop.score : null,
+    shopIcon: safeText(shop?.icon),
+    goodEvaluationRatio: typeof info?.good_evaluation_ratio === "number" ? info.good_evaluation_ratio : null,
+  };
+}
 
 export class LeagueApiError extends Error {
   constructor(public errcode: number, message: string) {
@@ -127,19 +152,7 @@ export async function fetchLeagueProductDetail(
   shopAppid: string,
   productId: string,
 ): Promise<LeagueProductQuality> {
-  type DetailItem = {
-    product_info?: {
-      title?: string;
-      head_imgs?: string[];
-      good_evaluation_ratio?: number;
-    };
-    shop?: {
-      name?: string;
-      score?: number;
-      icon?: string;
-    };
-  };
-  const payload = await callLeagueApi<{ item?: DetailItem; product?: DetailItem }>(
+  const payload = await callLeagueApi<{ product?: LeagueProductDetailItem; item?: LeagueProductDetailItem }>(
     account,
     "/channels/ec/league/headsupplier/productdetail/get",
     {
@@ -147,21 +160,15 @@ export async function fetchLeagueProductDetail(
       product_id: (Number(productId) || 0),
     },
   );
-  const detail = payload.item || payload.product;
-  const info = detail?.product_info;
-  const shop = detail?.shop;
-  return {
-    shopName: shop?.name || null,
-    shopScore: typeof shop?.score === "number" ? shop.score : null,
-    shopIcon: shop?.icon || null,
-    goodEvaluationRatio: typeof info?.good_evaluation_ratio === "number" ? info.good_evaluation_ratio : null,
-  };
+  const quality = parseLeagueProductQuality(payload);
+  if (quality.shopName === null && quality.shopScore === null && quality.goodEvaluationRatio === null) {
+    throw new Error("联盟商品详情未返回店铺名称、评分或好评率");
+  }
+  return quality;
 }
 
 export type LeagueItemPromotion = {
   headSupplierItemLink: string;
-  productId: string | null;
-  outProductId: string | null;
   commissionRatio: number | null;
   normalCommissionRatio: number | null;
   serviceRatio: number | null;
@@ -176,8 +183,6 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
       head_supplier_item_link?: string;
       product_promotion_link?: string;
       promotion_link?: string;
-      product_id?: number | string;
-      out_product_id?: number | string;
       commission_info?: {
         plan_type?: number;
         commission_type?: number;
@@ -200,8 +205,6 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
   const coopLink = safeText(headSupplierItemLink);
   return {
     headSupplierItemLink,
-    productId: safeText(payload.item?.product_id),
-    outProductId: safeText(payload.item?.out_product_id),
     commissionRatio: typeof info?.ratio === "number" ? info.ratio : null,
     normalCommissionRatio: typeof info?.normal_commission_info?.ratio === "number" ? info.normal_commission_info.ratio : null,
     serviceRatio: typeof info?.service_ratio === "number" ? info.service_ratio : null,
@@ -211,7 +214,7 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
   };
 }
 
-export type CooperativeItem = { productId: string; outProductId: string | null; link: string };
+export type CooperativeItem = { productId: string; link: string };
 
 export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, CooperativeItem[]>> {
   const links = new Map<string, CooperativeItem[]>();
@@ -225,7 +228,7 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
     let nextKey = "";
     for (let page = 0; page < 500; page += 1) {
       const payload = await callLeagueApi<{
-        list?: Array<{ product_id?: number | string; out_product_id?: number | string; head_supplier_item_link?: string }>;
+        list?: Array<{ product_id?: number | string; head_supplier_item_link?: string }>;
         next_key?: string;
       }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
         commission_type: commissionType,
@@ -235,12 +238,10 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
       const list = Array.isArray(payload.list) ? payload.list : [];
       for (const item of list) {
         const productId = safeText(item.product_id);
-        const outProductId = safeText(item.out_product_id);
         const link = safeText(item.head_supplier_item_link);
         if (productId && link) {
-          const cooperativeItem = { productId, outProductId, link };
+          const cooperativeItem = { productId, link };
           add(productId, cooperativeItem);
-          add(outProductId, cooperativeItem);
         }
       }
       const next = safeText(payload.next_key);
@@ -264,8 +265,6 @@ export async function loadActiveLeagueAccounts(): Promise<LeagueAccountRow[]> {
 
 export type LeaguePromotionResolution = {
   promotionLink: string | null;
-  productId: string | null;
-  outProductId: string | null;
   commissionRatio: number | null;
   normalCommissionRatio: number | null;
   serviceRatio: number | null;
@@ -310,7 +309,7 @@ export function selectLeaguePromotionCandidate(candidates: LeaguePromotionCandid
 
 export async function resolveLeaguePromotionCandidates(
   accounts: LeagueAccountRow[],
-  item: { productId: string; outProductId?: string | null; existingLink?: string | null },
+  item: { productId: string; existingLink?: string | null },
   cooperativeItems?: Map<string, CooperativeItem[]>[],
 ): Promise<{ candidates: LeaguePromotionCandidate[]; errors: string[] }> {
   const resolved = await Promise.all(accounts.map(async (account, accountIndex) => {
@@ -322,10 +321,7 @@ export async function resolveLeaguePromotionCandidates(
         return { candidates: [] as LeaguePromotionCandidate[], errors: [`${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`] };
       }
     }
-    const idMatches = [
-      ...(cooperative.get(item.productId) || []),
-      ...(item.outProductId ? cooperative.get(item.outProductId) || [] : []),
-    ];
+    const idMatches = cooperative.get(item.productId) || [];
     const linkMatches = idMatches.length || !item.existingLink
       ? []
       : Array.from(cooperative.values()).flat().filter((entry) => entry.link === item.existingLink);
@@ -340,8 +336,6 @@ export async function resolveLeaguePromotionCandidates(
         const promotionLink = safeText(promotion.promotionLink) || match.link;
         candidates.push({
           promotionLink,
-          productId: promotion.productId || match.productId,
-          outProductId: promotion.outProductId || match.outProductId || item.outProductId || null,
           commissionRatio: promotion.commissionRatio,
           normalCommissionRatio: promotion.normalCommissionRatio,
           serviceRatio: promotion.serviceRatio,
@@ -367,7 +361,7 @@ export async function resolveLeaguePromotionCandidates(
 
 export async function resolveLeaguePromotion(
   accounts: LeagueAccountRow[],
-  item: { productId: string; outProductId?: string | null; existingLink?: string | null },
+  item: { productId: string; existingLink?: string | null },
   cooperativeItems?: Map<string, CooperativeItem[]>[],
 ): Promise<LeaguePromotionResolution> {
   const resolved = await resolveLeaguePromotionCandidates(accounts, item, cooperativeItems);
@@ -376,7 +370,7 @@ export async function resolveLeaguePromotion(
   const error = selection.requiresChoice
     ? "多个机构返回相同最高服务费率，请人工选择推广链接"
     : resolved.errors[0] || "未找到可用的机构推广商品";
-  return { promotionLink: null, productId: null, outProductId: item.outProductId || null, commissionRatio: null, normalCommissionRatio: null, serviceRatio: null, commissionType: null, planType: null, accountId: null, error };
+  return { promotionLink: null, commissionRatio: null, normalCommissionRatio: null, serviceRatio: null, commissionType: null, planType: null, accountId: null, error };
 }
 
 export async function syncWindowPromotions(talentAccountId: string) {
@@ -384,7 +378,7 @@ export async function syncWindowPromotions(talentAccountId: string) {
   const startedAt = Date.now();
   const accounts = await loadActiveLeagueAccounts();
   const rows = await sql`
-    SELECT id, product_id, out_product_id, shop_appid, promotion_link, promotion_confirmed
+    SELECT id, product_id, shop_appid, promotion_link, promotion_confirmed
     FROM talent_window_products
     WHERE account_id = ${talentAccountId}
     ORDER BY synced_at DESC
@@ -407,31 +401,30 @@ export async function syncWindowPromotions(talentAccountId: string) {
   }));
   const cooperativeItems = cooperativeLoads.map((load) => load.items);
   const cooperativeErrors = cooperativeLoads.map((load) => load.error).filter(Boolean) as string[];
-  const qualityAccount = accounts.find((account) => account.isPrimary) || accounts[0];
   let detailed = 0;
   const concurrency = 5;
   for (let index = 0; index < rows.length; index += concurrency) {
     const batch = rows.slice(index, index + concurrency);
     const resolutions = await Promise.all(batch.map(async (row) => {
-      const promotionTask = resolveLeaguePromotionCandidates(accounts, {
+      const resolved = await resolveLeaguePromotionCandidates(accounts, {
         productId: String(row.productId),
-        outProductId: row.outProductId ? String(row.outProductId) : null,
         existingLink: row.promotionLink ? String(row.promotionLink) : null,
       }, cooperativeItems);
-      const sourceId = row.productId;
-      const qualityTask = qualityAccount && row.shopAppid && sourceId
-        ? fetchLeagueProductDetail(qualityAccount, String(row.shopAppid), String(sourceId)).catch((error) => {
-            console.warn("橱窗商品评分获取失败", error);
+      const selection = selectLeaguePromotionCandidate(resolved.candidates);
+      const selectedAccount = selection.selected
+        ? accounts.find((account) => account.id === selection.selected?.accountId) || null
+        : null;
+      const quality = selectedAccount && row.shopAppid
+        ? await fetchLeagueProductDetail(selectedAccount, String(row.shopAppid), String(row.productId)).catch((error) => {
+            console.warn("最终推广机构的商品详情获取失败", { accountId: selectedAccount.id, productId: row.productId, error });
             return null;
           })
-        : Promise.resolve(null);
-      const [resolved, quality] = await Promise.all([promotionTask, qualityTask]);
-      return { resolved: { ...resolved, errors: [...cooperativeErrors, ...resolved.errors] }, quality };
+        : null;
+      return { resolved: { ...resolved, errors: [...cooperativeErrors, ...resolved.errors] }, selection, quality };
     }));
     for (let offset = 0; offset < batch.length; offset += 1) {
       const row = batch[offset];
-      const { resolved, quality } = resolutions[offset];
-      const selection = selectLeaguePromotionCandidate(resolved.candidates);
+      const { resolved, selection, quality } = resolutions[offset];
       await sql.begin(async (tx) => {
         await tx`DELETE FROM talent_window_promotion_candidates WHERE window_product_id = ${row.id}`;
         const candidateIds = new Map<string, string>();
@@ -439,20 +432,17 @@ export async function syncWindowPromotions(talentAccountId: string) {
           const [inserted] = await tx`
             INSERT INTO talent_window_promotion_candidates(
               window_product_id, league_account_id, head_supplier_item_link, promotion_link,
-              product_id, out_product_id, commission_ratio, normal_commission_ratio,
-              service_ratio, commission_type, plan_type
+              commission_ratio, normal_commission_ratio, service_ratio, commission_type, plan_type
             ) VALUES (
               ${row.id}, ${candidate.accountId}, ${candidate.headSupplierItemLink}, ${candidate.promotionLink},
-              ${candidate.productId}, ${candidate.outProductId}, ${candidate.commissionRatio}, ${candidate.normalCommissionRatio},
-              ${candidate.serviceRatio}, ${candidate.commissionType}, ${candidate.planType}
+              ${candidate.commissionRatio}, ${candidate.normalCommissionRatio}, ${candidate.serviceRatio},
+              ${candidate.commissionType}, ${candidate.planType}
             ) RETURNING id
           `;
           candidateIds.set(`${candidate.accountId}\u0000${candidate.promotionLink}`, String(inserted.id));
         }
 
         const selected = selection.selected;
-        const productIds = Array.from(new Set([String(row.productId), selected?.productId || ""].filter(Boolean)));
-        const outProductIds = Array.from(new Set([row.outProductId ? String(row.outProductId) : "", selected?.outProductId || ""].filter(Boolean)));
         const [registered] = await tx`
           SELECT p.id, p.product_url
           FROM products p
@@ -460,8 +450,7 @@ export async function syncWindowPromotions(talentAccountId: string) {
             EXISTS (
               SELECT 1 FROM product_api_ids pai
               WHERE pai.product_id = p.id AND pai.is_current = true
-                AND ((pai.id_type = 'product_id' AND pai.value = ANY(${productIds}::text[]))
-                  OR (pai.id_type = 'out_product_id' AND pai.value = ANY(${outProductIds}::text[])))
+                AND pai.value = ${String(row.productId)}
             )
             OR (${safeText(row.promotionLink)}::text IS NOT NULL AND (
               p.product_url = ${safeText(row.promotionLink)}
@@ -483,7 +472,7 @@ export async function syncWindowPromotions(talentAccountId: string) {
               promotionStatus = "needs_replacement";
               promotionError = "已获取新的机构推广链接，等待人工确认是否替换已登记商品链接";
             } else {
-              await setCurrentProductApiIds(tx, String(registered.id), { productId: selected.productId, outProductId: selected.outProductId });
+              await setCurrentProductApiId(tx, String(registered.id), String(row.productId));
               await tx`
                 INSERT INTO product_link_history(product_id, url, replaced_by_url, source, source_entity_id)
                 VALUES (${registered.id}, ${registeredLink}, ${selected.promotionLink}, 'league_link_correction', ${row.id})
@@ -493,7 +482,7 @@ export async function syncWindowPromotions(talentAccountId: string) {
               promotionStatus = "selected";
             }
           } else if (registered && !registeredLink) {
-            await setCurrentProductApiIds(tx, String(registered.id), { productId: selected.productId, outProductId: selected.outProductId });
+            await setCurrentProductApiId(tx, String(registered.id), String(row.productId));
             await tx`UPDATE products SET product_url = ${selected.promotionLink}, version = version + 1, updated_at = now() WHERE id = ${registered.id}`;
             registeredLink = selected.promotionLink;
             promotionStatus = "selected";
@@ -510,8 +499,6 @@ export async function syncWindowPromotions(talentAccountId: string) {
         await tx`
           UPDATE talent_window_products
           SET promotion_link = ${selected?.promotionLink || preserveConfirmedLink},
-              promotion_product_id = ${selected?.productId || null},
-              promotion_out_product_id = ${selected?.outProductId || null},
               promotion_account_id = ${selected?.accountId || null},
               promotion_candidate_id = ${selectedCandidateId},
               promotion_status = ${promotionStatus},
@@ -546,15 +533,20 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   const talentAccount = await loadTalentAccount(talentAccountId);
   if (!talentAccount) throw new Error("带货账号不存在");
 
-  type ProductBrief = { id: string; productId: string; outProductId: string | null; productSource: number; shopAppid: string | null; promotionLink: string | null };
-  const rows = await sql`SELECT id, product_id, out_product_id, product_source, shop_appid, promotion_link FROM talent_window_products WHERE account_id = ${talentAccountId} ORDER BY synced_at DESC`;
+  type ProductBrief = { id: string; productId: string; productSource: number; shopAppid: string | null; promotionLink: string | null };
+  const rows = await sql`
+    SELECT id, product_id, product_source, shop_appid, promotion_link
+    FROM talent_window_products
+    WHERE account_id = ${talentAccountId} AND promotion_account_id = ${leagueAccountId}
+    ORDER BY synced_at DESC
+  `;
   const products: ProductBrief[] = rows as unknown as ProductBrief[];
 
   let patchedShopIds = 0;
   {
     const shopPatchConcurrency = 10;
     const missingShop = products.filter(p => !p.shopAppid);
-    const shopPatches: Array<{ id: string; shopAppid: string; outProductId: string | null }> = [];
+    const shopPatches: Array<{ id: string; shopAppid: string }> = [];
     for (let index = 0; index < missingShop.length; index += shopPatchConcurrency) {
       const batch = missingShop.slice(index, index + shopPatchConcurrency);
       const results = await Promise.allSettled(batch.map((p) =>
@@ -564,20 +556,18 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
         if (r.status !== "fulfilled") continue;
         const { id, detail, product } = r.value;
         if (!detail.shopAppid) continue;
-        shopPatches.push({ id, shopAppid: detail.shopAppid, outProductId: detail.outProductId });
+        shopPatches.push({ id, shopAppid: detail.shopAppid });
         product.shopAppid = detail.shopAppid;
-        if (detail.outProductId && !product.outProductId) product.outProductId = detail.outProductId;
         patchedShopIds += 1;
       }
     }
     if (shopPatches.length > 0) {
       const patchIds = shopPatches.map(s => s.id);
       const patchApps = shopPatches.map(s => s.shopAppid);
-      const patchOutIds = shopPatches.map(s => s.outProductId);
       await sql`
         UPDATE talent_window_products wp
-        SET shop_appid = t.said, out_product_id = coalesce(t.oid, out_product_id)
-        FROM unnest(${patchIds}::uuid[], ${patchApps}::text[], ${patchOutIds}::text[]) AS t(id, said, oid)
+        SET shop_appid = t.said
+        FROM unnest(${patchIds}::uuid[], ${patchApps}::text[]) AS t(id, said)
         WHERE wp.id = t.id
       `;
     }
@@ -594,8 +584,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
 
   const linkPatches: Array<{ id: string; link: string }> = [];
   for (const product of products) {
-    const sid = product.outProductId || product.productId;
-    const link = sid ? itemLinks.get(sid)?.[0]?.link : undefined;
+    const link = itemLinks.get(product.productId)?.[0]?.link;
     if (link && !product.promotionLink) {
       linkPatches.push({ id: product.id, link });
       product.promotionLink = link;
@@ -625,12 +614,10 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   for (let index = 0; index < products.length; index += QUALITY_CONCURRENCY) {
     const batch = products.slice(index, index + QUALITY_CONCURRENCY);
     const results = await Promise.all(batch.map(async (item) => {
-      const sid = item.outProductId || item.productId;
       const [qualityResult, promotionResult] = await Promise.allSettled([
-        sid && item.shopAppid ? fetchLeagueProductDetail(leagueAccount, item.shopAppid, sid) : Promise.resolve(null),
-        sid ? resolveLeaguePromotion([leagueAccount], {
+        item.shopAppid ? fetchLeagueProductDetail(leagueAccount, item.shopAppid, item.productId) : Promise.resolve(null),
+        item.productId ? resolveLeaguePromotion([leagueAccount], {
           productId: item.productId,
-          outProductId: item.outProductId,
           existingLink: item.promotionLink,
         }, [itemLinks]) : Promise.resolve(null),
       ]);
@@ -696,7 +683,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     `;
     detailed = qualityRows.length;
   }
-  const eligible = products.filter((item) => (item.shopAppid && (item.outProductId || item.productId)) || item.promotionLink).length;
+  const eligible = products.filter((item) => (item.shopAppid && item.productId) || item.promotionLink).length;
   if (detailed === 0 && eligible > 0 && errors.length) {
     throw new Error(`评分同步失败：${errors[0]}`);
   }

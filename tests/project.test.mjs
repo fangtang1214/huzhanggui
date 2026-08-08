@@ -363,7 +363,7 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(upgradedFeature.rows[0].status, "pending");
     assert.equal(upgradedFeature.rows[0].embedding, null);
     assert.equal(upgradedFeature.rows[0].embedding_vector, null);
-    const repairedProduct = await database.query("SELECT sku FROM products WHERE name='升级前商品'");
+    const repairedProduct = await database.query("SELECT id,sku FROM products WHERE name='升级前商品'");
     assert.equal(repairedProduct.rows[0].sku, "HZG-2026-0001");
     const repairedSamples = await database.query("SELECT code FROM samples ORDER BY created_at");
     assert.deepEqual(repairedSamples.rows.map((row) => row.code), ["HZG-2026-0001-001", "HZG-2026-0001-002"]);
@@ -373,6 +373,18 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.deepEqual(oldSkuAliases.rows.map((row) => row.alias), ["HZG-20260804-001", "SP-20260804-NaN"]);
     const sampleSequence = await database.query("SELECT last_value FROM product_sample_sequences");
     assert.equal(sampleSequence.rows[0].last_value, 2);
+    const removedIdColumns = await database.query(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE (table_name = 'product_api_ids' AND column_name = 'id_type')
+         OR (table_name = 'talent_window_products' AND column_name IN ('out_product_id', 'promotion_product_id', 'promotion_out_product_id'))
+         OR (table_name = 'talent_window_promotion_candidates' AND column_name IN ('product_id', 'out_product_id'))
+         OR (table_name = 'product_link_correction_items' AND column_name = 'api_out_product_id')
+    `);
+    assert.deepEqual(removedIdColumns.rows, []);
+    await database.query("INSERT INTO product_api_ids(product_id,value,is_current) VALUES($1,'10001213105308',true)", [repairedProduct.rows[0].id]);
+    const currentProductId = await database.query("SELECT value FROM product_api_ids WHERE product_id=$1 AND is_current=true", [repairedProduct.rows[0].id]);
+    assert.equal(currentProductId.rows[0].value, "10001213105308");
     const emptyStatusFilter = await database.query("SELECT count(*)::int AS count FROM samples s WHERE ($1::text IS NULL OR s.status=$2)", [null, null]);
     assert.equal(emptyStatusFilter.rows[0].count, 2);
     const batchIndex = await database.query("SELECT indexname FROM pg_indexes WHERE indexname='sample_movements_batch_sample_unique'");
@@ -437,6 +449,10 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(productsRoute, /requireUser\("products:create"\)/);
   assert.match(productsRoute, /promotion_candidates/);
   assert.doesNotMatch(productsRoute, /'weixinstorehs\/' \|\| w\.product_id/);
+  assert.match(productsRoute, /fetchLeagueProductDetail\(qualityAccount/);
+  assert.match(productsRoute, /qualitySource\.leagueAccountId/);
+  assert.match(productsRoute, /qualitySource\.productId/);
+  assert.doesNotMatch(productsRoute, /outProductId|out_product_id|id_type/);
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /draftCandidate/);
   assert.match(form, /仅更新商品信息/);
@@ -445,6 +461,7 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(registrationRoute, /submissionMode: z\.enum\(\["add_samples", "update_only"\]\)/);
   assert.match(registrationRoute, /if \(!updateOnly\)/);
   assert.match(registrationRoute, /updatedOnly: updateOnly/);
+  assert.doesNotMatch(registrationRoute, /apiOutProductId|out_product_id|id_type/);
   const navigation = await readFile(new URL("../components/huzhanggui-app.tsx", import.meta.url), "utf8");
   assert.match(navigation, /\/talent-accounts/);
   assert.match(navigation, /\/window-products/);
@@ -457,6 +474,7 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(windowView, /shopScore/);
   assert.match(windowView, /supplyChain: ""/);
   assert.doesNotMatch(windowView, /supplyChain: product\.promotionAccountName/);
+  assert.doesNotMatch(windowView, /outProductId|apiOutProductId|promotionProductId/);
   const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/productdetail\/get/);
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/cooperativeitem\/list\/get/);
@@ -468,6 +486,9 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(leagueApi, /commission_info/);
   assert.match(leagueApi, /good_evaluation_ratio/);
   assert.match(leagueApi, /shop\.score/);
+  assert.match(leagueApi, /payload\.product \|\| payload\.item/);
+  assert.match(leagueApi, /accounts\.find\(\(account\) => account\.id === selection\.selected\?\.accountId\)/);
+  assert.doesNotMatch(leagueApi, /outProductId|out_product_id|id_type/);
   const linkMigration = await readFile(new URL("../migrations/017_window_promotion_link.sql", import.meta.url), "utf8");
   assert.match(linkMigration, /promotion_link/);
   const commissionMigration = await readFile(new URL("../migrations/019_window_commission.sql", import.meta.url), "utf8");
@@ -480,6 +501,11 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(promotionMigration, /product_id, id_type/);
   assert.match(promotionMigration, /talent_window_promotion_candidates/);
   assert.match(promotionMigration, /needs_replacement/);
+  const singleIdMigration = await readFile(new URL("../migrations/023_single_window_product_id.sql", import.meta.url), "utf8");
+  assert.match(singleIdMigration, /DELETE FROM product_api_ids WHERE id_type = 'out_product_id'/);
+  assert.match(singleIdMigration, /DROP COLUMN IF EXISTS id_type/);
+  assert.match(singleIdMigration, /DROP COLUMN IF EXISTS out_product_id/);
+  assert.match(singleIdMigration, /DROP COLUMN IF EXISTS promotion_product_id/);
   const correctionRoute = await readFile(new URL("../app/api/league-accounts/link-corrections/route.ts", import.meta.url), "utf8");
   assert.match(correctionRoute, /requireSuperAdmin/);
   assert.match(correctionRoute, /action: z\.enum\(\["start", "retry"\]\)/);

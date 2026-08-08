@@ -18,7 +18,7 @@ type PriceOption = { price: string; count: number };
 type ProductListData = { rows: ProductRow[]; total: number; page: number; pageSize: number; priceOptions: PriceOption[] };
 type SampleRow = { id: string; code: string; arrivedAt: string; status: string; archived?: boolean; note?: string; spec?: string; departmentName?: string; locationName?: string; updatedAt: string };
 type LinkHistoryRow = { id: string; url: string; replacedByUrl?: string; source: "product_edit" | "link_issue" | "intake_merge" | "recognition_correction" | "window_registration" | "league_link_correction"; sourceEntityId?: string; changedByName?: string; changedAt: string };
-type ProductApiIdRow = { id: string; idType: "product_id" | "out_product_id"; value: string; isCurrent: boolean; createdAt: string };
+type ProductApiIdRow = { id: string; value: string; isCurrent: boolean; createdAt: string };
 type ProductDetailData = { product: ProductRow & { businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> }; samples: SampleRow[]; linkHistory: LinkHistoryRow[]; apiIds: ProductApiIdRow[] };
 type MatchCandidate = ProductRow & { archived?: boolean; similarity: number; businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> };
 type MatchTimings = { cacheHit?: boolean; totalMs?: number };
@@ -38,8 +38,7 @@ const LINK_HISTORY_SOURCE_LABELS: Record<LinkHistoryRow["source"], string> = {
 function ProductApiIds({ rows }: { rows: ProductApiIdRow[] }) {
   const current = rows.filter((row) => row.isCurrent);
   const history = rows.filter((row) => !row.isCurrent);
-  const label = (type: ProductApiIdRow["idType"]) => type === "product_id" ? "product_id" : "out_product_id";
-  return <section className="panel product-link-history"><header className="panel-header padded"><div><p className="eyebrow">接口标识</p><h2>商品 ID</h2></div><small>只记录 API 返回的 ID，不从商品链接解析。</small></header><div style={{ padding: "0 18px 18px", display: "grid", gap: 12 }}><div><b>当前 ID</b>{current.length ? <div className="product-id-list">{current.map((row) => <code key={row.id}>{label(row.idType)}：{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无接口返回的商品 ID</p>}</div><div><b>历史 ID（{history.length}）</b>{history.length ? <div className="product-id-list">{history.map((row) => <code key={row.id}>{label(row.idType)}：{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无历史商品 ID</p>}</div></div></section>;
+  return <section className="panel product-link-history"><header className="panel-header padded"><div><p className="eyebrow">橱窗接口标识</p><h2>商品 ID</h2></div><small>只记录达人橱窗接口返回的 product_id，不从商品链接解析。</small></header><div style={{ padding: "0 18px 18px", display: "grid", gap: 12 }}><div><b>当前 ID</b>{current.length ? <div className="product-id-list">{current.map((row) => <code key={row.id}>{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无橱窗接口返回的商品 ID</p>}</div><div><b>历史 ID（{history.length}）</b>{history.length ? <div className="product-id-list">{history.map((row) => <code key={row.id}>{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无历史商品 ID</p>}</div></div></section>;
 }
 
 function ProductLinkHistory({ rows }: { rows: LinkHistoryRow[] }) {
@@ -347,9 +346,9 @@ export function ProductsView() {
 }
 
 type ProductFormSpecRow = { spec: string; quantity: string };
-type ProductFormState = { sku: string; name: string; departmentIds: string[]; businessContactId: string; storeName: string; price: string; productUrl: string; windowProductId?: string; apiProductId?: string; apiOutProductId?: string; commission: string; storeRating: string; supplyChain: string; cooperationMechanism: string; categoryId: string; tagIds: string[]; imageUrls: string; notes: string; specs: ProductFormSpecRow[]; arrivedAt: string; initialDepartmentId: string; initialLocationId: string };
+type ProductFormState = { sku: string; name: string; departmentIds: string[]; businessContactId: string; storeName: string; price: string; productUrl: string; windowProductId?: string; apiProductId?: string; commission: string; storeRating: string; supplyChain: string; cooperationMechanism: string; categoryId: string; tagIds: string[]; imageUrls: string; notes: string; specs: ProductFormSpecRow[]; arrivedAt: string; initialDepartmentId: string; initialLocationId: string };
 const today = () => { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); };
-const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", apiProductId: "", apiOutProductId: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" });
+const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", apiProductId: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" });
 type ProductDraft = { version: 1; form: ProductFormState & { quantity?: string; spec?: string }; savedAt: number; autoRestore?: boolean };
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
