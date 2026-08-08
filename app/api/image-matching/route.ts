@@ -60,16 +60,21 @@ async function saveFullEmbedding(imageUrl: string, model: string, embedding: str
 
 async function cachedSubject(imageUrl: string, glmModel: GlmModel) {
   const sql = getDb();
-  const [row] = await sql`SELECT subject_box,embedding::text AS embedding FROM image_subject_cache
+  const [row] = await sql`SELECT subject_box,embedding::text AS embedding,box_source FROM image_subject_cache
     WHERE url_hash=${urlHash(imageUrl)} AND model=${glmModel}`;
-  return row?.embedding && Array.isArray(row.subjectBox) ? { box: row.subjectBox as SubjectBox, embedding: String(row.embedding) } : null;
+  if (row?.embedding && Array.isArray(row.subjectBox)) return { box: row.subjectBox as SubjectBox, embedding: String(row.embedding), manual: row.boxSource === "manual" };
+  const [manual] = await sql`SELECT subject_box FROM product_image_features
+    WHERE url_hash=${urlHash(imageUrl)} AND subject_box_source='manual' AND subject_box IS NOT NULL LIMIT 1`;
+  return Array.isArray(manual?.subjectBox) ? { box: manual.subjectBox as SubjectBox, embedding: null, manual: true } : null;
 }
 
-async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string, glmModel: GlmModel) {
+async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string, glmModel: GlmModel, manual = false) {
   const sql = getDb();
-  await sql`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding)
-    VALUES(${urlHash(imageUrl)},${glmModel},${imageUrl},${sql.json(box)},${embedding}::vector(512))
-    ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,subject_box=excluded.subject_box,embedding=excluded.embedding,updated_at=now()`;
+  await sql`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding,box_source)
+    VALUES(${urlHash(imageUrl)},${glmModel},${imageUrl},${sql.json(box)},${embedding}::vector(512),${manual ? "manual" : "glm"})
+    ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,subject_box=excluded.subject_box,
+      embedding=excluded.embedding,box_source=excluded.box_source,updated_at=now()
+    WHERE image_subject_cache.box_source<>'manual' OR excluded.box_source='manual'`;
 }
 
 async function imageVectors(imageUrl: string, model: string, apiKey: string, glmModel: GlmModel, signal: AbortSignal) {
@@ -82,10 +87,10 @@ async function imageVectors(imageUrl: string, model: string, apiKey: string, glm
     full = vectorLiteral(result.embedding); await saveFullEmbedding(imageUrl, model, full);
   }
   if (!subject) {
-    const box = await analyzeSubject(apiKey, imageUrl, glmModel, signal);
+    const box = subjectCached?.manual ? subjectCached.box : await analyzeSubject(apiKey, imageUrl, glmModel, signal);
     const result = await embedImage(imageUrl, box, "interactive", signal);
     if (result.model !== model) throw new Error("图片识别模型正在升级，请稍后重试");
-    subject = vectorLiteral(result.embedding); await saveSubject(imageUrl, box, subject, glmModel);
+    subject = vectorLiteral(result.embedding); await saveSubject(imageUrl, box, subject, glmModel, Boolean(subjectCached?.manual));
   }
   return { full, subject };
 }

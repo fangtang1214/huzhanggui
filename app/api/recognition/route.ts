@@ -125,8 +125,10 @@ export async function POST(request: Request) {
       } else {
         const selectedModel = normalizeGlmModel(value.model);
         await sql.begin(async (tx) => {
-          await tx`UPDATE product_image_features SET subject_status='pending',subject_box=NULL,subject_model=NULL,subject_embedding_vector=NULL,subject_error=NULL,subject_attempts=0,subject_updated_at=now()`;
-          await tx`DELETE FROM image_subject_cache WHERE model=${selectedModel}`;
+          await tx`UPDATE product_image_features SET subject_status='pending',
+            subject_box=CASE WHEN subject_box_source='manual' THEN subject_box ELSE NULL END,
+            subject_model=NULL,subject_embedding_vector=NULL,subject_error=NULL,subject_attempts=0,subject_updated_at=now()`;
+          await tx`DELETE FROM image_subject_cache WHERE model=${selectedModel} AND box_source<>'manual'`;
           await tx`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"running\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
         });
       }

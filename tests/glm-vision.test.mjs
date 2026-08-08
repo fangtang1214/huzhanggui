@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GLM_MODELS, _test, normalizeGlmModel, reviewCandidates } from "../lib/glm-vision.ts";
+import { GLM_MODELS, _test, normalizeGlmModel, reviewCandidates, subjectPrompt } from "../lib/glm-vision.ts";
 import { decryptSecret, encryptSecret } from "../lib/secret-box.ts";
 
 test("GLM API 密钥使用服务器密钥加密保存", () => {
@@ -48,4 +48,12 @@ test("GLM 复核会使用全部新图片且每个历史候选最多三张图", a
 
 test("GLM JSON 解析兼容代码块返回", () => {
   assert.equal(_test.jsonText("说明\n```json\n{\"box\":[1,2,900,950]}\n```"), "{\"box\":[1,2,900,950]}");
+});
+
+test("GLM 主体定位会结合商品名称并优先主商品而非小配件", () => {
+  const prompt = subjectPrompt("大号子母包套装");
+  assert.match(prompt, /商品名称：大号子母包套装/);
+  assert.match(prompt, /面积最大、最突出且展示最完整/);
+  assert.match(prompt, /不要选择旁边较小的赠品或配件/);
+  assert.match(prompt, /套装、组合或子母包/);
 });

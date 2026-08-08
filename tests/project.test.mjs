@@ -255,6 +255,10 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   assert.match(migration, /image_subject_cache/);
   const modelMigration = await readFile(new URL("../migrations/026_glm_model_selection.sql", import.meta.url), "utf8");
   assert.match(modelMigration, /subject_model varchar\(120\)/);
+  const manualBoxMigration = await readFile(new URL("../migrations/027_manual_subject_box.sql", import.meta.url), "utf8");
+  assert.match(manualBoxMigration, /subject_box_source/);
+  assert.match(manualBoxMigration, /subject_corrected_by/);
+  assert.match(manualBoxMigration, /box_source/);
   const recognitionRoute = await readFile(new URL("../app/api/recognition/route.ts", import.meta.url), "utf8");
   assert.match(recognitionRoute, /glm-4\.6v-flashx/);
   assert.match(recognitionRoute, /glm_reindex_all/);
@@ -266,9 +270,16 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   const resultRoute = await readFile(new URL("../app/api/recognition/subject-index/route.ts", import.meta.url), "utf8");
   assert.match(resultRoute, /subject_box/);
   assert.match(resultRoute, /subject_model/);
+  assert.match(resultRoute, /subject_box_source='manual'/);
+  assert.match(resultRoute, /image\.subject_box_corrected/);
   const resultView = await readFile(new URL("../components/views/subject-index-results.tsx", import.meta.url), "utf8");
-  assert.match(resultView, /绿色框/);
+  assert.match(resultView, /绿色是 GLM 自动框/);
   assert.match(resultView, /主体框坐标/);
+  assert.match(resultView, /纠正主体框/);
+  assert.match(resultView, /人工已纠正/);
+  const indexer = await readFile(new URL("../scripts/image-indexer.mjs", import.meta.url), "utf8");
+  assert.match(indexer, /subject_box_source === "manual"/);
+  assert.match(indexer, /p\.name AS product_name/);
 });
 
 test("问题处理、商品复制、流转图片和状态精简按新流程实现", async () => {

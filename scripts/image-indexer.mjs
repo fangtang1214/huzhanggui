@@ -49,7 +49,7 @@ function parseJson(text) {
   return JSON.parse(source.slice(start, end + 1));
 }
 
-async function analyzeSubject(apiKey, imageUrl, glmModel) {
+async function analyzeSubject(apiKey, imageUrl, glmModel, productName) {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 60_000);
   try {
     const response = await fetch(glmEndpoint, {
@@ -57,7 +57,7 @@ async function analyzeSubject(apiKey, imageUrl, glmModel) {
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({ model: glmModel, temperature: 0.05, messages: [{ role: "user", content: [
         { type: "image_url", image_url: { url: imageUrl } },
-        { type: "text", text: "找出图片中主要销售商品本体的最小外接框。忽略人物、手、背景、文字贴纸和非商品装饰。坐标按 0 到 1000 归一化。只返回 JSON：{\"box\":[xmin,ymin,xmax,ymax]}。" },
+        { type: "text", text: `商品名称：${productName || "未提供"}。找出图片中主要销售商品本体的最小外接框。图片可能同时出现主商品、赠品、配件或大小两个相似商品：优先选择与商品名称相符的主商品；名称无法区分时，选择画面中面积最大、最突出且展示最完整的商品，不要选择旁边较小的赠品或配件。如果名称明确写有套装、组合或子母包，则框住整套销售商品。忽略人物、手、背景、文字贴纸和非商品装饰。坐标按 0 到 1000 归一化。只返回 JSON：{\"box\":[xmin,ymin,xmax,ymax]}。` },
       ] }] }),
       signal: controller.signal,
     });
@@ -116,35 +116,43 @@ async function processOneSubject() {
   await sql`UPDATE product_image_features SET subject_status='pending',subject_updated_at=now()
     WHERE subject_status='processing' AND subject_updated_at < now() - interval '10 minutes'`;
   await sql`UPDATE product_image_features f SET subject_status='ready',subject_box=c.subject_box,
-      subject_embedding_vector=c.embedding,subject_model=${glmModel},subject_error=NULL,subject_updated_at=now()
+      subject_embedding_vector=c.embedding,subject_model=${glmModel},subject_error=NULL,
+      subject_box_source=c.box_source,subject_updated_at=now()
     FROM image_subject_cache c
     WHERE f.url_hash=c.url_hash AND c.model=${glmModel} AND f.subject_status IN ('waiting','pending')`;
   const rows = await sql.begin(async (tx) => {
-    const candidates = await tx`SELECT id,image_url,url_hash FROM product_image_features
-      WHERE subject_status='pending' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED`;
+    const candidates = await tx`SELECT f.id,f.image_url,f.url_hash,f.subject_box,f.subject_box_source,p.name AS product_name
+      FROM product_image_features f JOIN products p ON p.id=f.product_id
+      WHERE f.subject_status='pending' ORDER BY f.created_at LIMIT 1 FOR UPDATE OF f SKIP LOCKED`;
     if (!candidates.length) return [];
     await tx`UPDATE product_image_features SET subject_status='processing',subject_attempts=subject_attempts+1,subject_updated_at=now() WHERE id=${candidates[0].id}`;
     return candidates;
   });
   if (!rows.length) return false;
   const item = rows[0];
+  const manualBox = item.subject_box_source === "manual" && Array.isArray(item.subject_box) && item.subject_box.length === 4;
   try {
-    const box = await analyzeSubject(apiKey, item.image_url, glmModel);
+    const box = manualBox ? item.subject_box.map(Number) : await analyzeSubject(apiKey, item.image_url, glmModel, item.product_name);
     const response = await fetch(`${visionUrl}/embed`, { method: "POST", headers: { "content-type": "application/json", "x-vision-priority": "background" }, body: JSON.stringify({ imageUrl: item.image_url, box }) });
     const payload = await response.json();
     if (!response.ok || !Array.isArray(payload.embedding)) throw new Error(payload.message || "商品主体特征生成失败");
     if (payload.model && payload.model !== modelVersion) throw new Error(`识别模型版本不一致：${payload.model}`);
     const embedding = vectorLiteral(payload.embedding);
     await sql.begin(async (tx) => {
-      await tx`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding)
-        VALUES(${item.url_hash},${glmModel},${item.image_url},${tx.json(box)},${embedding}::vector(512))
-        ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,subject_box=excluded.subject_box,embedding=excluded.embedding,updated_at=now()`;
-      await tx`UPDATE product_image_features SET subject_status='ready',subject_box=${tx.json(box)},subject_model=${glmModel},subject_embedding_vector=${embedding}::vector(512),subject_error=NULL,subject_updated_at=now()
-        WHERE url_hash=${item.url_hash}`;
+      await tx`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding,box_source)
+        VALUES(${item.url_hash},${glmModel},${item.image_url},${tx.json(box)},${embedding}::vector(512),${manualBox ? "manual" : "glm"})
+        ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,subject_box=excluded.subject_box,
+          embedding=excluded.embedding,box_source=excluded.box_source,updated_at=now()
+        WHERE image_subject_cache.box_source<>'manual' OR excluded.box_source='manual'`;
+      await tx`UPDATE product_image_features SET subject_status='ready',subject_box=${tx.json(box)},subject_model=${glmModel},
+        subject_embedding_vector=${embedding}::vector(512),subject_error=NULL,
+        subject_box_source=${manualBox ? "manual" : "glm"},subject_updated_at=now()
+        WHERE url_hash=${item.url_hash} AND (subject_box_source<>'manual' OR ${manualBox})`;
     });
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 1000) : "GLM 商品主体识别失败";
-    await sql`UPDATE product_image_features SET subject_status='failed',subject_error=${message},subject_updated_at=now() WHERE url_hash=${item.url_hash}`;
+    await sql`UPDATE product_image_features SET subject_status='failed',subject_error=${message},subject_updated_at=now()
+      WHERE url_hash=${item.url_hash} AND (subject_box_source<>'manual' OR ${manualBox})`;
   }
   return true;
 }

@@ -25,6 +25,10 @@ export function normalizeGlmModel(value: unknown): GlmModel {
   return typeof value === "string" && value in GLM_MODELS ? value as GlmModel : GLM_MODEL;
 }
 
+export function subjectPrompt(productName?: string) {
+  return `商品名称：${productName || "未提供"}。找出图片中主要销售商品本体的最小外接框。图片可能同时出现主商品、赠品、配件或大小两个相似商品：优先选择与商品名称相符的主商品；名称无法区分时，选择画面中面积最大、最突出且展示最完整的商品，不要选择旁边较小的赠品或配件。如果名称明确写有套装、组合或子母包，则框住整套销售商品。忽略人物、手、背景、文字贴纸和非商品装饰。坐标按 0 到 1000 归一化。只返回 JSON：{\"box\":[xmin,ymin,xmax,ymax]}。`;
+}
+
 function jsonText(value: string) {
   const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
   const source = (fenced || value).trim();
@@ -79,10 +83,10 @@ export async function testGlmConnection(apiKey: string, model: GlmModel = GLM_MO
   return Boolean(text.trim());
 }
 
-export async function analyzeSubject(apiKey: string, imageUrl: string, model: GlmModel = GLM_MODEL, signal?: AbortSignal): Promise<SubjectBox> {
+export async function analyzeSubject(apiKey: string, imageUrl: string, model: GlmModel = GLM_MODEL, signal?: AbortSignal, productName?: string): Promise<SubjectBox> {
   const text = await callGlm(apiKey, model, [
     { type: "image_url", image_url: { url: imageUrl } },
-    { type: "text", text: "找出图片中主要销售商品本体的最小外接框。忽略人物、手、背景、文字贴纸和非商品装饰。坐标按 0 到 1000 归一化。只返回 JSON：{\"box\":[xmin,ymin,xmax,ymax]}。" },
+    { type: "text", text: subjectPrompt(productName) },
   ], signal);
   const parsed = JSON.parse(jsonText(text)) as { box?: unknown[] };
   if (!Array.isArray(parsed.box) || parsed.box.length !== 4) throw new Error("GLM 未识别出商品主体范围");
