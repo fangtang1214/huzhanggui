@@ -102,7 +102,8 @@ export async function POST(request: Request) {
     const arrivedAt = input.arrivedAt || null;
     const initialDepartmentId = input.initialDepartmentId || null;
     const [windowRegistration] = input.windowProductId ? await sql`
-      SELECT w.id, w.product_id, w.shop_name, w.selling_price_fen, w.promotion_link, w.service_ratio, w.shop_score
+      SELECT w.id, coalesce(w.out_product_id, w.product_id) AS product_id,
+             w.shop_name, w.selling_price_fen, w.promotion_link, w.service_ratio, w.shop_score
       FROM talent_window_products w
       WHERE w.id = ${input.windowProductId}
     ` : [null];

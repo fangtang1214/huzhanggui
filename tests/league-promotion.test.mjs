@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseLeagueProductQuality, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
+import { effectiveWindowProductId, parseLeagueProductQuality, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
 
 function candidate(overrides = {}) {
   return {
@@ -71,4 +71,9 @@ test("按官方商品详情层级解析店铺评分与好评率", () => {
     shopIcon: "https://example.com/shop.png",
     goodEvaluationRatio: 92900,
   });
+});
+
+test("带货商品优先使用货源小店商品 ID，自营商品回退橱窗 ID", () => {
+  assert.equal(effectiveWindowProductId("14000813361261", "10001176563660"), "10001176563660");
+  assert.equal(effectiveWindowProductId("10001213105308", null), "10001213105308");
 });

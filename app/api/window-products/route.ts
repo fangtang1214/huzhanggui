@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     if (!effectiveAccountId) return ok({ accounts, products: [], leagueState });
 
     const products = await sql`
-       SELECT w.id, w.product_id, w.product_source, w.title, w.img_url,
+       SELECT w.id, coalesce(w.out_product_id, w.product_id) AS product_id, w.product_source, w.title, w.img_url,
               w.selling_price_fen, w.stock, w.sales, w.status, w.is_hide, w.synced_at,
               w.shop_name, w.shop_score, w.shop_icon, w.good_evaluation_ratio, w.quality_synced_at,
               w.commission_ratio, w.normal_commission_ratio, w.service_ratio, w.commission_type, w.plan_type,
@@ -65,7 +65,7 @@ export async function GET(request: Request) {
            EXISTS (
              SELECT 1 FROM product_api_ids pai
              WHERE pai.product_id = candidate_product.id AND pai.is_current = true
-               AND pai.value = w.product_id
+               AND pai.value IN (coalesce(w.out_product_id, w.product_id), w.product_id)
            )
            OR candidate_product.product_url = w.promotion_link
            OR EXISTS (
@@ -76,7 +76,7 @@ export async function GET(request: Request) {
          ORDER BY CASE WHEN EXISTS (
            SELECT 1 FROM product_api_ids exact_id
             WHERE exact_id.product_id = candidate_product.id AND exact_id.is_current = true
-             AND exact_id.value = w.product_id
+             AND exact_id.value = coalesce(w.out_product_id, w.product_id)
          ) THEN 0 ELSE 1 END, candidate_product.updated_at DESC
          LIMIT 1
        ) p ON true
@@ -93,7 +93,7 @@ export async function POST(request: Request) {
     const input = confirmSchema.parse(await readJson(request));
     const sql = getDb();
     const [qualitySource] = await sql`
-      SELECT c.league_account_id, w.product_id, w.shop_appid
+      SELECT c.league_account_id, coalesce(w.out_product_id, w.product_id) AS product_id, w.shop_appid
       FROM talent_window_promotion_candidates c
       JOIN talent_window_products w ON w.id = c.window_product_id
       WHERE c.id = ${input.candidateId} AND w.id = ${input.windowProductId}
@@ -108,7 +108,8 @@ export async function POST(request: Request) {
       : null;
     const result = await sql.begin(async (tx) => {
       const [candidate] = await tx`
-        SELECT c.*, w.product_id AS window_product_id_value,
+        SELECT c.*, coalesce(w.out_product_id, w.product_id) AS product_id_value,
+               w.product_id AS window_product_id_value,
                w.promotion_link AS old_window_link, w.title
         FROM talent_window_promotion_candidates c
         JOIN talent_window_products w ON w.id = c.window_product_id
@@ -122,9 +123,12 @@ export async function POST(request: Request) {
         WHERE p.archived = false AND EXISTS (
           SELECT 1 FROM product_api_ids pai
           WHERE pai.product_id = p.id AND pai.is_current = true
-            AND pai.value = ${String(candidate.windowProductIdValue)}
+            AND pai.value IN (${String(candidate.productIdValue)}, ${String(candidate.windowProductIdValue)})
         )
-        ORDER BY p.updated_at DESC, p.id
+        ORDER BY CASE WHEN EXISTS (
+          SELECT 1 FROM product_api_ids exact_id
+          WHERE exact_id.product_id = p.id AND exact_id.is_current = true AND exact_id.value = ${String(candidate.productIdValue)}
+        ) THEN 0 ELSE 1 END, p.updated_at DESC, p.id
         LIMIT 1
         FOR UPDATE
       `;
@@ -147,7 +151,7 @@ export async function POST(request: Request) {
         WHERE id = ${input.windowProductId}
       `;
       if (registered) {
-        await setCurrentProductApiId(tx, String(registered.id), String(candidate.windowProductIdValue));
+        await setCurrentProductApiId(tx, String(registered.id), String(candidate.productIdValue));
         if (String(registered.productUrl || "") !== String(candidate.promotionLink)) {
           if (registered.productUrl) await tx`
             INSERT INTO product_link_history(product_id, url, replaced_by_url, source, source_entity_id, changed_by)
