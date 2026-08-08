@@ -247,7 +247,13 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   assert.match(route, /subject_embedding_vector <=>/);
   assert.match(route, /slice\(0, 5\)/);
   assert.match(route, /matchedImageCount/);
-  assert.match(route, /mapWithConcurrency\(input\.imageUrls, 2/);
+  assert.match(route, /groupsOf\(uncached, SUBJECT_BATCH_SIZE\), 2/);
+  assert.match(route, /REALTIME_TOTAL_TIMEOUT_MS = 10_000/);
+  assert.match(route, /REALTIME_WORK_TIMEOUT_MS = REALTIME_TOTAL_TIMEOUT_MS - 1_000/);
+  assert.match(route, /REALTIME_IMAGE_LIMIT = 8/);
+  assert.match(route, /collectSubjectVectors/);
+  assert.match(route, /Promise\.all\(embeddingTasks\)/);
+  assert.match(route, /failedImageCount/);
   assert.doesNotMatch(route, /reviewCandidates/);
   assert.doesNotMatch(route, /1-\(embedding_vector <=>/);
   assert.match(route, /manual: z\.boolean/);
@@ -286,6 +292,9 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   assert.match(indexer, /defaultGlmModel/);
   const glmVision = await readFile(new URL("../lib/glm-vision.ts", import.meta.url), "utf8");
   assert.match(glmVision, /analyzeSubjectWithFallback/);
+  assert.match(glmVision, /analyzeSubjectsWithFallback/);
+  assert.match(glmVision, /SUBJECT_HEDGE_DELAY_MS = 3_000/);
+  assert.match(glmVision, /SUBJECT_STAGE_TIMEOUT_MS = 7_000/);
 });
 
 test("问题处理、商品复制、流转图片和状态精简按新流程实现", async () => {

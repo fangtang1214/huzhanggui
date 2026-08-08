@@ -10,7 +10,7 @@ type RecognitionData = {
   setting: { mode: "strict" | "standard" | "relaxed"; model: string };
   thresholds: Record<string, number>;
   progress: { total: number; ready: number; pending: number; failed: number };
-  runs: Array<{ id: string; imageUrl: string; status: string; decision: string; error?: string; candidates: unknown[]; timings?: { cacheHit?: boolean; queueMs?: number; downloadMs?: number; decodeMs?: number; inferenceMs?: number; lookupMs?: number; totalMs?: number }; userName?: string; createdAt: string }>;
+  runs: Array<{ id: string; imageUrl: string; status: string; decision: string; error?: string; candidates: unknown[]; timings?: { cacheHit?: boolean; queueMs?: number; downloadMs?: number; decodeMs?: number; inferenceMs?: number; lookupMs?: number; totalMs?: number; processedImageCount?: number; failedImageCount?: number }; userName?: string; createdAt: string }>;
   batches: Array<{ id: string; sku: string; name: string; sampleIds: string[]; status: string; version: number; mergedProductVersion: number; userName?: string; createdAt: string; correctedSku?: string; correctedAt?: string }>;
   isSuperAdmin: boolean;
   glm: { configured: boolean; indexingStatus: "idle" | "running" | "paused"; model: string };
@@ -21,6 +21,7 @@ type RecognitionData = {
 const duration = (value?: number) => value === undefined ? "—" : value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${Math.round(value)} 毫秒`;
 function timingSummary(timings?: RecognitionData["runs"][number]["timings"]) {
   if (!timings || timings.totalMs === undefined) return "—";
+  if (timings.processedImageCount !== undefined) return `${timings.cacheHit ? "缓存命中 · " : ""}总计 ${duration(timings.totalMs)} · 成功 ${timings.processedImageCount} 张 · 未参与 ${timings.failedImageCount || 0} 张`;
   if (timings.cacheHit) return `缓存命中 · 总计 ${duration(timings.totalMs)} · 比对 ${duration(timings.lookupMs)}`;
   return `总计 ${duration(timings.totalMs)} · 排队 ${duration(timings.queueMs)} · 下载 ${duration(timings.downloadMs)} · 解码 ${duration(timings.decodeMs)} · 识图 ${duration(timings.inferenceMs)} · 比对 ${duration(timings.lookupMs)}`;
 }

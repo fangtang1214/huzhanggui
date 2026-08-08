@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GLM_MODELS, _test, analyzeSubjectWithFallback, expandSubjectBox, normalizeGlmModel, subjectPrompt } from "../lib/glm-vision.ts";
+import { GLM_MODELS, SUBJECT_BATCH_SIZE, SUBJECT_HEDGE_DELAY_MS, SUBJECT_STAGE_TIMEOUT_MS, _test, analyzeSubjectWithFallback, analyzeSubjectsWithFallback, expandSubjectBox, normalizeGlmModel, subjectBatchPrompt, subjectPrompt } from "../lib/glm-vision.ts";
 import { decryptSecret, encryptSecret } from "../lib/secret-box.ts";
 
 test("GLM API 密钥使用服务器密钥加密保存", () => {
@@ -59,4 +59,28 @@ test("GLM 主体定位会结合商品名称并优先主商品而非小配件", (
   assert.match(prompt, /不要选择旁边较小的赠品或配件/);
   assert.match(prompt, /套装、组合或子母包/);
   assert.deepEqual(expandSubjectBox([0, 100, 1000, 900]), [0, 52, 1000, 948]);
+});
+
+test("实时主体定位按四张一批并使用 3 秒后援、7 秒截止", () => {
+  assert.equal(SUBJECT_BATCH_SIZE, 4);
+  assert.equal(SUBJECT_HEDGE_DELAY_MS, 3_000);
+  assert.equal(SUBJECT_STAGE_TIMEOUT_MS, 7_000);
+  assert.match(subjectBatchPrompt([{ imageUrl: "a" }, { imageUrl: "b" }]), /共有 2 张商品图片/);
+  assert.match(subjectBatchPrompt([{ imageUrl: "a" }, { imageUrl: "b" }]), /JSON 数组/);
+});
+
+test("GLM 批量主体定位允许部分图片成功", async () => {
+  const originalFetch = globalThis.fetch; let requestBody;
+  globalThis.fetch = async (_url, init) => {
+    requestBody = JSON.parse(String(init.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: '[{"index":0,"box":[100,200,900,800]},{"index":1,"box":[10,10,10,20]}]' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const result = await analyzeSubjectsWithFallback("test-key", [{ imageUrl: "https://example.com/a.jpg" }, { imageUrl: "https://example.com/b.jpg" }], "glm-4.6v-flash");
+    assert.equal(requestBody.model, "glm-4.6v-flash");
+    assert.deepEqual(requestBody.thinking, { type: "disabled" });
+    assert.equal(requestBody.max_tokens, 1024);
+    assert.equal(requestBody.messages[0].content.filter((item) => item.type === "image_url").length, 2);
+    assert.deepEqual(result, [{ imageUrl: "https://example.com/a.jpg", box: [52, 164, 948, 836], model: "glm-4.6v-flash", fallbackUsed: false }]);
+  } finally { globalThis.fetch = originalFetch; }
 });

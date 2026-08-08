@@ -3,15 +3,20 @@ import { apiError, ok, readJson, requestIp } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
-import { analyzeSubjectWithFallback, GLM_MODEL, getGlmRuntime, type GlmModel, type SubjectBox } from "@/lib/glm-vision";
+import { analyzeSubjectsWithFallback, GLM_MODEL, getGlmRuntime, SUBJECT_BATCH_SIZE, SUBJECT_STAGE_TIMEOUT_MS, type GlmModel, type LocatedSubject, type SubjectBox } from "@/lib/glm-vision";
 import { embedImage, getMatchSettings, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 
 const schema = z.object({
   imageUrls: z.array(imageUrlSchema).min(1).max(100),
+  productName: z.string().trim().max(500).optional(),
   apiProductId: z.string().trim().max(100).optional().nullable(),
   excludeProductIds: z.array(z.string().uuid()).max(100).default([]),
 });
+
+const REALTIME_IMAGE_LIMIT = 8;
+const REALTIME_TOTAL_TIMEOUT_MS = 10_000;
+const REALTIME_WORK_TIMEOUT_MS = REALTIME_TOTAL_TIMEOUT_MS - 1_000;
 
 const vectorLiteral = (values: number[]) => `[${values.map(Number).join(",")}]`;
 
@@ -41,15 +46,24 @@ async function exactIdMatch(apiProductId?: string | null) {
   return (await productsByIds([String(rows[0].id)]))[0] || null;
 }
 
-async function cachedSubject(imageUrl: string, glmModel: GlmModel) {
+async function cachedSubjects(imageUrls: string[], glmModel: GlmModel) {
   const sql = getDb();
-  const [row] = await sql`SELECT subject_box,embedding::text AS embedding,box_source,model FROM image_subject_cache
-    WHERE url_hash=${urlHash(imageUrl)} AND model IN (${glmModel},${GLM_MODEL})
-    ORDER BY (model=${glmModel}) DESC LIMIT 1`;
-  if (row?.embedding && Array.isArray(row.subjectBox)) return { box: row.subjectBox as SubjectBox, embedding: String(row.embedding), manual: row.boxSource === "manual", model: row.model as GlmModel };
-  const [manual] = await sql`SELECT subject_box FROM product_image_features
-    WHERE url_hash=${urlHash(imageUrl)} AND subject_box_source='manual' AND subject_box IS NOT NULL LIMIT 1`;
-  return Array.isArray(manual?.subjectBox) ? { box: manual.subjectBox as SubjectBox, embedding: null, manual: true, model: glmModel } : null;
+  const hashes = imageUrls.map(urlHash);
+  const [cacheRows, manualRows] = await Promise.all([
+    sql`SELECT DISTINCT ON (url_hash) url_hash,subject_box,embedding::text AS embedding,box_source,model FROM image_subject_cache
+      WHERE url_hash=ANY(${hashes}::text[]) AND model IN (${glmModel},${GLM_MODEL})
+      ORDER BY url_hash,(model=${glmModel}) DESC`,
+    sql`SELECT DISTINCT ON (url_hash) url_hash,subject_box FROM product_image_features
+      WHERE url_hash=ANY(${hashes}::text[]) AND subject_box_source='manual' AND subject_box IS NOT NULL ORDER BY url_hash,updated_at DESC`,
+  ]);
+  const results = new Map<string, { box: SubjectBox; embedding: string | null; manual: boolean; model: GlmModel }>();
+  for (const row of cacheRows) {
+    if (row.embedding && Array.isArray(row.subjectBox)) results.set(String(row.urlHash), { box: row.subjectBox as SubjectBox, embedding: String(row.embedding), manual: row.boxSource === "manual", model: row.model as GlmModel });
+  }
+  for (const row of manualRows) {
+    if (Array.isArray(row.subjectBox) && !results.has(String(row.urlHash))) results.set(String(row.urlHash), { box: row.subjectBox as SubjectBox, embedding: null, manual: true, model: glmModel });
+  }
+  return results;
 }
 
 async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string, glmModel: GlmModel, manual = false) {
@@ -61,20 +75,16 @@ async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string,
     WHERE image_subject_cache.box_source<>'manual' OR excluded.box_source='manual'`;
 }
 
-async function subjectVector(imageUrl: string, model: string, apiKey: string, glmModel: GlmModel, signal: AbortSignal) {
-  const subjectCached = await cachedSubject(imageUrl, glmModel);
-  if (subjectCached?.embedding) return { subject: subjectCached.embedding, imageUrl, box: subjectCached.box, subjectModel: subjectCached.model, fallbackUsed: subjectCached.model !== glmModel, cacheHit: true };
-  const located = subjectCached?.manual
-    ? { box: subjectCached.box, model: glmModel, fallbackUsed: false }
-    : await analyzeSubjectWithFallback(apiKey, imageUrl, glmModel, signal);
+async function embedLocatedSubject(imageUrl: string, located: Pick<LocatedSubject, "box" | "model" | "fallbackUsed">, model: string, signal: AbortSignal, manual = false) {
   const result = await embedImage(imageUrl, located.box, "interactive", signal);
   if (result.model !== model) throw new Error("图片识别模型正在升级，请稍后重试");
   const subject = vectorLiteral(result.embedding);
-  await saveSubject(imageUrl, located.box, subject, located.model, Boolean(subjectCached?.manual));
+  await saveSubject(imageUrl, located.box, subject, located.model, manual);
   return { subject, imageUrl, box: located.box, subjectModel: located.model, fallbackUsed: located.fallbackUsed, cacheHit: false };
 }
 
-type SubjectVectorResult = Awaited<ReturnType<typeof subjectVector>>;
+type SubjectVectorResult = Awaited<ReturnType<typeof embedLocatedSubject>>;
+type SubjectVectorFailure = { imageUrl: string; message: string };
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>) {
   const results = new Array<R>(items.length); let nextIndex = 0;
@@ -84,13 +94,77 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item
   return results;
 }
 
+function createLimiter(limit: number) {
+  let active = 0; const queue: Array<() => void> = [];
+  const next = () => { active -= 1; queue.shift()?.(); };
+  return async <T>(task: () => Promise<T>) => {
+    if (active >= limit) await new Promise<void>((resolve) => queue.push(resolve));
+    active += 1;
+    try { return await task(); } finally { next(); }
+  };
+}
+
+function groupsOf<T>(items: T[], size: number) {
+  const groups: T[][] = [];
+  for (let index = 0; index < items.length; index += size) groups.push(items.slice(index, index + size));
+  return groups;
+}
+
+async function collectSubjectVectors(imageUrls: string[], model: string, apiKey: string, glmModel: GlmModel, signal: AbortSignal, productName?: string) {
+  const uniqueUrls = [...new Set(imageUrls)].slice(0, REALTIME_IMAGE_LIMIT);
+  const skippedImageCount = Math.max(0, new Set(imageUrls).size - uniqueUrls.length);
+  const cached = await cachedSubjects(uniqueUrls, glmModel);
+  const vectors: SubjectVectorResult[] = []; const failures: SubjectVectorFailure[] = [];
+  const uncached: string[] = []; const embeddingTasks: Array<Promise<void>> = [];
+  const limitEmbedding = createLimiter(2);
+  const addEmbedding = (imageUrl: string, located: Pick<LocatedSubject, "box" | "model" | "fallbackUsed">, manual = false) => {
+    const task = limitEmbedding(async () => {
+      if (signal.aborted) throw new DOMException("识别已超时", "AbortError");
+      const vector = await embedLocatedSubject(imageUrl, located, model, signal, manual);
+      vectors.push(vector);
+    }).catch((error) => { failures.push({ imageUrl, message: error instanceof Error ? error.message : "本地主体特征提取失败" }); });
+    embeddingTasks.push(task);
+  };
+
+  for (const imageUrl of uniqueUrls) {
+    const item = cached.get(urlHash(imageUrl));
+    if (item?.embedding) {
+      vectors.push({ subject: item.embedding, imageUrl, box: item.box, subjectModel: item.model, fallbackUsed: item.model !== glmModel, cacheHit: true });
+    } else if (item?.manual) {
+      addEmbedding(imageUrl, { box: item.box, model: item.model, fallbackUsed: false }, true);
+    } else uncached.push(imageUrl);
+  }
+
+  const glmSignal = AbortSignal.any([signal, AbortSignal.timeout(SUBJECT_STAGE_TIMEOUT_MS)]);
+  await mapWithConcurrency(groupsOf(uncached, SUBJECT_BATCH_SIZE), 2, async (group) => {
+    if (glmSignal.aborted) {
+      failures.push(...group.map((imageUrl) => ({ imageUrl, message: "商品主体定位超过 7 秒" })));
+      return;
+    }
+    try {
+      const located = await analyzeSubjectsWithFallback(apiKey, group.map((imageUrl) => ({ imageUrl, productName })), glmModel, glmSignal);
+      const byUrl = new Map(located.map((item) => [item.imageUrl, item]));
+      for (const imageUrl of group) {
+        const item = byUrl.get(imageUrl);
+        if (item) addEmbedding(imageUrl, item);
+        else failures.push({ imageUrl, message: "GLM 未返回该图片的主体范围" });
+      }
+    } catch (error) {
+      const message = error instanceof Error && error.name === "AbortError" ? "商品主体定位超过 7 秒" : error instanceof Error ? error.message : "GLM 商品主体定位失败";
+      failures.push(...group.map((imageUrl) => ({ imageUrl, message })));
+    }
+  });
+  await Promise.all(embeddingTasks);
+  return { vectors, failures, skippedImageCount, requestedImageCount: new Set(imageUrls).size };
+}
+
 async function findCandidates(vectors: SubjectVectorResult[], threshold: number, excluded: string[]) {
   const sql = getDb();
   const matches = new Map<string, Array<{ score: number; newImageUrl: string; newBox: SubjectBox; historyImageUrl: string; historyBox: SubjectBox | null }>>();
-  for (const vector of vectors) {
-    const rows = await sql`SELECT product_id,image_url,subject_box,1-(subject_embedding_vector <=> ${vector.subject}::vector) AS similarity
+  const resultSets = await Promise.all(vectors.map(async (vector) => ({ vector, rows: await sql`SELECT product_id,image_url,subject_box,1-(subject_embedding_vector <=> ${vector.subject}::vector) AS similarity
       FROM product_image_features WHERE subject_status='ready' AND subject_embedding_vector IS NOT NULL
-      AND NOT(product_id=ANY(${excluded}::uuid[])) ORDER BY subject_embedding_vector <=> ${vector.subject}::vector LIMIT 200`;
+      AND NOT(product_id=ANY(${excluded}::uuid[])) ORDER BY subject_embedding_vector <=> ${vector.subject}::vector LIMIT 200` })));
+  for (const { vector, rows } of resultSets) {
     const bestForImage = new Map<string, { score: number; historyImageUrl: string; historyBox: SubjectBox | null }>();
     for (const row of rows) {
       const id = String(row.productId); const score = Number(row.similarity);
@@ -121,10 +195,10 @@ function minimalCandidates(candidates: Array<Record<string, unknown>>) {
   return candidates.map((candidate) => ({ id: candidate.id, sku: candidate.sku, name: candidate.name, similarity: candidate.similarity, matchedImageCount: candidate.matchedImageCount }));
 }
 
-async function createRun(userId: string, imageUrl: string, mode: string, threshold: number, status: "matched" | "no_match" | "failed", candidates: Array<Record<string, unknown>> = [], error?: string) {
+async function createRun(userId: string, imageUrl: string, mode: string, threshold: number, status: "matched" | "no_match" | "failed", candidates: Array<Record<string, unknown>> = [], error?: string, timings: Record<string, unknown> = {}) {
   const sql = getDb();
   const [run] = await sql`INSERT INTO image_match_runs(user_id,image_url,image_url_hash,threshold_mode,threshold,status,candidates,error,timings)
-    VALUES(${userId},${imageUrl},${urlHash(imageUrl)},${mode},${threshold},${status},${sql.json(minimalCandidates(candidates) as never)},${error || null},'{}'::jsonb) RETURNING id`;
+    VALUES(${userId},${imageUrl},${urlHash(imageUrl)},${mode},${threshold},${status},${sql.json(minimalCandidates(candidates) as never)},${error || null},${sql.json(timings as never)}) RETURNING id`;
   if (status === "no_match") await sql`UPDATE image_match_runs SET decision='new',decided_at=now() WHERE id=${run.id}`;
   return String(run.id);
 }
@@ -142,31 +216,46 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const startedAt = performance.now();
     const user = await requireUser("products:create"); const input = schema.parse(await readJson(request)); const settings = await getMatchSettings();
     const primary = input.imageUrls[0]; const exact = await exactIdMatch(input.apiProductId);
     if (exact) {
-      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", [exact]);
+      const timings = { totalMs: Math.round(performance.now() - startedAt), cacheHit: true, processedImageCount: 0, failedImageCount: 0 };
+      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", [exact], undefined, timings);
       await writeAudit(user, "image.id_match", "image_match", runId, `商品 ID 已直接匹配货号 ${exact.sku}`, { apiProductId: input.apiProductId }, requestIp(request));
-      return ok({ runId, status: "id_match", candidates: [{ ...exact, similarity: 1, localSimilarity: 1, matchType: "product_id" }] });
+      return ok({ runId, status: "id_match", candidates: [{ ...exact, similarity: 1, localSimilarity: 1, matchType: "product_id" }], timings });
     }
-    const timeout = new AbortController(); const timer = setTimeout(() => timeout.abort(), 90_000);
+    // Reserve the final second for local vector lookup, ranking, audit recording and the HTTP response.
+    const timeout = new AbortController(); const timer = setTimeout(() => timeout.abort(), REALTIME_WORK_TIMEOUT_MS);
     try {
       const { apiKey, model: glmModel } = await getGlmRuntime();
-      const vectors = await mapWithConcurrency(input.imageUrls, 2, (url) => subjectVector(url, settings.model, apiKey, glmModel, timeout.signal));
-      const candidates = await findCandidates(vectors, settings.threshold, input.excludeProductIds);
-      if (!candidates.length) {
-        const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "no_match");
-        await writeAudit(user, "image.match", "image_match", runId, "本地主体特征未发现疑似同款", { candidateCount: 0, imageCount: vectors.length, fallbackCount: vectors.filter((item) => item.fallbackUsed).length }, requestIp(request));
-        return ok({ runId, status: "no_match", candidates: [] });
+      const collected = await collectSubjectVectors(input.imageUrls, settings.model, apiKey, glmModel, timeout.signal, input.productName);
+      const unprocessedCount = collected.failures.length + collected.skippedImageCount;
+      const coverageMessage = unprocessedCount ? `已使用 ${collected.vectors.length} 张图片完成比对，另 ${unprocessedCount} 张因超时、失败或超过实时上限未参与` : undefined;
+      const timingBase = { cacheHit: collected.vectors.length > 0 && collected.vectors.every((item) => item.cacheHit), processedImageCount: collected.vectors.length, failedImageCount: unprocessedCount, requestedImageCount: collected.requestedImageCount, fallbackCount: collected.vectors.filter((item) => item.fallbackUsed).length };
+      if (!collected.vectors.length) {
+        const message = "10 秒内未能完成任何图片的主体定位与本地特征提取，请重试";
+        const timings = { ...timingBase, totalMs: Math.round(performance.now() - startedAt) };
+        const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message, timings);
+        await writeAudit(user, "image.match_failed", "image_match", runId, message, { failures: collected.failures.slice(0, 8) }, requestIp(request));
+        return ok({ runId, status: "failed", candidates: [], message, timings });
       }
-      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", candidates);
-      await writeAudit(user, "image.match", "image_match", runId, `本地主体特征发现 ${candidates.length} 个疑似同款`, { candidateCount: candidates.length, imageCount: vectors.length, fallbackCount: vectors.filter((item) => item.fallbackUsed).length }, requestIp(request));
-      return ok({ runId, status: "matched", candidates });
+      const candidates = await findCandidates(collected.vectors, settings.threshold, input.excludeProductIds);
+      const timings = { ...timingBase, totalMs: Math.round(performance.now() - startedAt) };
+      if (!candidates.length) {
+        const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "no_match", [], coverageMessage, timings);
+        await writeAudit(user, "image.match", "image_match", runId, "本地主体特征未发现疑似同款", { candidateCount: 0, imageCount: collected.vectors.length, unprocessedCount, fallbackCount: timingBase.fallbackCount }, requestIp(request));
+        return ok({ runId, status: "no_match", candidates: [], message: coverageMessage, timings });
+      }
+      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", candidates, coverageMessage, timings);
+      await writeAudit(user, "image.match", "image_match", runId, `本地主体特征发现 ${candidates.length} 个疑似同款`, { candidateCount: candidates.length, imageCount: collected.vectors.length, unprocessedCount, fallbackCount: timingBase.fallbackCount }, requestIp(request));
+      return ok({ runId, status: "matched", candidates, message: coverageMessage, timings });
     } catch (reason) {
-      const message = reason instanceof Error && reason.name === "AbortError" ? "GLM 图片识别超过 90 秒，请重试或确认后继续" : reason instanceof Error ? reason.message : "GLM 图片识别失败";
-      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message.slice(0, 1000));
+      const message = reason instanceof Error && reason.name === "AbortError" ? "图片识别超过 10 秒，请重试或确认后继续" : reason instanceof Error ? reason.message : "GLM 图片识别失败";
+      const timings = { totalMs: Math.round(performance.now() - startedAt) };
+      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message.slice(0, 1000), timings);
       await writeAudit(user, "image.match_failed", "image_match", runId, "GLM 图片识别失败", undefined, requestIp(request));
-      return ok({ runId, status: "failed", candidates: [], message });
+      return ok({ runId, status: "failed", candidates: [], message, timings });
     } finally { clearTimeout(timer); }
   } catch (error) { return apiError(error); }
 }
