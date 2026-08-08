@@ -102,7 +102,25 @@ async function warmModel() {
   }
 }
 
-async function embed(imageUrl) {
+function normalizedCrop(image, box) {
+  if (!Array.isArray(box) || box.length !== 4) return null;
+  const values = box.map(Number);
+  if (values.some((value) => !Number.isFinite(value))) return null;
+  const [xmin, ymin, xmax, ymax] = values;
+  if (xmax <= xmin || ymax <= ymin) return null;
+  const width = xmax - xmin;
+  const height = ymax - ymin;
+  const paddingX = width * 0.08;
+  const paddingY = height * 0.08;
+  return [
+    Math.max(0, Math.floor((xmin - paddingX) / 1000 * image.width)),
+    Math.max(0, Math.floor((ymin - paddingY) / 1000 * image.height)),
+    Math.min(image.width, Math.ceil((xmax + paddingX) / 1000 * image.width)),
+    Math.min(image.height, Math.ceil((ymax + paddingY) / 1000 * image.height)),
+  ];
+}
+
+async function embed(imageUrl, box) {
   const started = performance.now();
   const timings = {};
   try {
@@ -114,7 +132,11 @@ async function embed(imageUrl) {
     const [{ RawImage }, extractor] = await runtime;
     const decodeStarted = performance.now();
     let image;
-    try { image = await RawImage.fromBlob(blob); }
+    try {
+      image = await RawImage.fromBlob(blob);
+      const crop = normalizedCrop(image, box);
+      if (crop && crop[2] - crop[0] >= 8 && crop[3] - crop[1] >= 8) image = await image.crop(crop);
+    }
     finally { timings.decodeMs = elapsed(decodeStarted); }
     const inferenceStarted = performance.now();
     let tensor;
@@ -178,7 +200,7 @@ function drainQueue() {
   if (!job) return;
   busy = true;
   const queueMs = elapsed(job.enqueuedAt);
-  const runner = job.imageBase64 ? embedBase64(job.imageBase64) : embed(job.imageUrl);
+  const runner = job.imageBase64 ? embedBase64(job.imageBase64) : embed(job.imageUrl, job.box);
   Promise.resolve().then(() => runner).then((result) => {
     result.timings.queueMs = queueMs;
     result.timings.totalMs = elapsed(job.enqueuedAt);
@@ -193,10 +215,10 @@ function drainQueue() {
   });
 }
 
-function enqueue(imageUrl, priority) {
+function enqueue(imageUrl, priority, box) {
   return new Promise((resolve, reject) => {
     const queue = priority === "background" ? backgroundQueue : interactiveQueue;
-    queue.push({ imageUrl, enqueuedAt: performance.now(), resolve, reject });
+    queue.push({ imageUrl, box, enqueuedAt: performance.now(), resolve, reject });
     drainQueue();
   });
 }
@@ -229,11 +251,14 @@ const server = http.createServer((request, response) => {
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; if (raw.length > 20_000) request.destroy(); });
     request.on("end", () => {
-      let imageUrl;
-      try { imageUrl = JSON.parse(raw).imageUrl; if (typeof imageUrl !== "string") throw new Error(); }
+      let imageUrl; let box;
+      try {
+        const parsed = JSON.parse(raw); imageUrl = parsed.imageUrl; box = parsed.box;
+        if (typeof imageUrl !== "string" || (box !== undefined && (!Array.isArray(box) || box.length !== 4))) throw new Error();
+      }
       catch { return json(response, 400, { message: "图片网址无效" }); }
       const priority = request.headers["x-vision-priority"] === "background" ? "background" : "interactive";
-      enqueue(imageUrl, priority).then(({ embedding, timings }) => json(response, 200, { embedding, model: modelVersion, dimensions: embedding.length, timings })).catch((error) => json(response, 422, { message: error instanceof Error && error.name === "AbortError" ? "图片读取超时，请检查图片网址" : error instanceof Error ? error.message : "图片识别失败", timings: error.timings || {} }));
+      enqueue(imageUrl, priority, box).then(({ embedding, timings }) => json(response, 200, { embedding, model: modelVersion, dimensions: embedding.length, timings })).catch((error) => json(response, 422, { message: error instanceof Error && error.name === "AbortError" ? "图片读取超时，请检查图片网址" : error instanceof Error ? error.message : "图片识别失败", timings: error.timings || {} }));
     });
     return;
   }

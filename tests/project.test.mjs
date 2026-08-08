@@ -241,6 +241,20 @@ test("图片识别使用预热的 Q8 模型与前后台优先队列", async () =
   assert.match(route, /embedding_vector <=>/);
 });
 
+test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", async () => {
+  const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
+  assert.ok(route.indexOf("exactIdMatch(input.apiProductId)") < route.indexOf("getGlmApiKey()"));
+  assert.match(route, /slice\(0, 20\)/);
+  assert.match(route, /subject_embedding_vector <=>/);
+  assert.match(route, /slice\(0, 5\)/);
+  assert.match(route, /manual: z\.boolean/);
+  const productsRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(productsRoute, /pai\.is_current = true AND p\.archived = false/);
+  const migration = await readFile(new URL("../migrations/025_glm_subject_matching.sql", import.meta.url), "utf8");
+  assert.match(migration, /subject_embedding_vector vector\(512\)/);
+  assert.match(migration, /image_subject_cache/);
+});
+
 test("问题处理、商品复制、流转图片和状态精简按新流程实现", async () => {
   assert.equal(normalizeCommission("20"), "20%");
   assert.equal(normalizeCommission("20%"), "20%");

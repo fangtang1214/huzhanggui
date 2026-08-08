@@ -4,6 +4,8 @@ import { AuthError, hasPermission, requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { IMAGE_MODEL, MATCH_THRESHOLDS, syncProductImageQueue } from "@/lib/image-matching";
+import { GLM_MODEL, getGlmApiKey, testGlmConnection } from "@/lib/glm-vision";
+import { encryptSecret } from "@/lib/secret-box";
 import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
 import { setCurrentProductApiId } from "@/lib/product-api-ids";
 
@@ -21,13 +23,23 @@ export async function GET() {
     const [setting] = await sql`SELECT value FROM app_settings WHERE key='image_matching'`;
     const [progress] = await sql`SELECT count(*)::int AS total, count(*) FILTER(WHERE status='ready')::int AS ready,
       count(*) FILTER(WHERE status='pending' OR status='processing')::int AS pending, count(*) FILTER(WHERE status='failed')::int AS failed FROM product_image_features`;
+    const [glmSettingRow] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
+    const glmValue = (glmSettingRow?.value || {}) as { configured?: boolean; apiKeyEncrypted?: string; indexingStatus?: string };
+    const [subjectProgress] = await sql`SELECT count(*)::int AS total,
+      count(*) FILTER(WHERE subject_status='ready')::int AS ready,
+      count(*) FILTER(WHERE subject_status IN ('waiting','pending','processing'))::int AS pending,
+      count(*) FILTER(WHERE subject_status='failed')::int AS failed FROM product_image_features`;
     const runs = await sql`SELECT r.id,r.image_url,r.status,r.decision,r.error,r.threshold_mode,r.threshold,r.candidates,r.timings,r.created_at,r.decided_at,u.name AS user_name
       FROM image_match_runs r LEFT JOIN users u ON u.id=r.user_id ORDER BY r.created_at DESC LIMIT 50`;
     const batches = await sql`SELECT b.id,b.product_id,b.sample_ids,b.status,b.merged_product_version,b.correction_note,b.created_at,b.corrected_at,
       p.sku,p.name,p.version,u.name AS user_name,cp.sku AS corrected_sku
       FROM product_intake_batches b JOIN products p ON p.id=b.product_id LEFT JOIN products cp ON cp.id=b.corrected_product_id
       LEFT JOIN users u ON u.id=b.user_id ORDER BY b.created_at DESC LIMIT 50`;
-    return ok({ setting: setting?.value || { mode: "standard", model: IMAGE_MODEL }, thresholds: MATCH_THRESHOLDS, progress, runs, batches });
+    return ok({ setting: setting?.value || { mode: "standard", model: IMAGE_MODEL }, thresholds: MATCH_THRESHOLDS, progress, runs, batches,
+      isSuperAdmin: user.isSuperAdmin,
+      glm: { configured: Boolean(glmValue.configured && glmValue.apiKeyEncrypted), indexingStatus: glmValue.indexingStatus || "idle", model: GLM_MODEL },
+      subjectProgress,
+    });
   } catch (error) { return apiError(error); }
 }
 
@@ -35,12 +47,53 @@ const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("settings"), mode: z.enum(["strict", "standard", "relaxed"]) }),
   z.object({ action: z.literal("retry_failed") }),
   z.object({ action: z.literal("reindex_all") }),
+  z.object({ action: z.literal("glm_save_key"), apiKey: z.string().trim().min(8).max(500) }),
+  z.object({ action: z.literal("glm_test"), apiKey: z.string().trim().max(500).optional().default("") }),
+  z.object({ action: z.enum(["glm_start", "glm_pause", "glm_resume", "glm_retry_failed"]) }),
   z.object({ action: z.literal("correct_merge"), batchId: z.string().uuid(), note: z.string().trim().max(1000).optional().default("") }),
 ]);
 
 export async function POST(request: Request) {
   try {
     const user = await requireUser(); const input = schema.parse(await readJson(request)); const sql = getDb();
+    if (input.action.startsWith("glm_")) {
+      if (!user.isSuperAdmin) return Response.json({ ok: false, message: "仅超级管理员可以配置和管理 GLM 图片识别" }, { status: 403 });
+      if (input.action === "glm_save_key") {
+        const [current] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
+        const value = (current?.value || {}) as { indexingStatus?: string };
+        await sql`INSERT INTO app_settings(key,value) VALUES('glm_image_matching',${sql.json({ configured: true, apiKeyEncrypted: encryptSecret(input.apiKey), indexingStatus: value.indexingStatus || "idle", model: GLM_MODEL })})
+          ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()`;
+        await writeAudit(user, "image.glm_key_saved", "app_setting", "glm_image_matching", "已更新 GLM 图片识别密钥", undefined, requestIp(request));
+        return ok({ saved: true });
+      }
+      if (input.action === "glm_test") {
+        const apiKey = input.apiKey || await getGlmApiKey();
+        const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 30_000);
+        try { await testGlmConnection(apiKey, controller.signal); }
+        finally { clearTimeout(timer); }
+        return ok({ connected: true });
+      }
+      const [current] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
+      const value = (current?.value || {}) as { configured?: boolean; apiKeyEncrypted?: string; indexingStatus?: string };
+      if (!value.configured || !value.apiKeyEncrypted) return Response.json({ ok: false, message: "请先保存 GLM API 密钥" }, { status: 409 });
+      if (input.action === "glm_start") {
+        await sql.begin(async (tx) => {
+          await tx`UPDATE product_image_features SET subject_status='pending',subject_error=NULL,subject_updated_at=now() WHERE subject_status='waiting'`;
+          await tx`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"running\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
+        });
+      } else if (input.action === "glm_pause") {
+        await sql`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"paused\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
+      } else if (input.action === "glm_resume") {
+        await sql`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"running\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
+      } else {
+        await sql.begin(async (tx) => {
+          await tx`UPDATE product_image_features SET subject_status='pending',subject_error=NULL,subject_attempts=0,subject_updated_at=now() WHERE subject_status='failed'`;
+          await tx`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"running\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
+        });
+      }
+      await writeAudit(user, `image.${input.action}`, "image_subject_index", null, input.action === "glm_pause" ? "已暂停 GLM 历史图片索引" : "已启动 GLM 历史图片索引", undefined, requestIp(request));
+      return ok({ saved: true });
+    }
     if (input.action === "settings") {
       if (!hasPermission(user, "image_matching:manage")) return Response.json({ ok: false, message: "没有管理图片识别的权限" }, { status: 403 });
       await sql`INSERT INTO app_settings(key,value) VALUES('image_matching',${sql.json({ mode: input.mode, model: IMAGE_MODEL })})
@@ -58,6 +111,7 @@ export async function POST(request: Request) {
       await writeAudit(user, `image.${input.action}`, "image_index", null, input.action === "retry_failed" ? "重新尝试失败的历史图片" : "重新建立全部图片索引", undefined, requestIp(request));
       return ok({ queued: true });
     }
+    if (input.action !== "correct_merge") return Response.json({ ok: false, message: "不支持的图片识别操作" }, { status: 400 });
     if (!hasPermission(user, "products:correct_merge")) return Response.json({ ok: false, message: "没有纠正误判同款的权限" }, { status: 403 });
     const result = await sql.begin(async (tx) => {
       const [batch] = await tx`SELECT * FROM product_intake_batches WHERE id=${input.batchId} FOR UPDATE`;

@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { AlertTriangle, BrainCircuit, CheckCircle2, RefreshCw, RotateCcw, Settings2, Sparkles } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import { AlertTriangle, BrainCircuit, CheckCircle2, KeyRound, Pause, Play, RefreshCw, RotateCcw, Settings2, Sparkles } from "lucide-react";
 import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader } from "../ui";
 
@@ -11,6 +11,9 @@ type RecognitionData = {
   progress: { total: number; ready: number; pending: number; failed: number };
   runs: Array<{ id: string; imageUrl: string; status: string; decision: string; error?: string; candidates: unknown[]; timings?: { cacheHit?: boolean; queueMs?: number; downloadMs?: number; decodeMs?: number; inferenceMs?: number; lookupMs?: number; totalMs?: number }; userName?: string; createdAt: string }>;
   batches: Array<{ id: string; sku: string; name: string; sampleIds: string[]; status: string; version: number; mergedProductVersion: number; userName?: string; createdAt: string; correctedSku?: string; correctedAt?: string }>;
+  isSuperAdmin: boolean;
+  glm: { configured: boolean; indexingStatus: "idle" | "running" | "paused"; model: string };
+  subjectProgress: { total: number; ready: number; pending: number; failed: number };
 };
 
 const duration = (value?: number) => value === undefined ? "—" : value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${Math.round(value)} 毫秒`;
@@ -28,15 +31,23 @@ const modes = [
 
 export function RecognitionView() {
   const { can } = useAppData(); const toast = useToast(); const { data, loading, error, reload } = useRemote<RecognitionData>("/api/recognition");
-  const [busy, setBusy] = useState(""); const [notes, setNotes] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(""); const [notes, setNotes] = useState<Record<string, string>>({}); const [glmKey, setGlmKey] = useState("");
+  useEffect(() => {
+    if (data?.glm.indexingStatus !== "running") return;
+    const timer = window.setInterval(() => void reload(), 5000);
+    return () => window.clearInterval(timer);
+  }, [data?.glm.indexingStatus, reload]);
   async function action(payload: Record<string, unknown>, key: string, message: string) {
-    setBusy(key); try { const result = await apiFetch<{ restored?: boolean; sku?: string }>("/api/recognition", { method: "POST", body: JSON.stringify(payload) }); toast(result.sku ? `${message}：${result.sku}${result.restored === false ? "（原商品有后续修改，未自动覆盖）" : ""}` : message); await reload(); } catch (reason) { toast(reason instanceof Error ? reason.message : "操作失败", "error"); } finally { setBusy(""); }
+    setBusy(key); try { const result = await apiFetch<{ restored?: boolean; sku?: string }>("/api/recognition", { method: "POST", body: JSON.stringify(payload) }); toast(result.sku ? `${message}：${result.sku}${result.restored === false ? "（原商品有后续修改，未自动覆盖）" : ""}` : message); await reload(); return true; } catch (reason) { toast(reason instanceof Error ? reason.message : "操作失败", "error"); return false; } finally { setBusy(""); }
   }
   async function correct(event: FormEvent, batch: RecognitionData["batches"][number]) { event.preventDefault(); const changed = Number(batch.version) !== Number(batch.mergedProductVersion); const message = changed ? "原商品在这次合并后又被修改过。继续后，系统只会把本次新增实物移到新货号，不会覆盖原商品的后续修改；完成后请人工检查原商品资料。是否继续？" : "确定这次被误判为同款吗？系统会把本次新增的实物移到一个新货号下，并恢复原商品合并前的资料。"; if (!confirm(message)) return; await action({ action: "correct_merge", batchId: batch.id, note: notes[batch.id] || "" }, batch.id, "已纠正并生成新货号"); }
   if (loading) return <LoadingState label="正在读取图片识别状态…" />; if (error || !data) return <ErrorState message={error || "读取失败"} retry={reload} />;
   const percent = data.progress.total ? Math.round(data.progress.ready / data.progress.total * 100) : 100;
+  const subjectPercent = data.subjectProgress.total ? Math.round(data.subjectProgress.ready / data.subjectProgress.total * 100) : 100;
   return <>
-    <PageHeader eyebrow="本地 AI" title="图片识别管理" description="模型在公司服务器内运行，只保存小型特征数据，不保存商品原图。" />
+    <PageHeader eyebrow="AI 辅助识别" title="图片识别管理" description="GLM 负责定位和复核商品主体，本地模型负责快速召回；只保存特征数据，不保存商品原图。" />
+    {data.isSuperAdmin && <section className="panel form-section glm-settings-card"><header><KeyRound size={22} /><div><h2>GLM-4.6V-Flash</h2><p>API 密钥加密保存在服务器中。保存密钥不会自动分析历史图片。</p></div><span className={`soft-badge ${data.glm.configured ? "success" : ""}`}>{data.glm.configured ? "已配置" : "未配置"}</span></header><div className="glm-key-row"><input type="password" autoComplete="new-password" value={glmKey} onChange={(event) => setGlmKey(event.target.value)} placeholder={data.glm.configured ? "已保存密钥；留空可直接测试现有配置" : "请输入智谱 GLM API Key"} /><button type="button" className="button button-secondary" disabled={!!busy || (!glmKey && !data.glm.configured)} onClick={() => action({ action: "glm_test", apiKey: glmKey }, "glm-test", "GLM 连接测试成功")}><Sparkles size={16} />测试连接</button><button type="button" className="button button-primary" disabled={!!busy || !glmKey.trim()} onClick={async () => { if (await action({ action: "glm_save_key", apiKey: glmKey.trim() }, "glm-save", "GLM 密钥已加密保存")) setGlmKey(""); }}><KeyRound size={16} />保存密钥</button></div></section>}
+    <section className="recognition-overview"><article className="panel recognition-progress"><span className="recognition-icon"><Sparkles size={24} /></span><div><small>GLM 商品主体索引</small><b>{subjectPercent}%</b><p>{data.subjectProgress.ready} 已完成 · {data.subjectProgress.pending} 等待中 · {data.subjectProgress.failed} 失败</p><p>当前状态：{data.glm.indexingStatus === "running" ? "正在后台建立" : data.glm.indexingStatus === "paused" ? "已暂停" : "尚未开始"}</p></div><div className="progress-track"><i style={{ width: `${subjectPercent}%` }} /></div>{data.isSuperAdmin && <div className="compact-actions">{data.glm.indexingStatus === "idle" && <button className="button button-primary button-compact" disabled={!!busy || !data.glm.configured} onClick={() => action({ action: "glm_start" }, "glm-start", "已开始建立 GLM 索引")}><Play size={15} />开始建立GLM索引</button>}{data.glm.indexingStatus === "running" && <button className="button button-secondary button-compact" disabled={!!busy} onClick={() => action({ action: "glm_pause" }, "glm-pause", "GLM 历史索引已暂停")}><Pause size={15} />暂停</button>}{data.glm.indexingStatus === "paused" && <button className="button button-primary button-compact" disabled={!!busy} onClick={() => action({ action: "glm_resume" }, "glm-resume", "GLM 历史索引已继续")}><Play size={15} />继续</button>}<button className="button button-ghost button-compact" disabled={!!busy || !data.subjectProgress.failed} onClick={() => action({ action: "glm_retry_failed" }, "glm-retry", "失败图片已重新排队")}><RefreshCw size={15} />重试失败项</button></div>}</article><article className="panel recognition-help"><BrainCircuit size={23} /><div><b>实时登记不受暂停影响</b><p>暂停只停止历史图片的后台分析；登记新商品时仍会调用 GLM。所有图像结果都只是疑似同款，最终由登记人员确认。</p></div></article></section>
     <section className="recognition-overview"><article className="panel recognition-progress"><span className="recognition-icon"><BrainCircuit size={24} /></span><div><small>历史图片索引</small><b>{percent}%</b><p>{data.progress.ready} 已完成 · {data.progress.pending} 等待中 · {data.progress.failed} 失败</p></div><div className="progress-track"><i style={{ width: `${percent}%` }} /></div>{can("image_matching:manage") && <div className="compact-actions"><button className="button button-secondary button-compact" disabled={!!busy} onClick={() => action({ action: "retry_failed" }, "retry", "失败图片已重新排队")}><RefreshCw size={15} />重试失败项</button><button className="button button-ghost button-compact" disabled={!!busy} onClick={() => { if (confirm("确定重新建立全部历史图片索引吗？此过程会在后台逐步完成。")) void action({ action: "reindex_all" }, "reindex", "全部图片已重新排队"); }}><RotateCcw size={15} />全部重建</button></div>}</article>
       <article className="panel recognition-help"><Sparkles size={23} /><div><b>识别不代替人工判断</b><p>系统只负责筛出疑似同款，最终仍由登记人员确认。不同颜色、尺码或规格应建立新货号。</p></div></article></section>
     {can("image_matching:manage") && <section className="panel form-section"><header><Settings2 size={22} /><div><h2>匹配灵敏度</h2><p>修改后只影响新的图片识别。</p></div></header><div className="mode-grid">{modes.map((mode) => <button type="button" key={mode.value} className={data.setting.mode === mode.value ? "selected" : ""} onClick={() => action({ action: "settings", mode: mode.value }, `mode-${mode.value}`, `已切换到${mode.label}模式`)}><span>{data.setting.mode === mode.value && <CheckCircle2 size={17} />}{mode.label}</span><p>{mode.description}</p><small>相似度阈值 {Math.round(data.thresholds[mode.value] * 100)}%</small></button>)}</div></section>}

@@ -20,9 +20,9 @@ type SampleRow = { id: string; code: string; arrivedAt: string; status: string; 
 type LinkHistoryRow = { id: string; url: string; replacedByUrl?: string; source: "product_edit" | "link_issue" | "intake_merge" | "recognition_correction" | "window_registration" | "league_link_correction"; sourceEntityId?: string; changedByName?: string; changedAt: string };
 type ProductApiIdRow = { id: string; value: string; isCurrent: boolean; createdAt: string };
 type ProductDetailData = { product: ProductRow & { businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> }; samples: SampleRow[]; linkHistory: LinkHistoryRow[]; apiIds: ProductApiIdRow[] };
-type MatchCandidate = ProductRow & { archived?: boolean; similarity: number; businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> };
+type MatchCandidate = ProductRow & { archived?: boolean; similarity: number; localSimilarity?: number; glmScore?: number; result?: "same" | "uncertain"; evidence?: string[]; differences?: string[]; businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> };
 type MatchTimings = { cacheHit?: boolean; totalMs?: number };
-type MatchResult = { runId: string; status: "matched" | "no_match" | "failed"; candidates: MatchCandidate[]; message?: string; timings?: MatchTimings };
+type MatchResult = { runId: string; status: "id_match" | "matched" | "no_match" | "failed"; candidates: MatchCandidate[]; message?: string; timings?: MatchTimings };
 
 const recognitionTiming = (timings?: MatchTimings) => timings?.totalMs === undefined ? "" : `${timings.cacheHit ? "已复用图片特征 · " : ""}用时 ${timings.totalMs >= 1000 ? `${(timings.totalMs / 1000).toFixed(1)} 秒` : `${Math.round(timings.totalMs)} 毫秒`}`;
 
@@ -359,6 +359,7 @@ export function ProductFormView({ id }: { id?: string }) {
   const [recognition, setRecognition] = useState<{ phase: "waiting" | "checking" | "ready" | "failed"; runId: string; runUrl: string; decision: "" | "matched" | "new" | "failed_continue"; matchedProductId: string; message: string; timingText: string }>({ phase: id ? "ready" : "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "" });
   const [confirmedMatch, setConfirmedMatch] = useState<{ runId: string; runUrl: string; productId: string; sku: string } | null>(null);
   const [candidates, setCandidates] = useState<MatchCandidate[]>([]); const [recognizingUrl, setRecognizingUrl] = useState("");
+  const [candidateSearch, setCandidateSearch] = useState(""); const [candidateSearching, setCandidateSearching] = useState(false); const [candidateSearchRows, setCandidateSearchRows] = useState<MatchCandidate[]>([]);
   const detail = useRemote<ProductDetailData>(id ? `/api/products/${id}` : null);
   useEffect(() => {
     if (id) return;
@@ -418,23 +419,29 @@ export function ProductFormView({ id }: { id?: string }) {
   const set = (key: keyof ProductFormState, value: string | string[]) => { setDraftTouched(true); setForm((current) => ({ ...current, [key]: value })); };
   const imageUrls = form.imageUrls.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
   const primaryImageUrl = imageUrls.find((url) => { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; } }) || "";
+  const recognitionKey = JSON.stringify({ imageUrls, apiProductId: form.apiProductId || "" });
   const locations = lookups?.locations.filter((item) => item.departmentId === form.initialDepartmentId) || [];
   useEffect(() => {
-    if (id || recognition.decision === "matched" || !recognition.runUrl || primaryImageUrl === recognition.runUrl || recognition.phase === "checking") return;
+    if (id || !recognition.runUrl || checkedUrls.includes(recognitionKey) || recognition.phase === "checking") return;
     setCheckedUrls([]); setCandidates([]); setExcludedProducts([]);
-    setRecognition((value) => ({ ...value, phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "主图已变更，请重新识别", timingText: "" }));
-  }, [id, primaryImageUrl, recognition.decision, recognition.phase, recognition.runUrl]);
+    setConfirmedMatch(null);
+    setRecognition((value) => ({ ...value, phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "商品图片或 ID 已变更，请重新识别", timingText: "" }));
+  }, [checkedUrls, id, recognition.phase, recognition.runUrl, recognitionKey]);
   useEffect(() => {
     if (id || recognition.phase === "checking" || candidates.length) return;
-    const nextUrl = primaryImageUrl && !checkedUrls.includes(primaryImageUrl) ? primaryImageUrl : "";
+    const nextUrl = primaryImageUrl && !checkedUrls.includes(recognitionKey) ? primaryImageUrl : "";
     if (!nextUrl) return;
     const timer = window.setTimeout(async () => {
       setRecognition((value) => ({ ...value, phase: "checking", message: "", timingText: "" })); setRecognizingUrl(nextUrl);
       try {
-        const result = await apiFetch<MatchResult>("/api/image-matching", { method: "POST", body: JSON.stringify({ imageUrl: nextUrl, excludeProductIds: excludedProducts }) });
+        const result = await apiFetch<MatchResult>("/api/image-matching", { method: "POST", body: JSON.stringify({ imageUrls, apiProductId: form.apiProductId || null, excludeProductIds: excludedProducts }) });
         const timingText = recognitionTiming(result.timings);
-        setCheckedUrls((value) => [...new Set([...value, nextUrl])]);
-        if (result.status === "matched") { setCandidates(result.candidates); setRecognition((value) => ({ ...value, phase: "ready", runId: result.runId, runUrl: nextUrl, message: "", timingText })); }
+        setCheckedUrls((value) => [...new Set([...value, recognitionKey])]);
+        if (result.status === "id_match" && result.candidates[0]) {
+          setRecognition((value) => ({ ...value, phase: "ready", runId: result.runId, runUrl: nextUrl, message: "商品 ID 已直接匹配，无需图片判断", timingText }));
+          chooseCandidate(result.candidates[0], false, result.runId, true);
+        }
+        else if (result.status === "matched") { setCandidates(result.candidates); setRecognition((value) => ({ ...value, phase: "ready", runId: result.runId, runUrl: nextUrl, message: "", timingText })); }
         else if (result.status === "failed") setRecognition((value) => ({ ...value, phase: "failed", runId: result.runId, runUrl: nextUrl, decision: "", message: result.message || "图片识别失败", timingText }));
         else if (confirmedMatch) setRecognition((value) => ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `主图未发现其他疑似款，仍沿用 ${confirmedMatch.sku}`, timingText }));
         else setRecognition((value) => ({ ...value, phase: "ready", runId: result.runId, runUrl: nextUrl, decision: "new", matchedProductId: "", message: "主图未发现疑似同款", timingText }));
@@ -442,8 +449,10 @@ export function ProductFormView({ id }: { id?: string }) {
       finally { setRecognizingUrl(""); }
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [id, primaryImageUrl, checkedUrls, recognition.phase, candidates.length, excludedProducts, confirmedMatch]);
-  function chooseCandidate(candidate: MatchCandidate) {
+  // chooseCandidate intentionally uses the form values captured for this recognition request.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, primaryImageUrl, checkedUrls, recognition.phase, candidates.length, excludedProducts, confirmedMatch, recognitionKey, imageUrls, form.apiProductId]);
+  function chooseCandidate(candidate: MatchCandidate, manual = false, resultRunId = recognition.runId, exactId = false) {
     setDraftTouched(true);
     const mergedImages = Array.from(new Set([...(candidate.imageUrls || []), ...imageUrls]));
     setForm((current) => {
@@ -453,7 +462,7 @@ export function ProductFormView({ id }: { id?: string }) {
         productUrl: current.productUrl,
         commission: current.commission,
         storeRating: current.storeRating,
-        supplyChain: candidate.supplyChain || "",
+        supplyChain: current.supplyChain,
         cooperationMechanism: candidate.cooperationMechanism || "",
       } : {
         storeName: candidate.storeName || "",
@@ -466,12 +475,21 @@ export function ProductFormView({ id }: { id?: string }) {
       };
       return { ...current, sku: candidate.sku, name: candidate.name, departmentIds: candidate.departments.map((item) => item.id), businessContactId: candidate.businessContactId || "", ...cooperation, categoryId: candidate.categoryId || "", tagIds: candidate.tags.map((item) => item.id), imageUrls: mergedImages.join("\n"), notes: candidate.notes || "" };
     });
-    setCheckedUrls((value) => [...new Set([...value, ...(candidate.imageUrls || [])])]); setExcludedProducts((value) => [...new Set([...value, candidate.id])]); setCandidates([]);
-    setConfirmedMatch({ runId: recognition.runId, runUrl: recognition.runUrl, productId: candidate.id, sku: candidate.sku });
-    setRecognition((value) => ({ ...value, phase: "ready", decision: "matched", matchedProductId: candidate.id, message: form.windowProductId ? `已确认与 ${candidate.sku} 为同款；将沿用货号并更新橱窗店铺与合作信息` : `已确认与 ${candidate.sku} 为同款，本次将沿用该货号` }));
-    void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "matched", selectedProductId: candidate.id }) }).catch(() => undefined);
+    const mergedRecognitionKey = JSON.stringify({ imageUrls: mergedImages, apiProductId: form.apiProductId || "" });
+    setCheckedUrls((value) => [...new Set([...value, recognitionKey, mergedRecognitionKey])]); setExcludedProducts((value) => [...new Set([...value, candidate.id])]); setCandidates([]);
+    setConfirmedMatch({ runId: resultRunId, runUrl: recognition.runUrl || primaryImageUrl, productId: candidate.id, sku: candidate.sku });
+    setCandidateSearch(""); setCandidateSearchRows([]);
+    setRecognition((value) => ({ ...value, runId: resultRunId, phase: "ready", decision: "matched", matchedProductId: candidate.id, message: exactId ? `商品 ID 完全一致，已直接关联 ${candidate.sku}` : form.windowProductId ? `已确认与 ${candidate.sku} 为同款；将沿用货号并更新橱窗店铺与合作信息` : `已确认与 ${candidate.sku} 为同款，本次将沿用该货号` }));
+    void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: resultRunId, decision: "matched", selectedProductId: candidate.id, manual }) }).catch(() => undefined);
   }
   function rejectCandidates() { setExcludedProducts((value) => [...new Set([...value, ...candidates.map((item) => item.id)])]); setCandidates([]); setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `新增图片的候选均已排除，仍沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "new", matchedProductId: "", message: "已确认都不是同款，将自动生成新货号" })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "new" }) }).catch(() => undefined); }
+  async function searchExistingCandidate(event: FormEvent) {
+    event.preventDefault(); if (!candidateSearch.trim()) return;
+    setCandidateSearching(true);
+    try { const result = await apiFetch<{ rows: MatchCandidate[] }>(`/api/image-matching?search=${encodeURIComponent(candidateSearch.trim())}`); setCandidateSearchRows(result.rows); }
+    catch (reason) { toast(reason instanceof Error ? reason.message : "搜索商品失败", "error"); }
+    finally { setCandidateSearching(false); }
+  }
   function continueDraft() {
     if (!draftCandidate) return;
     setForm({ ...blankForm(), ...draftCandidate.form, departmentIds: draftCandidate.form.departmentIds || [], tagIds: draftCandidate.form.tagIds || [] });
@@ -510,10 +528,10 @@ export function ProductFormView({ id }: { id?: string }) {
   }
   if (id && detail.loading) return <LoadingState />;
   return <form onSubmit={submit}>
-    <PageHeader eyebrow={id ? "编辑档案" : "到样登记"} title={id ? "修改商品信息" : "登记新商品与实物样品"} description={id ? "货号不可修改，其他字段的每次修改都会保留操作记录。" : "填写主图后会自动识别同款；识别期间可以继续填写其他资料。"} actions={<><button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>{id && <button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "保存修改"}</button>}</>} />
+    <PageHeader eyebrow={id ? "编辑档案" : "到样登记"} title={id ? "修改商品信息" : "登记新商品与实物样品"} description={id ? "货号不可修改，其他字段的每次修改都会保留操作记录。" : "商品 ID 相同会直接关联；否则由本地模型和 GLM 检索疑似同款，最终由你确认。"} actions={<><button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>{id && <button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "保存修改"}</button>}</>} />
     {!id && draftReady && <div className="draft-save-state"><CheckCircle2 size={17} /><span>{draftSavedAt ? `草稿已自动保存 · ${formatDate(new Date(draftSavedAt), true)}` : "填写内容会自动保存 7 天，可放心切换到其他页面"}</span><small>仅保存在当前账号的这个浏览器中</small></div>}
     {error && <div className="form-error page-form-error">{error}</div>}
-    <section className="panel form-section image-first-card"><header><span className="section-number">01</span><div><h2>先填写商品图片</h2><p>每行一个外部图片网址，系统不保存原图。第一张有效图片作为主图即时识别，其余图片在保存后由后台建立索引。</p></div></header><div className="image-url-layout"><Field label="图片网址" required hint="支持多张；调整第一张图片会重新识别。确认同款后会保留旧图片并合并新图片。"><textarea rows={5} value={form.imageUrls} onChange={(event) => set("imageUrls", event.target.value)} placeholder={"https://example.com/image-1.jpg\nhttps://example.com/image-2.jpg"} /></Field><div className="image-preview-grid">{imageUrls.length ? imageUrls.slice(0, 6).map((url, index) => <div className="image-preview" key={`${url}-${index}`}><img src={url} alt={`预览 ${index + 1}`} referrerPolicy="no-referrer" /></div>) : <div className="image-preview-empty"><ImagePlus size={26} /><span>请先粘贴图片网址</span></div>}</div></div>{!id && <div className={`recognition-status phase-${recognition.phase}`}>{recognition.phase === "waiting" && <><Sparkles size={19} /><span>填写第一张以 http:// 或 https:// 开头的图片网址后自动识别同款</span></>}{recognition.phase === "checking" && <><LoaderCircle className="spin" size={19} /><span>正在识别主图，可以继续填写下方资料</span></>}{recognition.phase === "ready" && recognition.message && <><CheckCircle2 size={19} /><div><span>{recognition.message}</span>{recognition.timingText && <small>{recognition.timingText}</small>}</div></>}{recognition.phase === "failed" && <><TriangleAlert size={19} /><div><b>识别过程出错</b><span>{recognition.message}</span>{recognition.timingText && <small>{recognition.timingText}</small>}</div><button type="button" className="button button-secondary button-compact" onClick={() => { setCheckedUrls((value) => value.filter((url) => url !== primaryImageUrl)); setRecognition((value) => ({ ...value, phase: "waiting", message: "", timingText: "" })); }}><RefreshCw size={15} />重试</button><button type="button" className="button button-ghost button-compact" onClick={() => { setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `主图识别失败，已选择继续沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "failed_continue", matchedProductId: "", message: "识别失败，已选择仍按新款继续" })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "failed_continue" }) }).catch(() => undefined); }}>仍按当前判断继续</button></>}</div>}</section>
+    <section className="panel form-section image-first-card"><header><span className="section-number">01</span><div><h2>先填写商品图片</h2><p>每行一个外部图片网址，所有新图片都会参加疑似同款识别；系统不保存原图。</p></div></header><div className="image-url-layout"><Field label="图片网址" required hint="支持多张；增删图片会重新识别。确认同款后会保留旧图片并合并新图片。"><textarea rows={5} value={form.imageUrls} onChange={(event) => set("imageUrls", event.target.value)} placeholder={"https://example.com/image-1.jpg\nhttps://example.com/image-2.jpg"} /></Field><div className="image-preview-grid">{imageUrls.length ? imageUrls.slice(0, 6).map((url, index) => <div className="image-preview" key={`${url}-${index}`}><img src={url} alt={`预览 ${index + 1}`} referrerPolicy="no-referrer" /></div>) : <div className="image-preview-empty"><ImagePlus size={26} /><span>请先粘贴图片网址</span></div>}</div></div>{!id && <div className={`recognition-status phase-${recognition.phase}`}>{recognition.phase === "waiting" && <><Sparkles size={19} /><span>填写图片网址后会自动检查商品 ID 和疑似同款</span></>}{recognition.phase === "checking" && <><LoaderCircle className="spin" size={19} /><span>正在识别全部商品图片，可以继续填写下方资料（最长等待 90 秒）</span></>}{recognition.phase === "ready" && recognition.message && <><CheckCircle2 size={19} /><div><span>{recognition.message}</span>{recognition.timingText && <small>{recognition.timingText}</small>}</div></>}{recognition.phase === "failed" && <><TriangleAlert size={19} /><div><b>识别过程出错</b><span>{recognition.message}</span>{recognition.timingText && <small>{recognition.timingText}</small>}</div><button type="button" className="button button-secondary button-compact" onClick={() => { setCheckedUrls((value) => value.filter((key) => key !== recognitionKey)); setRecognition((value) => ({ ...value, phase: "waiting", message: "", timingText: "" })); }}><RefreshCw size={15} />重试</button><button type="button" className="button button-ghost button-compact" onClick={() => { if (!confirm("GLM 未能完成识别，继续后可能漏掉同款商品。是否仍要继续？")) return; if (!confirm("请再次确认：本次将跳过图片疑似同款检查，并按当前判断继续。")) return; setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `识别失败，已选择继续沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "failed_continue", matchedProductId: "", message: "识别失败，经两次确认后按新款继续" })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "failed_continue" }) }).catch(() => undefined); }}>确认后继续</button></>}</div>}</section>
     {(id || imageUrls.length > 0) && <div className="form-layout"><div className="form-main">
       <section className="panel form-section"><header><span className="section-number">02</span><div><h2>商品基本信息</h2><p>基础货号对应唯一款式，不同颜色或规格请使用新货号。</p></div></header><div className="form-grid">
         <Field label="商品基础货号"><input value={id || recognition.decision === "matched" ? form.sku : `保存后自动生成，例如 HZG-${today().slice(0, 4)}-0001`} readOnly className="readonly-input" /></Field><Field label="商品名称" required><input value={form.name} onChange={(event) => set("name", event.target.value)} placeholder="输入便于查找的商品名称" /></Field>
@@ -545,7 +563,7 @@ export function ProductFormView({ id }: { id?: string }) {
       {(() => { const total = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); return <div className="arrival-result"><Boxes size={20} /><div><b>将创建 {total} 个独立编号</b><span>例如 HZG-{today().slice(0, 4)}-0001-001</span></div></div>; })()}<div className="arrival-submit">{recognition.decision === "matched" && <button className="button button-secondary" name="submissionMode" value="update_only" disabled={saving || candidates.length > 0}>{saving ? "正在保存…" : "仅更新商品信息"}</button>}<button className="button button-primary" name="submissionMode" value="add_samples" disabled={saving || recognition.phase !== "ready" || !recognition.decision || candidates.length > 0}>{saving ? "正在保存…" : recognition.decision === "matched" ? "按同款追加到样" : "完成登记"}</button><small>{recognition.phase === "checking" ? "图片识别完成后即可提交" : recognition.decision === "matched" ? "可仅更新档案，也可同时追加本次到样" : "确认以上信息后完成本次到样登记"}</small></div></section>}
       <section className="panel form-section"><header><div><h2>备注</h2><p>可记录选品或合作补充信息。</p></div></header><Field label="内部备注"><textarea rows={6} value={form.notes} onChange={(event) => set("notes", event.target.value)} /></Field></section>
     </aside></div>}
-    {candidates.length > 0 && <Modal title="发现疑似同款，请人工确认" onClose={rejectCandidates} wide><div className="match-intro"><img src={recognizingUrl || imageUrls[0]} alt="本次新图片" referrerPolicy="no-referrer" /><div><b>本次填写的主图</b><p>请逐一对比。颜色、尺码或规格不同，请选择“都不是同款”。</p>{recognition.timingText && <small>{recognition.timingText}</small>}</div></div><div className="match-candidate-list">{candidates.map((candidate) => <article className="match-candidate" key={candidate.id}><div className="match-images"><img src={recognizingUrl || imageUrls[0]} alt="新图片" referrerPolicy="no-referrer" /><img src={candidate.imageUrls?.[0]} alt={candidate.name} referrerPolicy="no-referrer" /></div><div className="match-candidate-copy"><span className="similarity-chip">相似度 {Math.round(candidate.similarity * 100)}%</span><b>{candidate.name}</b><p>{candidate.sku} · {candidate.storeName || "未填店铺"}{candidate.archived ? " · 已归档" : ""}</p><button type="button" className="button button-primary button-compact" onClick={() => chooseCandidate(candidate)}>确认是同款</button></div></article>)}</div><div className="modal-actions"><button type="button" className="button button-secondary" onClick={rejectCandidates}>都不是同款，创建新款</button></div></Modal>}
+    {candidates.length > 0 && <Modal title="发现疑似同款，请人工确认" onClose={rejectCandidates} wide><div className="match-intro"><img src={recognizingUrl || imageUrls[0]} alt="本次新图片" referrerPolicy="no-referrer" /><div><b>本次填写的商品图片</b><p>结果按参考相似度从高到低排列。AI 结果只代表疑似，最终请人工确认。</p></div></div><div className="match-candidate-list">{candidates.map((candidate) => <article className="match-candidate" key={candidate.id}><div className="match-images"><img src={recognizingUrl || imageUrls[0]} alt="新图片" referrerPolicy="no-referrer" /><img src={candidate.imageUrls?.[0]} alt={candidate.name} referrerPolicy="no-referrer" /></div><div className="match-candidate-copy"><div className="candidate-score-line"><span className="similarity-chip">参考相似度 {Math.round(candidate.similarity * 100)}%</span><span className={`soft-badge ${candidate.result === "same" ? "success" : ""}`}>{candidate.result === "same" ? "模型认为同款" : "模型不确定"}</span></div><b>{candidate.name}</b><p>{candidate.sku} · {candidate.storeName || "未填店铺"}{candidate.archived ? " · 已归档（确认后恢复）" : ""}</p>{candidate.evidence?.length ? <div className="candidate-reasons"><b>相同依据</b><span>{candidate.evidence.join("；")}</span></div> : null}{candidate.differences?.length ? <div className="candidate-reasons differences"><b>可见差异</b><span>{candidate.differences.join("；")}</span></div> : null}<button type="button" className="button button-primary button-compact" onClick={() => chooseCandidate(candidate)}>人工确认是同款</button></div></article>)}</div><form className="candidate-manual-search" onSubmit={searchExistingCandidate}><div><b>没有看到目标商品？</b><span>可按货号或商品名称搜索全部档案（含已归档）。</span></div><div className="candidate-search-row"><input value={candidateSearch} onChange={(event) => setCandidateSearch(event.target.value)} placeholder="输入货号或商品名称" /><button className="button button-secondary button-compact" disabled={candidateSearching || !candidateSearch.trim()}><Search size={15} />{candidateSearching ? "搜索中" : "搜索"}</button></div>{candidateSearchRows.length > 0 && <div className="candidate-search-results">{candidateSearchRows.map((candidate) => <button type="button" key={candidate.id} onClick={() => chooseCandidate(candidate, true)}><ProductImage urls={candidate.imageUrls} alt={candidate.name} size="small" /><span><b>{candidate.sku}</b><small>{candidate.name}{candidate.archived ? " · 已归档" : ""}</small></span><em>选择</em></button>)}</div>}</form><div className="modal-actions"><button type="button" className="button button-secondary" onClick={rejectCandidates}>都不是同款，创建新款</button></div></Modal>}
     {draftCandidate && <Modal title="发现未完成的到样登记" onClose={continueDraft}><div className="draft-restore-dialog"><div><CheckCircle2 size={28} /><span><b>上次内容已临时保存</b><small>最后保存于 {formatDate(new Date(draftCandidate.savedAt), true)}，恢复后会重新核验商品主图。</small></span></div><div className="modal-actions"><button type="button" className="button button-ghost" onClick={discardDraft}>放弃草稿</button><button type="button" className="button button-primary" onClick={continueDraft}>继续登记</button></div></div></Modal>}
   </form>;
 }

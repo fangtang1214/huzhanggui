@@ -65,6 +65,7 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       VISION_URL: http://vision:3100
       IMAGE_MODEL: Xenova/clip-vit-base-patch32:q8
+      SESSION_SECRET: ${SESSION_SECRET}
       TZ: Asia/Shanghai
     depends_on:
       database:

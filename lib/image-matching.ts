@@ -36,15 +36,15 @@ export async function getMatchSettings() {
   return { mode, threshold: MATCH_THRESHOLDS[mode], model: IMAGE_MODEL };
 }
 
-export async function embedImage(imageUrl: string) {
+export async function embedImage(imageUrl: string, box?: [number, number, number, number], priority: "interactive" | "background" = "interactive", externalSignal?: AbortSignal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180_000);
   try {
     const response = await fetch(`${process.env.VISION_URL || "http://127.0.0.1:3100"}/embed`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ imageUrl }),
-      signal: controller.signal,
+      headers: { "content-type": "application/json", "x-vision-priority": priority },
+      body: JSON.stringify({ imageUrl, box }),
+      signal: externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal,
     });
     const payload = await response.json() as VisionPayload;
     if (!response.ok || !Array.isArray(payload.embedding)) {

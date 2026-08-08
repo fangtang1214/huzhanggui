@@ -124,7 +124,7 @@ export async function POST(request: Request) {
     const [apiMatchedProduct] = registrationApiProductId ? await sql`
       SELECT p.id, p.sku
       FROM product_api_ids pai JOIN products p ON p.id = pai.product_id
-      WHERE pai.is_current = true AND p.archived = false
+      WHERE pai.is_current = true
         AND pai.value = ${registrationApiProductId}
       LIMIT 1
     ` : [null];
@@ -197,7 +197,9 @@ export async function POST(request: Request) {
       await syncProductImageQueue(String(product.id), product.imageUrls as string[], tx);
       return { id: String(product.id), sku: String(product.sku), name: String(product.name), codes, imageUrls: product.imageUrls as string[], matched: effectiveMatchDecision === "matched", updatedOnly: updateOnly };
     });
-    await writeAudit(user, result.updatedOnly ? "product.match_update" : result.matched ? "product.match_merge" : "product.create", "product", result.id, result.updatedOnly ? `确认同款 ${result.sku}，仅更新商品信息，未新增样品` : result.matched ? `确认同款 ${result.sku}，追加 ${result.codes.length} 件样品` : `登记新商品 ${result.sku}，到样 ${result.codes.length} 件`, input, requestIp(request));
+    const { matchRunId: _matchRunId, matchDecision: _matchDecision, matchedProductId: _matchedProductId, ...auditInput } = input;
+    void _matchRunId; void _matchDecision; void _matchedProductId;
+    await writeAudit(user, result.updatedOnly ? "product.match_update" : result.matched ? "product.match_merge" : "product.create", "product", result.id, result.updatedOnly ? `确认同款 ${result.sku}，仅更新商品信息，未新增样品` : result.matched ? `确认同款 ${result.sku}，追加 ${result.codes.length} 件样品` : `登记新商品 ${result.sku}，到样 ${result.codes.length} 件`, auditInput, requestIp(request));
     return result.updatedOnly ? ok(result) : created(result);
   } catch (error) { return apiError(error); }
 }
