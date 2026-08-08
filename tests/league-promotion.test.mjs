@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { effectiveWindowProductId, parseLeagueProductQuality, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
+import { effectiveWindowProductId, parseLeagueProductDetail, parseLeagueProductQuality, preferredLeaguePromotionCandidates, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
 
 function candidate(overrides = {}) {
   return {
@@ -76,4 +76,37 @@ test("按官方商品详情层级解析店铺评分与好评率", () => {
 test("带货商品优先使用货源小店商品 ID，自营商品回退橱窗 ID", () => {
   assert.equal(effectiveWindowProductId("14000813361261", "10001176563660"), "10001176563660");
   assert.equal(effectiveWindowProductId("10001213105308", null), "10001213105308");
+});
+
+test("联盟商品详情保留快捷登记需要的名称、图片、价格和店铺资料", () => {
+  assert.deepEqual(parseLeagueProductDetail({
+    product: {
+      product_info: {
+        title: "测试商品",
+        head_imgs: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+        selling_price: 2990,
+        shop_appid: "shop-appid",
+        good_evaluation_ratio: 95100,
+      },
+      shop: { name: "测试小店", score: 486, icon: "https://example.com/shop.jpg" },
+    },
+  }), {
+    title: "测试商品",
+    imageUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+    sellingPriceFen: 2990,
+    shopAppid: "shop-appid",
+    shopName: "测试小店",
+    shopScore: 486,
+    shopIcon: "https://example.com/shop.jpg",
+    goodEvaluationRatio: 95100,
+  });
+});
+
+test("快捷登记只要求人工选择最高优先级且同费率的机构", () => {
+  const preferred = preferredLeaguePromotionCandidates([
+    candidate({ accountId: "low", serviceRatio: 8000 }),
+    candidate({ accountId: "high-a", promotionLink: "weixinstorehs/a", serviceRatio: 18000 }),
+    candidate({ accountId: "high-b", promotionLink: "weixinstorehs/b", serviceRatio: 18000 }),
+  ]);
+  assert.deepEqual(preferred.map((item) => item.accountId), ["high-a", "high-b"]);
 });

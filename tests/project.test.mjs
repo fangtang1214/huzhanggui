@@ -595,3 +595,27 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(leagueMigration, /good_evaluation_ratio/);
   assert.match(leagueMigration, /shop_score/);
 });
+
+test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似同款判断", async () => {
+  const route = await readFile(new URL("../app/api/product-id-lookup/route.ts", import.meta.url), "utf8");
+  assert.match(route, /requireUser\("products:create"\)/);
+  assert.match(route, /lookupLeagueProductCandidates\(input\.outProductId\)/);
+  assert.match(route, /preferredLeaguePromotionCandidates/);
+  assert.match(route, /existingProduct/);
+  assert.doesNotMatch(route, /INSERT INTO talent_window_products/);
+
+  const league = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
+  assert.match(league, /export async function lookupLeagueProductCandidates/);
+  assert.match(league, /fetchLeagueCooperativeItemLinks\(account\)/);
+  assert.match(league, /fetchLeagueItemPromotion\(account, match\.link\)/);
+  assert.match(league, /fetchLeagueProductDetail\(account, preliminary\.shopAppid, productId\)/);
+
+  const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(form, /选择登记方式/);
+  assert.match(form, /填写商品 ID 获取资料/);
+  assert.match(form, /\/api\/product-id-lookup/);
+  assert.match(form, /apiProductId: result\.outProductId/);
+  assert.match(form, /registrationMode === "product-id"/);
+  assert.match(form, /正在核验商品 ID 和疑似同款/);
+  assert.match(form, /更换登记方式/);
+});

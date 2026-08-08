@@ -4,12 +4,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, Fragment, useEffect, useRef, useState } from "react";
-import { Archive, ArrowDownUp, ArrowLeft, Boxes, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Clipboard, Download, ExternalLink, FilePenLine, FileSpreadsheet, Filter, GripVertical, History, Image, ImagePlus, Link2, LoaderCircle, MapPin, PackagePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Store, Trash2, TriangleAlert, Upload, UserRound, X } from "lucide-react";
+import { Archive, ArrowDownUp, ArrowLeft, ArrowRight, Boxes, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Clipboard, Download, ExternalLink, FilePenLine, FileSpreadsheet, Filter, GripVertical, Hash, History, Image, ImagePlus, Link2, LoaderCircle, MapPin, PackagePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Store, Trash2, TriangleAlert, Upload, UserRound, X } from "lucide-react";
 import { activeLocationLabel } from "@/lib/constants";
 import { COMMISSION_INPUT_PATTERN, formatCommission, normalizeCommission } from "@/lib/commission";
 import { isWebProductLink } from "@/lib/product-link";
 import { PRODUCT_COPY_FIELDS, normalizeProductCopyConfig, type ProductCopyConfig, type ProductCopyFieldKey } from "@/lib/product-copy";
 import { copyProductToClipboard } from "@/lib/product-copy-clipboard";
+import { formatWindowServiceRatio } from "@/lib/window-registration";
 import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, Modal, PageHeader, Pagination, ProductImage, StatusBadge } from "../ui";
 
@@ -23,6 +24,28 @@ type ProductDetailData = { product: ProductRow & { businessContactId?: string; c
 type MatchCandidate = ProductRow & { archived?: boolean; similarity: number; localSimilarity?: number; matchedImageCount?: number; matchedImageUrl?: string; newMatchedImageUrl?: string; businessContactId?: string; cooperationMechanism?: string; categoryId?: string; notes?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> };
 type MatchTimings = { cacheHit?: boolean; totalMs?: number; processedImageCount?: number; failedImageCount?: number };
 type MatchResult = { runId: string; status: "id_match" | "matched" | "no_match" | "failed"; candidates: MatchCandidate[]; message?: string; timings?: MatchTimings };
+type ProductIdLookupProduct = ProductRow & { businessContactId?: string; categoryId?: string; departments: Array<{ id: string; name: string }>; tags: Array<{ id: string; name: string; color: string }> };
+type ProductIdLookupSource = {
+  key: string;
+  accountId: string | null;
+  accountName: string | null;
+  accountIsPrimary: boolean;
+  promotionLink: string | null;
+  serviceRatio: number | null;
+  commissionRatio: number | null;
+  title: string | null;
+  imageUrls: string[];
+  sellingPriceFen: number | null;
+  shopName: string | null;
+  shopScore: number | null;
+};
+type ProductIdLookupResult = {
+  outProductId: string;
+  existingProduct: ProductIdLookupProduct | null;
+  selected: ProductIdLookupSource | null;
+  choices: ProductIdLookupSource[];
+  warning?: string | null;
+};
 
 const recognitionTiming = (timings?: MatchTimings) => timings?.totalMs === undefined ? "" : `${timings.cacheHit ? "已复用图片特征 · " : ""}用时 ${timings.totalMs >= 1000 ? `${(timings.totalMs / 1000).toFixed(1)} 秒` : `${Math.round(timings.totalMs)} 毫秒`}`;
 
@@ -38,7 +61,7 @@ const LINK_HISTORY_SOURCE_LABELS: Record<LinkHistoryRow["source"], string> = {
 function ProductApiIds({ rows }: { rows: ProductApiIdRow[] }) {
   const current = rows.filter((row) => row.isCurrent);
   const history = rows.filter((row) => !row.isCurrent);
-  return <section className="panel product-link-history"><header className="panel-header padded"><div><p className="eyebrow">橱窗接口标识</p><h2>商品 ID</h2></div><small>只记录达人橱窗接口返回的 product_id，不从商品链接解析。</small></header><div style={{ padding: "0 18px 18px", display: "grid", gap: 12 }}><div><b>当前 ID</b>{current.length ? <div className="product-id-list">{current.map((row) => <code key={row.id}>{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无橱窗接口返回的商品 ID</p>}</div><div><b>历史 ID（{history.length}）</b>{history.length ? <div className="product-id-list">{history.map((row) => <code key={row.id}>{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无历史商品 ID</p>}</div></div></section>;
+  return <section className="panel product-link-history"><header className="panel-header padded"><div><p className="eyebrow">微信接口标识</p><h2>货源商品 ID</h2></div><small>记录接口返回或快捷登记填写的 out_product_id，不从商品链接解析。</small></header><div style={{ padding: "0 18px 18px", display: "grid", gap: 12 }}><div><b>当前 ID</b>{current.length ? <div className="product-id-list">{current.map((row) => <code key={row.id}>{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无关联的货源商品 ID</p>}</div><div><b>历史 ID（{history.length}）</b>{history.length ? <div className="product-id-list">{history.map((row) => <code key={row.id}>{row.value}</code>)}</div> : <p style={{ color: "var(--muted)", margin: "6px 0 0" }}>暂无历史商品 ID</p>}</div></div></section>;
 }
 
 function ProductLinkHistory({ rows }: { rows: LinkHistoryRow[] }) {
@@ -350,10 +373,15 @@ type ProductFormState = { sku: string; name: string; departmentIds: string[]; bu
 const today = () => { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); };
 const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", apiProductId: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" });
 type ProductDraft = { version: 1; form: ProductFormState & { quantity?: string; spec?: string }; savedAt: number; autoRestore?: boolean };
+type RegistrationMode = "loading" | "manual" | "product-id" | "window" | null;
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
 export function ProductFormView({ id }: { id?: string }) {
   const { user, lookups } = useAppData(); const router = useRouter(); const toast = useToast(); const [form, setForm] = useState<ProductFormState>(blankForm); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  const [registrationMode, setRegistrationMode] = useState<RegistrationMode>(id ? "manual" : "loading");
+  const [productIdInput, setProductIdInput] = useState(""); const [productIdLooking, setProductIdLooking] = useState(false);
+  const [productIdChoices, setProductIdChoices] = useState<ProductIdLookupSource[]>([]); const [productIdLookup, setProductIdLookup] = useState<ProductIdLookupResult | null>(null);
+  const [productIdReady, setProductIdReady] = useState(false); const [productIdNotice, setProductIdNotice] = useState("");
   const draftKey = `huzhanggui:product-draft:${user.id}`; const [draftReady, setDraftReady] = useState(Boolean(id)); const [draftCandidate, setDraftCandidate] = useState<ProductDraft | null>(null); const [draftTouched, setDraftTouched] = useState(false); const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const [checkedUrls, setCheckedUrls] = useState<string[]>([]); const [excludedProducts, setExcludedProducts] = useState<string[]>([]);
   const [recognition, setRecognition] = useState<{ phase: "waiting" | "checking" | "ready" | "failed"; runId: string; runUrl: string; decision: "" | "matched" | "new" | "failed_continue"; matchedProductId: string; message: string; timingText: string }>({ phase: id ? "ready" : "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "" });
@@ -361,6 +389,14 @@ export function ProductFormView({ id }: { id?: string }) {
   const [candidates, setCandidates] = useState<MatchCandidate[]>([]); const [recognizingUrl, setRecognizingUrl] = useState("");
   const [candidateSearch, setCandidateSearch] = useState(""); const [candidateSearching, setCandidateSearching] = useState(false); const [candidateSearchRows, setCandidateSearchRows] = useState<MatchCandidate[]>([]);
   const detail = useRemote<ProductDetailData>(id ? `/api/products/${id}` : null);
+  useEffect(() => {
+    if (id) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("returnUrl") === "/window-products") setRegistrationMode("window");
+    else if (params.get("mode") === "manual") setRegistrationMode("manual");
+    else if (params.get("mode") === "product-id") setRegistrationMode("product-id");
+    else setRegistrationMode(null);
+  }, [id]);
   useEffect(() => {
     if (id) return;
     try {
@@ -421,6 +457,83 @@ export function ProductFormView({ id }: { id?: string }) {
   const primaryImageUrl = imageUrls.find((url) => { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; } }) || "";
   const recognitionKey = JSON.stringify({ imageUrls, apiProductId: form.apiProductId || "" });
   const locations = lookups?.locations.filter((item) => item.departmentId === form.initialDepartmentId) || [];
+  function selectRegistrationMode(mode: "manual" | "product-id") {
+    setRegistrationMode(mode);
+    setError(""); setProductIdChoices([]);
+    const url = new URL(window.location.href);
+    url.searchParams.set("mode", mode);
+    url.searchParams.delete("returnUrl");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    if (mode === "product-id") {
+      setDraftReady(true);
+    }
+  }
+  function changeRegistrationMode() {
+    if (draftTouched && !confirm("更换登记方式会清空当前填写内容，是否继续？")) return;
+    localStorage.removeItem(draftKey);
+    setForm(blankForm()); setDraftTouched(false); setDraftSavedAt(null); setDraftCandidate(null); setDraftReady(true);
+    setProductIdInput(""); setProductIdLookup(null); setProductIdChoices([]); setProductIdReady(false); setProductIdNotice(""); setError("");
+    setCheckedUrls([]); setExcludedProducts([]); setConfirmedMatch(null); setCandidates([]); setRecognizingUrl("");
+    setRecognition({ phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "" });
+    setRegistrationMode(null);
+    window.history.replaceState(null, "", "/products/new");
+  }
+  function applyProductIdSource(result: ProductIdLookupResult, source: ProductIdLookupSource) {
+    const existing = result.existingProduct;
+    if (existing?.archived && !confirm(`商品 ${existing.sku} 已归档。继续登记将在保存时恢复该商品，是否继续？`)) return;
+    const mergedImages = Array.from(new Set([...(source.imageUrls || []), ...(existing?.imageUrls || [])]));
+    setDraftTouched(true); setDraftReady(true); setDraftCandidate(null);
+    setForm((current) => ({
+      ...current,
+      sku: existing?.sku || "",
+      name: source.title || existing?.name || "",
+      departmentIds: existing?.departments?.map((item) => item.id) || current.departmentIds,
+      businessContactId: existing?.businessContactId || current.businessContactId,
+      storeName: source.shopName || existing?.storeName || "",
+      price: source.sellingPriceFen === null ? existing?.price || "" : (source.sellingPriceFen / 100).toFixed(2),
+      productUrl: source.promotionLink || existing?.productUrl || "",
+      apiProductId: result.outProductId,
+      windowProductId: undefined,
+      commission: formatWindowServiceRatio(source.serviceRatio) || existing?.commission || "",
+      storeRating: source.shopScore === null ? existing?.storeRating || "" : (source.shopScore / 100).toFixed(2),
+      supplyChain: existing?.supplyChain || current.supplyChain,
+      cooperationMechanism: existing?.cooperationMechanism || current.cooperationMechanism,
+      categoryId: existing?.categoryId || current.categoryId,
+      tagIds: existing?.tags?.map((item) => item.id) || current.tagIds,
+      imageUrls: mergedImages.join("\n"),
+      notes: existing?.notes || current.notes,
+    }));
+    setCheckedUrls([]); setExcludedProducts([]); setConfirmedMatch(null); setCandidates([]); setRecognizingUrl("");
+    setRecognition({ phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "商品资料已获取，正在核验商品 ID 和疑似同款", timingText: "" });
+    setProductIdChoices([]); setProductIdReady(true);
+    setProductIdNotice([
+      source.accountName ? `已使用${source.accountIsPrimary ? "主" : ""}机构“${source.accountName}”的最新资料` : "已使用现有商品档案",
+      result.warning,
+      existing?.archived ? "该商品已归档，保存后将自动恢复" : null,
+    ].filter(Boolean).join("；"));
+  }
+  async function lookupProductId(event: FormEvent) {
+    event.preventDefault();
+    const outProductId = productIdInput.trim();
+    if (!outProductId) return;
+    setProductIdLooking(true); setError(""); setProductIdNotice("");
+    try {
+      const result = await apiFetch<ProductIdLookupResult>("/api/product-id-lookup", { method: "POST", body: JSON.stringify({ outProductId }) });
+      setProductIdLookup(result);
+      if (result.choices.length > 1) setProductIdChoices(result.choices);
+      else if (result.selected) applyProductIdSource(result, result.selected);
+      else throw new Error("联盟机构没有返回可用商品资料");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "商品 ID 查询失败");
+    } finally { setProductIdLooking(false); }
+  }
+  function continueProductIdDraft() {
+    if (!draftCandidate) return;
+    setProductIdInput(draftCandidate.form.apiProductId || "");
+    continueDraft();
+    setProductIdReady(true);
+    setProductIdNotice("已恢复上次通过商品 ID 获取的登记资料，正在重新核验疑似同款");
+  }
   useEffect(() => {
     if (id || !recognition.runUrl || checkedUrls.includes(recognitionKey) || recognition.phase === "checking") return;
     setCheckedUrls([]); setCandidates([]); setExcludedProducts([]);
@@ -454,9 +567,10 @@ export function ProductFormView({ id }: { id?: string }) {
   }, [id, primaryImageUrl, checkedUrls, recognition.phase, candidates.length, excludedProducts, confirmedMatch, recognitionKey, imageUrls, form.apiProductId]);
   function chooseCandidate(candidate: MatchCandidate, manual = false, resultRunId = recognition.runId, exactId = false) {
     setDraftTouched(true);
-    const mergedImages = Array.from(new Set([...(candidate.imageUrls || []), ...imageUrls]));
+    const preferFetchedProduct = registrationMode === "product-id";
+    const mergedImages = Array.from(new Set(preferFetchedProduct ? [...imageUrls, ...(candidate.imageUrls || [])] : [...(candidate.imageUrls || []), ...imageUrls]));
     setForm((current) => {
-      const cooperation = current.windowProductId ? {
+      const cooperation = current.windowProductId || preferFetchedProduct ? {
         storeName: current.storeName,
         price: current.price,
         productUrl: current.productUrl,
@@ -473,13 +587,13 @@ export function ProductFormView({ id }: { id?: string }) {
         supplyChain: candidate.supplyChain || "",
         cooperationMechanism: candidate.cooperationMechanism || "",
       };
-      return { ...current, sku: candidate.sku, name: candidate.name, departmentIds: candidate.departments.map((item) => item.id), businessContactId: candidate.businessContactId || "", ...cooperation, categoryId: candidate.categoryId || "", tagIds: candidate.tags.map((item) => item.id), imageUrls: mergedImages.join("\n"), notes: candidate.notes || "" };
+      return { ...current, sku: candidate.sku, name: preferFetchedProduct ? current.name : candidate.name, departmentIds: candidate.departments.map((item) => item.id), businessContactId: candidate.businessContactId || "", ...cooperation, categoryId: candidate.categoryId || "", tagIds: candidate.tags.map((item) => item.id), imageUrls: mergedImages.join("\n"), notes: candidate.notes || "" };
     });
     const mergedRecognitionKey = JSON.stringify({ imageUrls: mergedImages, apiProductId: form.apiProductId || "" });
     setCheckedUrls((value) => [...new Set([...value, recognitionKey, mergedRecognitionKey])]); setExcludedProducts((value) => [...new Set([...value, candidate.id])]); setCandidates([]);
     setConfirmedMatch({ runId: resultRunId, runUrl: recognition.runUrl || primaryImageUrl, productId: candidate.id, sku: candidate.sku });
     setCandidateSearch(""); setCandidateSearchRows([]);
-    setRecognition((value) => ({ ...value, runId: resultRunId, phase: "ready", decision: "matched", matchedProductId: candidate.id, message: exactId ? `商品 ID 完全一致，已直接关联 ${candidate.sku}` : form.windowProductId ? `已确认与 ${candidate.sku} 为同款；将沿用货号并更新橱窗店铺与合作信息` : `已确认与 ${candidate.sku} 为同款，本次将沿用该货号` }));
+    setRecognition((value) => ({ ...value, runId: resultRunId, phase: "ready", decision: "matched", matchedProductId: candidate.id, message: exactId ? `商品 ID 完全一致，已直接关联 ${candidate.sku}` : form.windowProductId ? `已确认与 ${candidate.sku} 为同款；将沿用货号并更新橱窗店铺与合作信息` : preferFetchedProduct ? `已确认与 ${candidate.sku} 为同款；将沿用货号并更新联盟接口资料` : `已确认与 ${candidate.sku} 为同款，本次将沿用该货号` }));
     void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: resultRunId, decision: "matched", selectedProductId: candidate.id, manual }) }).catch(() => undefined);
   }
   function rejectCandidates() { setExcludedProducts((value) => [...new Set([...value, ...candidates.map((item) => item.id)])]); setCandidates([]); setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `新增图片的候选均已排除，仍沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "new", matchedProductId: "", message: "已确认都不是同款，将自动生成新货号" })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "new" }) }).catch(() => undefined); }
@@ -527,8 +641,37 @@ export function ProductFormView({ id }: { id?: string }) {
     finally { setSaving(false); }
   }
   if (id && detail.loading) return <LoadingState />;
+  if (!id && registrationMode === "loading") return <LoadingState label="正在准备登记页面…" />;
+  if (!id && registrationMode === null) return <>
+    <PageHeader eyebrow="到样登记" title="选择登记方式" description="你可以手动填写全部资料，也可以输入货源商品 ID，由联盟机构接口自动获取商品资料。" actions={<button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>} />
+    <section className="registration-choice-grid">
+      <button type="button" className="panel registration-choice-card" onClick={() => selectRegistrationMode("manual")}>
+        <span className="registration-choice-icon"><FilePenLine size={29} /></span>
+        <div><small>方式一</small><h2>手动填写资料</h2><p>逐项填写商品图片、名称、店铺和合作信息，并进行疑似同款判断。</p></div>
+        <ArrowRight size={22} />
+      </button>
+      <button type="button" className="panel registration-choice-card featured" onClick={() => selectRegistrationMode("product-id")}>
+        <span className="registration-choice-icon"><Hash size={29} /></span>
+        <div><small>方式二 · 快捷</small><h2>填写商品 ID 获取资料</h2><p>输入 out_product_id，实时查询全部已启用联盟机构，并自动填入最新资料。</p></div>
+        <ArrowRight size={22} />
+      </button>
+    </section>
+  </>;
+  if (!id && registrationMode === "product-id" && !productIdReady) return <>
+    <PageHeader eyebrow="商品 ID 快捷登记" title="填写商品 ID 获取资料" description="系统将实时查询全部已启用联盟机构；取得图片后仍会执行疑似同款判断。" actions={<button type="button" className="button button-ghost" onClick={changeRegistrationMode}><ArrowLeft size={17} />更换登记方式</button>} />
+    {error && <div className="form-error page-form-error">{error}</div>}
+    <form className="panel product-id-lookup-card" onSubmit={lookupProductId}>
+      <span className="product-id-lookup-icon"><Hash size={30} /></span>
+      <div className="product-id-lookup-copy"><h2>货源商品 ID</h2><p>填写微信接口中的 out_product_id，不要求商品已经在达人橱窗中。</p></div>
+      <div className="product-id-lookup-row"><input autoFocus value={productIdInput} onChange={(event) => setProductIdInput(event.target.value)} placeholder="请输入 out_product_id" autoCapitalize="none" spellCheck={false} /><button className="button button-primary" disabled={productIdLooking || !productIdInput.trim()}>{productIdLooking ? <><LoaderCircle className="spin" size={17} />正在查询全部机构…</> : <><Search size={17} />获取商品资料</>}</button></div>
+      {draftCandidate?.form.apiProductId && <div className="product-id-draft-resume"><div><b>发现上次未完成的商品 ID 登记</b><small>{draftCandidate.form.apiProductId} · 保存于 {formatDate(new Date(draftCandidate.savedAt), true)}</small></div><button type="button" className="button button-secondary button-compact" onClick={continueProductIdDraft}>继续上次登记</button></div>}
+      {error && <div className="product-id-lookup-actions"><button type="button" className="button button-secondary" onClick={() => selectRegistrationMode("manual")}><FilePenLine size={16} />改为手动填写资料</button></div>}
+    </form>
+    {productIdChoices.length > 1 && productIdLookup && <Modal title="请选择联盟机构资料" onClose={() => setProductIdChoices([])} wide><div className="league-source-choice-intro"><b>多个机构返回了相同最高服务费率</b><p>请选择本次登记采用的机构推广链接和商品资料。</p></div><div className="league-source-choice-list">{productIdChoices.map((source) => <article key={source.key}><ProductImage urls={source.imageUrls} alt={source.title || "联盟商品"} size="medium" /><div><span>{source.accountIsPrimary ? "主机构" : "联盟机构"}</span><h3>{source.title || `商品 ${productIdLookup.outProductId}`}</h3><p>{source.accountName || "未命名机构"} · 服务费率 {formatWindowServiceRatio(source.serviceRatio) || "接口未返回"}</p><code>{source.promotionLink || "暂无推广链接"}</code></div><button type="button" className="button button-primary button-compact" onClick={() => applyProductIdSource(productIdLookup, source)}>选择此机构</button></article>)}</div></Modal>}
+  </>;
   return <form onSubmit={submit}>
-    <PageHeader eyebrow={id ? "编辑档案" : "到样登记"} title={id ? "修改商品信息" : "登记新商品与实物样品"} description={id ? "货号不可修改，其他字段的每次修改都会保留操作记录。" : "商品 ID 相同会直接关联；否则由 GLM 定位主体、本地模型召回最多 5 个疑似同款，最终由你确认。"} actions={<><button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>{id && <button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "保存修改"}</button>}</>} />
+    <PageHeader eyebrow={id ? "编辑档案" : "到样登记"} title={id ? "修改商品信息" : "登记新商品与实物样品"} description={id ? "货号不可修改，其他字段的每次修改都会保留操作记录。" : "商品 ID 相同会直接关联；否则由 GLM 定位主体、本地模型召回最多 5 个疑似同款，最终由你确认。"} actions={<>{!id && (registrationMode === "manual" || registrationMode === "product-id") ? <button type="button" className="button button-ghost" onClick={changeRegistrationMode}><ArrowLeft size={17} />更换登记方式</button> : <button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>}{id && <button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "保存修改"}</button>}</>} />
+    {!id && registrationMode === "product-id" && productIdNotice && <div className="product-id-source-notice"><CheckCircle2 size={18} /><span>{productIdNotice}</span></div>}
     {!id && draftReady && <div className="draft-save-state"><CheckCircle2 size={17} /><span>{draftSavedAt ? `草稿已自动保存 · ${formatDate(new Date(draftSavedAt), true)}` : "填写内容会自动保存 7 天，可放心切换到其他页面"}</span><small>仅保存在当前账号的这个浏览器中</small></div>}
     {error && <div className="form-error page-form-error">{error}</div>}
     <section className="panel form-section image-first-card"><header><span className="section-number">01</span><div><h2>先填写商品图片</h2><p>每行一个外部图片网址，GLM 只定位商品主体，本地服务负责召回疑似同款；系统不保存原图。</p></div></header><div className="image-url-layout"><Field label="图片网址" required hint="支持多张；增删图片会重新识别。确认同款后会保留旧图片并合并新图片。"><textarea rows={5} value={form.imageUrls} onChange={(event) => set("imageUrls", event.target.value)} placeholder={"https://example.com/image-1.jpg\nhttps://example.com/image-2.jpg"} /></Field><div className="image-preview-grid">{imageUrls.length ? imageUrls.slice(0, 6).map((url, index) => <div className="image-preview" key={`${url}-${index}`}><img src={url} alt={`预览 ${index + 1}`} referrerPolicy="no-referrer" /></div>) : <div className="image-preview-empty"><ImagePlus size={26} /><span>请先粘贴图片网址</span></div>}</div></div>{!id && <div className={`recognition-status phase-${recognition.phase}`}>{recognition.phase === "waiting" && <><Sparkles size={19} /><span>填写图片网址后会自动检查商品 ID 和疑似同款</span></>}{recognition.phase === "checking" && <><LoaderCircle className="spin" size={19} /><span>正在批量定位商品主体并进行本地比对，目标在 10 秒内完成</span></>}{recognition.phase === "ready" && recognition.message && <><CheckCircle2 size={19} /><div><span>{recognition.message}</span>{recognition.timingText && <small>{recognition.timingText}</small>}</div></>}{recognition.phase === "failed" && <><TriangleAlert size={19} /><div><b>识别过程出错</b><span>{recognition.message}</span>{recognition.timingText && <small>{recognition.timingText}</small>}</div><button type="button" className="button button-secondary button-compact" onClick={() => { setCheckedUrls((value) => value.filter((key) => key !== recognitionKey)); setRecognition((value) => ({ ...value, phase: "waiting", message: "", timingText: "" })); }}><RefreshCw size={15} />重试</button><button type="button" className="button button-ghost button-compact" onClick={() => { if (!confirm("主体定位或本地比对未能完成，继续后可能漏掉同款商品。是否仍要继续？")) return; if (!confirm("请再次确认：本次将跳过图片疑似同款检查，并按当前判断继续。")) return; setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `识别失败，已选择继续沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "failed_continue", matchedProductId: "", message: "识别失败，经两次确认后按新款继续" })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "failed_continue" }) }).catch(() => undefined); }}>确认后继续</button></>}</div>}</section>

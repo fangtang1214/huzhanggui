@@ -33,28 +33,96 @@ export type LeagueProductQuality = {
   goodEvaluationRatio: number | null;
 };
 
+export type LeagueProductSnapshot = LeagueProductQuality & {
+  title: string | null;
+  imageUrls: string[];
+  sellingPriceFen: number | null;
+  shopAppid: string | null;
+};
+
 type LeagueProductDetailItem = {
   product_info?: {
     title?: string;
     head_imgs?: string[];
+    selling_price?: number;
+    sale_price?: number;
+    min_price?: number;
+    shop_appid?: string;
     good_evaluation_ratio?: number;
   };
   shop?: {
+    appid?: string;
     name?: string;
     score?: number;
     icon?: string;
   };
+  shop_appid?: string;
+  title?: string;
+  head_imgs?: string[];
+  selling_price?: number;
 };
 
-export function parseLeagueProductQuality(payload: { product?: LeagueProductDetailItem; item?: LeagueProductDetailItem }): LeagueProductQuality {
-  const detail = payload.product || payload.item;
-  const info = detail?.product_info;
-  const shop = detail?.shop;
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function safeNumber(value: unknown): number | null {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number) ? number : null;
+}
+
+function imageUrls(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+  return Array.from(new Set(values.map(safeText).filter((item): item is string => Boolean(item))));
+}
+
+export function parseLeagueProductSnapshot(value: unknown): LeagueProductSnapshot {
+  const detail = object(value);
+  const info = object(detail.product_info || detail.productInfo || detail.product || detail.item_info || detail.itemInfo);
+  const shop = object(detail.shop || detail.shop_info || detail.shopInfo);
+  const images = imageUrls(
+    info.head_imgs || info.headImgs || info.image_urls || info.imageUrls || info.img_urls || info.imgUrls
+      || detail.head_imgs || detail.headImgs || detail.image_urls || detail.imageUrls || detail.img_urls || detail.imgUrls
+      || info.head_img || info.headImg || info.img_url || info.imgUrl || detail.head_img || detail.headImg || detail.img_url || detail.imgUrl,
+  );
   return {
-    shopName: safeText(shop?.name),
-    shopScore: typeof shop?.score === "number" ? shop.score : null,
-    shopIcon: safeText(shop?.icon),
-    goodEvaluationRatio: typeof info?.good_evaluation_ratio === "number" ? info.good_evaluation_ratio : null,
+    title: safeText(info.title || info.product_name || info.productName || detail.title || detail.product_name || detail.productName),
+    imageUrls: images,
+    sellingPriceFen: safeNumber(info.selling_price ?? info.sellingPrice ?? info.sale_price ?? info.salePrice ?? info.min_price ?? info.minPrice ?? detail.selling_price ?? detail.sellingPrice ?? detail.sale_price ?? detail.salePrice ?? detail.min_price ?? detail.minPrice),
+    shopAppid: safeText(detail.shop_appid || detail.shopAppid || info.shop_appid || info.shopAppid || shop.appid || shop.app_id || shop.appId),
+    shopName: safeText(shop.name || shop.shop_name || shop.shopName || detail.shop_name || detail.shopName),
+    shopScore: safeNumber(shop.score ?? shop.shop_score ?? shop.shopScore ?? detail.shop_score ?? detail.shopScore),
+    shopIcon: safeText(shop.icon || shop.shop_icon || shop.shopIcon || detail.shop_icon || detail.shopIcon),
+    goodEvaluationRatio: safeNumber(info.good_evaluation_ratio ?? info.goodEvaluationRatio ?? detail.good_evaluation_ratio ?? detail.goodEvaluationRatio),
+  };
+}
+
+export function mergeLeagueProductSnapshots(...snapshots: Array<Partial<LeagueProductSnapshot> | null | undefined>): LeagueProductSnapshot {
+  const usable = snapshots.filter(Boolean) as Array<Partial<LeagueProductSnapshot>>;
+  const first = <K extends keyof LeagueProductSnapshot>(key: K) => usable.find((item) => item[key] !== null && item[key] !== undefined)?.[key] ?? null;
+  return {
+    title: first("title") as string | null,
+    imageUrls: Array.from(new Set(usable.flatMap((item) => item.imageUrls || []))),
+    sellingPriceFen: first("sellingPriceFen") as number | null,
+    shopAppid: first("shopAppid") as string | null,
+    shopName: first("shopName") as string | null,
+    shopScore: first("shopScore") as number | null,
+    shopIcon: first("shopIcon") as string | null,
+    goodEvaluationRatio: first("goodEvaluationRatio") as number | null,
+  };
+}
+
+export function parseLeagueProductDetail(payload: { product?: LeagueProductDetailItem; item?: LeagueProductDetailItem }): LeagueProductSnapshot {
+  return parseLeagueProductSnapshot(payload.product || payload.item);
+}
+
+export function parseLeagueProductQuality(payload: { product?: LeagueProductDetailItem; item?: LeagueProductDetailItem }): LeagueProductQuality {
+  const detail = parseLeagueProductDetail(payload);
+  return {
+    shopName: detail.shopName,
+    shopScore: detail.shopScore,
+    shopIcon: detail.shopIcon,
+    goodEvaluationRatio: detail.goodEvaluationRatio,
   };
 }
 
@@ -154,7 +222,7 @@ export async function fetchLeagueProductDetail(
   account: LeagueAccountRow,
   shopAppid: string,
   productId: string,
-): Promise<LeagueProductQuality> {
+): Promise<LeagueProductSnapshot> {
   const payload = await callLeagueApi<{ product?: LeagueProductDetailItem; item?: LeagueProductDetailItem }>(
     account,
     "/channels/ec/league/headsupplier/productdetail/get",
@@ -163,11 +231,11 @@ export async function fetchLeagueProductDetail(
       product_id: (Number(productId) || 0),
     },
   );
-  const quality = parseLeagueProductQuality(payload);
-  if (quality.shopName === null && quality.shopScore === null && quality.goodEvaluationRatio === null) {
-    throw new Error("联盟商品详情未返回店铺名称、评分或好评率");
+  const detail = parseLeagueProductDetail(payload);
+  if (!detail.title && !detail.imageUrls.length && detail.shopName === null && detail.shopScore === null && detail.goodEvaluationRatio === null) {
+    throw new Error("联盟商品详情未返回有效商品资料");
   }
-  return quality;
+  return detail;
 }
 
 export type LeagueItemPromotion = {
@@ -178,6 +246,7 @@ export type LeagueItemPromotion = {
   commissionType: number | null;
   planType: number | null;
   promotionLink: string | null;
+  product: LeagueProductSnapshot;
 };
 
 export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSupplierItemLink: string): Promise<LeagueItemPromotion> {
@@ -214,10 +283,11 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
     commissionType: typeof info?.commission_type === "number" ? info.commission_type : null,
     planType: typeof info?.plan_type === "number" ? info.plan_type : null,
     promotionLink: coopLink,
+    product: parseLeagueProductSnapshot(payload.item),
   };
 }
 
-export type CooperativeItem = { productId: string; link: string };
+export type CooperativeItem = LeagueProductSnapshot & { productId: string; link: string };
 
 export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, CooperativeItem[]>> {
   const links = new Map<string, CooperativeItem[]>();
@@ -231,7 +301,7 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
     let nextKey = "";
     for (let page = 0; page < 500; page += 1) {
       const payload = await callLeagueApi<{
-        list?: Array<{ product_id?: number | string; head_supplier_item_link?: string }>;
+        list?: Array<Record<string, unknown> & { product_id?: number | string; head_supplier_item_link?: string }>;
         next_key?: string;
       }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
         commission_type: commissionType,
@@ -243,7 +313,7 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
         const productId = safeText(item.product_id);
         const link = safeText(item.head_supplier_item_link);
         if (productId && link) {
-          const cooperativeItem = { productId, link };
+          const cooperativeItem = { productId, link, ...parseLeagueProductSnapshot(item) };
           add(productId, cooperativeItem);
         }
       }
@@ -285,6 +355,8 @@ export type LeaguePromotionCandidate = LeaguePromotionResolution & {
   headSupplierItemLink: string;
 };
 
+export type LeagueProductLookupCandidate = LeaguePromotionCandidate & LeagueProductSnapshot;
+
 export type LeaguePromotionSelection = {
   selected: LeaguePromotionCandidate | null;
   requiresChoice: boolean;
@@ -295,18 +367,77 @@ function uniqueCooperativeItems(items: CooperativeItem[]) {
   return Array.from(new Map(items.map((item) => [item.link, item])).values());
 }
 
-export function selectLeaguePromotionCandidate(candidates: LeaguePromotionCandidate[]): LeaguePromotionSelection {
+export function preferredLeaguePromotionCandidates(candidates: LeaguePromotionCandidate[]) {
   const linked = candidates.filter((candidate) => Boolean(candidate.promotionLink));
-  if (!linked.length) return { selected: null, requiresChoice: false, candidates: [] };
+  if (!linked.length) return [];
   const primary = linked.filter((candidate) => candidate.accountIsPrimary);
   const pool = primary.length ? primary : linked;
   const highestServiceRatio = Math.max(...pool.map((candidate) => candidate.serviceRatio ?? -1));
-  const highest = pool.filter((candidate) => (candidate.serviceRatio ?? -1) === highestServiceRatio);
-  const unique = Array.from(new Map(highest.map((candidate) => [`${candidate.accountId}\u0000${candidate.promotionLink}`, candidate])).values());
+  return Array.from(new Map(
+    pool
+      .filter((candidate) => (candidate.serviceRatio ?? -1) === highestServiceRatio)
+      .map((candidate) => [`${candidate.accountId}\u0000${candidate.promotionLink}`, candidate]),
+  ).values());
+}
+
+export function selectLeaguePromotionCandidate(candidates: LeaguePromotionCandidate[]): LeaguePromotionSelection {
+  const linked = candidates.filter((candidate) => Boolean(candidate.promotionLink));
+  if (!linked.length) return { selected: null, requiresChoice: false, candidates: [] };
+  const unique = preferredLeaguePromotionCandidates(linked);
   return {
     selected: unique.length === 1 ? unique[0] : null,
     requiresChoice: unique.length > 1,
     candidates: linked,
+  };
+}
+
+export async function lookupLeagueProductCandidates(productId: string): Promise<{ candidates: LeagueProductLookupCandidate[]; errors: string[]; accountCount: number }> {
+  const accounts = await loadActiveLeagueAccounts();
+  const results = await Promise.all(accounts.map(async (account) => {
+    let cooperative: Map<string, CooperativeItem[]>;
+    try {
+      cooperative = await fetchLeagueCooperativeItemLinks(account);
+    } catch (error) {
+      return { candidates: [] as LeagueProductLookupCandidate[], errors: [`${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`] };
+    }
+    const matches = uniqueCooperativeItems(cooperative.get(productId) || []);
+    if (!matches.length) return { candidates: [] as LeagueProductLookupCandidate[], errors: [] as string[] };
+    const candidates: LeagueProductLookupCandidate[] = [];
+    const errors: string[] = [];
+    for (const match of matches) {
+      try {
+        const promotion = await fetchLeagueItemPromotion(account, match.link);
+        const preliminary = mergeLeagueProductSnapshots(promotion.product, match);
+        let detail: LeagueProductSnapshot | null = null;
+        if (preliminary.shopAppid) {
+          try { detail = await fetchLeagueProductDetail(account, preliminary.shopAppid, productId); }
+          catch (error) { errors.push(`${account.name}：${error instanceof Error ? error.message : "商品详情获取失败"}`); }
+        }
+        const product = mergeLeagueProductSnapshots(detail, promotion.product, match);
+        candidates.push({
+          promotionLink: promotion.promotionLink || match.link,
+          commissionRatio: promotion.commissionRatio,
+          normalCommissionRatio: promotion.normalCommissionRatio,
+          serviceRatio: promotion.serviceRatio,
+          commissionType: promotion.commissionType,
+          planType: promotion.planType,
+          accountId: account.id,
+          accountName: account.name,
+          accountIsPrimary: Boolean(account.isPrimary),
+          headSupplierItemLink: match.link,
+          error: null,
+          ...product,
+        });
+      } catch (error) {
+        errors.push(`${account.name}：${error instanceof Error ? error.message : "推广详情接口调用失败"}`);
+      }
+    }
+    return { candidates, errors };
+  }));
+  return {
+    candidates: results.flatMap((result) => result.candidates),
+    errors: results.flatMap((result) => result.errors),
+    accountCount: accounts.length,
   };
 }
 
