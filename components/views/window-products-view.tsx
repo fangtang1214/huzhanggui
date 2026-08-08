@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownUp, ChevronDown, ExternalLink, Filter, PenLine, RefreshCw, Search, ShieldCheck, TriangleAlert, X } from "lucide-react";
+import { formatWindowServiceRatio } from "@/lib/window-registration";
 import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
 
@@ -159,8 +160,7 @@ export function WindowProductsView() {
   }
 
   async function startRegistration(product: WindowProduct) {
-    const commission = typeof product.serviceRatio === "number" && product.serviceRatio > 0
-      ? `${parseFloat((product.serviceRatio / 10000).toFixed(2))}%` : "";
+    const commission = formatWindowServiceRatio(product.serviceRatio) || "";
     const draft = {
       version: 1 as const,
       autoRestore: true,
@@ -181,7 +181,7 @@ export function WindowProductsView() {
         tagIds: [] as string[],
         categoryId: "",
         businessContactId: user.id,
-        supplyChain: "",
+        supplyChain: product.promotionAccountName || "",
         cooperationMechanism: "",
         notes: "",
         initialLocationId: "",

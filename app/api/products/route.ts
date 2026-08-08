@@ -10,6 +10,7 @@ import { syncProductImageQueue, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission";
 import { setCurrentProductApiIds } from "@/lib/product-api-ids";
+import { mergeWindowRegistrationCooperation } from "@/lib/window-registration";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
 const commissionSchema = z.string().trim().max(30).refine(
@@ -96,16 +97,36 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireUser("products:create"); const input = productSchema.parse(await readJson(request)); const sql = getDb();
+    const [windowRegistration] = input.windowProductId ? await sql`
+      SELECT w.id, w.product_id, w.out_product_id, w.promotion_product_id, w.promotion_out_product_id,
+             w.shop_name, w.selling_price_fen, w.promotion_link, w.service_ratio, w.shop_score,
+             la.name AS promotion_account_name
+      FROM talent_window_products w
+      LEFT JOIN league_accounts la ON la.id = w.promotion_account_id
+      WHERE w.id = ${input.windowProductId}
+    ` : [null];
+    if (input.windowProductId && !windowRegistration) return Response.json({ ok: false, message: "橱窗商品已不存在，请返回橱窗重新登记" }, { status: 404 });
+    const registrationApiProductId = windowRegistration?.promotionProductId || windowRegistration?.productId || input.apiProductId;
+    const registrationApiOutProductId = windowRegistration?.promotionOutProductId || windowRegistration?.outProductId || input.apiOutProductId;
+    const cooperation = mergeWindowRegistrationCooperation(windowRegistration, {
+      storeName: nullable(input.storeName),
+      price: input.price ?? null,
+      productUrl: nullable(input.productUrl),
+      commission: nullable(input.commission),
+      storeRating: input.storeRating ?? null,
+      supplyChain: nullable(input.supplyChain),
+      cooperationMechanism: nullable(input.cooperationMechanism),
+    });
     const [location] = input.initialLocationId ? await sql`SELECT id FROM locations WHERE id = ${input.initialLocationId} AND department_id = ${input.initialDepartmentId} AND active = true` : [null];
     if (input.initialLocationId && !location) return Response.json({ ok: false, message: "初始存放位置不属于所选部门" }, { status: 400 });
     const [run] = await sql`SELECT * FROM image_match_runs WHERE id = ${input.matchRunId} AND user_id = ${user.id}`;
-    const apiProductIds = [input.apiProductId, input.apiOutProductId].filter(Boolean) as string[];
+    const apiProductIds = [registrationApiProductId, registrationApiOutProductId].filter(Boolean) as string[];
     const [apiMatchedProduct] = apiProductIds.length ? await sql`
       SELECT p.id, p.sku
       FROM product_api_ids pai JOIN products p ON p.id = pai.product_id
       WHERE pai.is_current = true AND p.archived = false
-        AND ((pai.id_type = 'product_id' AND pai.value = ${input.apiProductId || null})
-          OR (pai.id_type = 'out_product_id' AND pai.value = ${input.apiOutProductId || null}))
+        AND ((pai.id_type = 'product_id' AND pai.value = ${registrationApiProductId || null})
+          OR (pai.id_type = 'out_product_id' AND pai.value = ${registrationApiOutProductId || null}))
       ORDER BY CASE WHEN pai.id_type = 'product_id' THEN 0 ELSE 1 END
       LIMIT 1
     ` : [null];
@@ -126,7 +147,7 @@ export async function POST(request: Request) {
         const previousTags = await tx`SELECT tag_id FROM product_tags WHERE product_id = ${product.id}`;
         previousProductData = { product, departmentIds: previousDepartments.map((row) => row.departmentId), tagIds: previousTags.map((row) => row.tagId) };
         const previousProductUrl = String(product.productUrl || "");
-        const nextProductUrl = input.productUrl || "";
+        const nextProductUrl = cooperation.productUrl || "";
         if (previousProductUrl && previousProductUrl !== nextProductUrl) {
           await tx`
             INSERT INTO product_link_history(product_id, url, replaced_by_url, source, changed_by)
@@ -134,26 +155,25 @@ export async function POST(request: Request) {
           `;
         }
         const mergedImages = Array.from(new Set([...(Array.isArray(product.imageUrls) ? product.imageUrls : []), ...input.imageUrls]));
-        const updated = await tx`UPDATE products SET name=${input.name}, business_contact_id=${input.businessContactId || null}, store_name=${nullable(input.storeName)},
-          price=${input.price ?? null}, product_url=${nullable(input.productUrl)}, commission=${nullable(input.commission)}, store_rating=${input.storeRating ?? null},
-          supply_chain=${nullable(input.supplyChain)}, cooperation_mechanism=${nullable(input.cooperationMechanism)}, category_id=${input.categoryId || null},
+        const updated = await tx`UPDATE products SET name=${input.name}, business_contact_id=${input.businessContactId || null}, store_name=${cooperation.storeName},
+          price=${cooperation.price}, product_url=${cooperation.productUrl}, commission=${cooperation.commission}, store_rating=${cooperation.storeRating},
+          supply_chain=${cooperation.supplyChain}, cooperation_mechanism=${cooperation.cooperationMechanism}, category_id=${input.categoryId || null},
           image_urls=${tx.json(mergedImages)}, notes=${nullable(input.notes)}, archived=false, version=version+1, updated_at=now() WHERE id=${product.id} RETURNING *`;
         product = updated[0]; mergedProductVersion = Number(product.version);
         if (wasArchived) await tx`UPDATE samples SET archived=false, archived_with_product=false, updated_at=now() WHERE product_id=${product.id} AND archived_with_product=true`;
       } else {
         const sku = await nextProductSku(tx);
         const inserted = await tx`INSERT INTO products(sku,name,business_contact_id,store_name,price,product_url,commission,store_rating,supply_chain,cooperation_mechanism,category_id,image_urls,notes,created_by)
-          VALUES(${sku},${input.name},${input.businessContactId || null},${nullable(input.storeName)},${input.price ?? null},${nullable(input.productUrl)},${nullable(input.commission)},${input.storeRating ?? null},${nullable(input.supplyChain)},${nullable(input.cooperationMechanism)},${input.categoryId || null},${tx.json(input.imageUrls)},${nullable(input.notes)},${user.id}) RETURNING *`;
+          VALUES(${sku},${input.name},${input.businessContactId || null},${cooperation.storeName},${cooperation.price},${cooperation.productUrl},${cooperation.commission},${cooperation.storeRating},${cooperation.supplyChain},${cooperation.cooperationMechanism},${input.categoryId || null},${tx.json(input.imageUrls)},${nullable(input.notes)},${user.id}) RETURNING *`;
         product = inserted[0];
       }
-      await setCurrentProductApiIds(tx, String(product.id), { productId: input.apiProductId, outProductId: input.apiOutProductId });
+      await setCurrentProductApiIds(tx, String(product.id), { productId: registrationApiProductId, outProductId: registrationApiOutProductId });
       if (input.windowProductId) await tx`
         UPDATE talent_window_products
         SET promotion_confirmed = promotion_link IS NOT NULL,
             promotion_status = CASE WHEN promotion_link IS NOT NULL THEN 'confirmed' ELSE 'pending' END,
             promotion_error = CASE WHEN promotion_link IS NOT NULL THEN null ELSE promotion_error END
         WHERE id = ${input.windowProductId}
-          AND product_id = coalesce(${input.apiProductId || null}, product_id)
       `;
       await tx`DELETE FROM product_departments WHERE product_id = ${product.id}`;
       for (const departmentId of input.departmentIds) await tx`INSERT INTO product_departments(product_id,department_id) VALUES(${product.id},${departmentId})`;
