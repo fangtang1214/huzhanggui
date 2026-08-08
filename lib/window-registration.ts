@@ -14,7 +14,6 @@ type WindowRegistrationSource = {
   promotionLink?: unknown;
   serviceRatio?: unknown;
   shopScore?: unknown;
-  promotionAccountName?: unknown;
 };
 
 function text(value: unknown): string | null {
@@ -45,7 +44,7 @@ export function mergeWindowRegistrationCooperation(
     productUrl: text(source.promotionLink) ?? fallback.productUrl,
     commission: formatWindowServiceRatio(source.serviceRatio) ?? fallback.commission,
     storeRating: shopScore === null ? fallback.storeRating : shopScore / 100,
-    supplyChain: text(source.promotionAccountName) ?? fallback.supplyChain,
+    supplyChain: fallback.supplyChain,
     cooperationMechanism: fallback.cooperationMechanism,
   };
 }

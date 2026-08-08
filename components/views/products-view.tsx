@@ -462,8 +462,8 @@ export function ProductFormView({ id }: { id?: string }) {
         productUrl: current.productUrl,
         commission: current.commission,
         storeRating: current.storeRating,
-        supplyChain: current.supplyChain,
-        cooperationMechanism: current.cooperationMechanism,
+        supplyChain: candidate.supplyChain || "",
+        cooperationMechanism: candidate.cooperationMechanism || "",
       } : {
         storeName: candidate.storeName || "",
         price: candidate.price || "",
@@ -491,7 +491,32 @@ export function ProductFormView({ id }: { id?: string }) {
   function discardDraft() {
     localStorage.removeItem(draftKey); setDraftCandidate(null); setDraftSavedAt(null); setDraftTouched(false); setDraftReady(true);
   }
-  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); setError(""); try { const totalQuantity = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); const payload = { ...form, price: form.price || null, storeRating: form.storeRating || null, businessContactId: form.businessContactId || null, categoryId: form.categoryId || null, productUrl: form.productUrl || "", imageUrls, initialLocationId: form.initialLocationId || null, specs: form.specs.filter(r => r.spec.trim() || Number(r.quantity) > 0).map(r => ({ spec: r.spec.trim() || null, quantity: Number(r.quantity) || 1 })) }; if (id) { const { specs, arrivedAt, initialDepartmentId, initialLocationId, sku, ...update } = payload; void specs; void arrivedAt; void initialDepartmentId; void initialLocationId; void sku; await apiFetch(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(update) }); toast("商品信息已保存"); router.push(`/products/${id}`); } else { if (!totalQuantity) throw new Error("请至少添加到样数量"); if (!recognition.runId || !recognition.decision) throw new Error("请先完成图片识别"); const result = await apiFetch<{ id: string; matched?: boolean; sku: string; codes: string[] }>("/api/products", { method: "POST", body: JSON.stringify({ ...payload, matchRunId: recognition.runId, matchDecision: recognition.decision, matchedProductId: recognition.matchedProductId || null }) }); localStorage.removeItem(draftKey); setDraftReady(false); toast(result.matched ? form.windowProductId ? `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品，并更新店铺、机构链接和服务费率` : `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品` : `新商品 ${result.sku} 登记成功`); try { localStorage.setItem(`huzhanggui:product-form-defaults:${user.id}`, JSON.stringify({ departmentIds: form.departmentIds, initialDepartmentId: form.initialDepartmentId })); } catch { /* ignore */ } const returnUrl = new URLSearchParams(window.location.search).get("returnUrl"); if (returnUrl) { router.push(`/samples/${result.codes[0]}`); } else { router.push(`/products/${result.id}`); } } } catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); window.scrollTo({ top: 0, behavior: "smooth" }); } finally { setSaving(false); } }
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const submissionMode = submitter?.value === "update_only" ? "update_only" : "add_samples";
+    setSaving(true); setError("");
+    try {
+      const totalQuantity = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+      const payload = { ...form, price: form.price || null, storeRating: form.storeRating || null, businessContactId: form.businessContactId || null, categoryId: form.categoryId || null, productUrl: form.productUrl || "", imageUrls, initialLocationId: form.initialLocationId || null, specs: form.specs.filter(r => r.spec.trim() || Number(r.quantity) > 0).map(r => ({ spec: r.spec.trim() || null, quantity: Number(r.quantity) || 1 })) };
+      if (id) {
+        const { specs, arrivedAt, initialDepartmentId, initialLocationId, sku, ...update } = payload; void specs; void arrivedAt; void initialDepartmentId; void initialLocationId; void sku;
+        await apiFetch(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(update) }); toast("商品信息已保存"); router.push(`/products/${id}`);
+      } else {
+        if (submissionMode === "add_samples" && !totalQuantity) throw new Error("请至少添加到样数量");
+        if (!recognition.runId || !recognition.decision) throw new Error("请先完成图片识别");
+        if (submissionMode === "update_only" && recognition.decision !== "matched") throw new Error("仅更新信息前必须先确认同款商品");
+        const result = await apiFetch<{ id: string; matched?: boolean; updatedOnly?: boolean; sku: string; codes: string[] }>("/api/products", { method: "POST", body: JSON.stringify({ ...payload, submissionMode, matchRunId: recognition.runId, matchDecision: recognition.decision, matchedProductId: recognition.matchedProductId || null }) });
+        localStorage.removeItem(draftKey); setDraftReady(false);
+        toast(result.updatedOnly ? `商品 ${result.sku} 信息已更新，本次未新增样品` : result.matched ? form.windowProductId ? `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品，并更新店铺、机构链接和服务费率` : `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品` : `新商品 ${result.sku} 登记成功`);
+        try { localStorage.setItem(`huzhanggui:product-form-defaults:${user.id}`, JSON.stringify({ departmentIds: form.departmentIds, initialDepartmentId: form.initialDepartmentId })); } catch { /* ignore */ }
+        const returnUrl = new URLSearchParams(window.location.search).get("returnUrl");
+        if (result.updatedOnly || !returnUrl) router.push(`/products/${result.id}`);
+        else router.push(`/samples/${result.codes[0]}`);
+      }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); window.scrollTo({ top: 0, behavior: "smooth" }); }
+    finally { setSaving(false); }
+  }
   if (id && detail.loading) return <LoadingState />;
   return <form onSubmit={submit}>
     <PageHeader eyebrow={id ? "编辑档案" : "到样登记"} title={id ? "修改商品信息" : "登记新商品与实物样品"} description={id ? "货号不可修改，其他字段的每次修改都会保留操作记录。" : "填写主图后会自动识别同款；识别期间可以继续填写其他资料。"} actions={<><button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>{id && <button className="button button-primary" disabled={saving}>{saving ? "正在保存…" : "保存修改"}</button>}</>} />
@@ -526,7 +551,7 @@ export function ProductFormView({ id }: { id?: string }) {
         </div>)}
         <button type="button" className="button button-secondary button-compact" onClick={() => setForm({ ...form, specs: [...form.specs, { spec: "", quantity: "1" }] })} disabled={form.specs.length >= 100}><Plus size={15} />添加规格</button>
       </div>
-      {(() => { const total = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); return <div className="arrival-result"><Boxes size={20} /><div><b>将创建 {total} 个独立编号</b><span>例如 HZG-{today().slice(0, 4)}-0001-001</span></div></div>; })()}<div className="arrival-submit"><button className="button button-primary" disabled={saving || recognition.phase !== "ready" || !recognition.decision || candidates.length > 0}>{saving ? "正在保存…" : recognition.decision === "matched" ? "按同款追加到样" : "完成登记"}</button><small>{recognition.phase === "checking" ? "图片识别完成后即可提交" : "确认以上信息后完成本次到样登记"}</small></div></section>}
+      {(() => { const total = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); return <div className="arrival-result"><Boxes size={20} /><div><b>将创建 {total} 个独立编号</b><span>例如 HZG-{today().slice(0, 4)}-0001-001</span></div></div>; })()}<div className="arrival-submit">{recognition.decision === "matched" && <button className="button button-secondary" name="submissionMode" value="update_only" disabled={saving || candidates.length > 0}>{saving ? "正在保存…" : "仅更新商品信息"}</button>}<button className="button button-primary" name="submissionMode" value="add_samples" disabled={saving || recognition.phase !== "ready" || !recognition.decision || candidates.length > 0}>{saving ? "正在保存…" : recognition.decision === "matched" ? "按同款追加到样" : "完成登记"}</button><small>{recognition.phase === "checking" ? "图片识别完成后即可提交" : recognition.decision === "matched" ? "可仅更新档案，也可同时追加本次到样" : "确认以上信息后完成本次到样登记"}</small></div></section>}
       <section className="panel form-section"><header><div><h2>备注</h2><p>可记录选品或合作补充信息。</p></div></header><Field label="内部备注"><textarea rows={6} value={form.notes} onChange={(event) => set("notes", event.target.value)} /></Field></section>
     </aside></div>}
     {candidates.length > 0 && <Modal title="发现疑似同款，请人工确认" onClose={rejectCandidates} wide><div className="match-intro"><img src={recognizingUrl || imageUrls[0]} alt="本次新图片" referrerPolicy="no-referrer" /><div><b>本次填写的主图</b><p>请逐一对比。颜色、尺码或规格不同，请选择“都不是同款”。</p>{recognition.timingText && <small>{recognition.timingText}</small>}</div></div><div className="match-candidate-list">{candidates.map((candidate) => <article className="match-candidate" key={candidate.id}><div className="match-images"><img src={recognizingUrl || imageUrls[0]} alt="新图片" referrerPolicy="no-referrer" /><img src={candidate.imageUrls?.[0]} alt={candidate.name} referrerPolicy="no-referrer" /></div><div className="match-candidate-copy"><span className="similarity-chip">相似度 {Math.round(candidate.similarity * 100)}%</span><b>{candidate.name}</b><p>{candidate.sku} · {candidate.storeName || "未填店铺"}{candidate.archived ? " · 已归档" : ""}</p><button type="button" className="button button-primary button-compact" onClick={() => chooseCandidate(candidate)}>确认是同款</button></div></article>)}</div><div className="modal-actions"><button type="button" className="button button-secondary" onClick={rejectCandidates}>都不是同款，创建新款</button></div></Modal>}

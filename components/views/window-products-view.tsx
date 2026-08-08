@@ -181,7 +181,7 @@ export function WindowProductsView() {
         tagIds: [] as string[],
         categoryId: "",
         businessContactId: user.id,
-        supplyChain: product.promotionAccountName || "",
+        supplyChain: "",
         cooperationMechanism: "",
         notes: "",
         initialLocationId: "",

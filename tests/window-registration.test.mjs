@@ -34,11 +34,19 @@ test("确认同款时以本次橱窗的店铺和机构合作数据覆盖旧档�
     productUrl: "weixinstorehs/28684289399598",
     commission: "2.5%",
     storeRating: 4.81,
-    supplyChain: "斯源新团",
+    supplyChain: "旧机构",
     cooperationMechanism: "原有合作备注",
   });
 });
 
 test("橱窗接口未返回的合作字段保留本次登记表单内容", () => {
   assert.deepEqual(mergeWindowRegistrationCooperation({}, oldProduct), oldProduct);
+});
+
+test("联盟机构账号名称不会自动写入供应链字段", () => {
+  const merged = mergeWindowRegistrationCooperation({ promotionAccountName: "斯源新团" }, {
+    ...oldProduct,
+    supplyChain: null,
+  });
+  assert.equal(merged.supplyChain, null);
 });

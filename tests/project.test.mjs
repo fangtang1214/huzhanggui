@@ -413,6 +413,12 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.doesNotMatch(productsRoute, /'weixinstorehs\/' \|\| w\.product_id/);
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /draftCandidate/);
+  assert.match(form, /仅更新商品信息/);
+  assert.match(form, /value="update_only"/);
+  const registrationRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
+  assert.match(registrationRoute, /submissionMode: z\.enum\(\["add_samples", "update_only"\]\)/);
+  assert.match(registrationRoute, /if \(!updateOnly\)/);
+  assert.match(registrationRoute, /updatedOnly: updateOnly/);
   const navigation = await readFile(new URL("../components/huzhanggui-app.tsx", import.meta.url), "utf8");
   assert.match(navigation, /\/talent-accounts/);
   assert.match(navigation, /\/window-products/);
@@ -423,6 +429,8 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(windowView, /startRegistration/);
   assert.match(windowView, /goodEvaluationRatio/);
   assert.match(windowView, /shopScore/);
+  assert.match(windowView, /supplyChain: ""/);
+  assert.doesNotMatch(windowView, /supplyChain: product\.promotionAccountName/);
   const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/productdetail\/get/);
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/cooperativeitem\/list\/get/);

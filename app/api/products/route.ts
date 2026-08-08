@@ -29,16 +29,20 @@ const productSchema = z.object({
   specs: z.array(z.object({
     spec: z.string().trim().max(100).optional().nullable(),
     quantity: z.coerce.number().int().min(1, "每行数量至少为 1").max(500),
-  })).min(1, "请至少添加一行规格与数量").max(100),
-  arrivedAt: z.string().date("请选择到样日期"),
-  initialDepartmentId: z.string().uuid(), initialLocationId: z.string().uuid().optional().nullable(),
+  })).max(100).default([]),
+  arrivedAt: z.string().date("请选择到样日期").optional().nullable(),
+  initialDepartmentId: z.string().uuid().optional().nullable(), initialLocationId: z.string().uuid().optional().nullable(),
   matchRunId: z.string().uuid(), matchDecision: z.enum(["matched", "new", "failed_continue"]),
   matchedProductId: z.string().uuid().optional().nullable(),
+  submissionMode: z.enum(["add_samples", "update_only"]).default("add_samples"),
   windowProductId: z.string().uuid().optional().nullable(),
   apiProductId: z.string().trim().max(100).optional().nullable(),
   apiOutProductId: z.string().trim().max(100).optional().nullable(),
 }).superRefine((input, context) => {
   if (input.matchDecision === "matched" && !input.matchedProductId) context.addIssue({ code: "custom", path: ["matchedProductId"], message: "请选择确认的同款商品" });
+  if (input.submissionMode === "add_samples" && !input.specs.length) context.addIssue({ code: "custom", path: ["specs"], message: "请至少添加一行规格与数量" });
+  if (input.submissionMode === "add_samples" && !input.arrivedAt) context.addIssue({ code: "custom", path: ["arrivedAt"], message: "请选择到样日期" });
+  if (input.submissionMode === "add_samples" && !input.initialDepartmentId) context.addIssue({ code: "custom", path: ["initialDepartmentId"], message: "请选择初始所在部门" });
 });
 
 function nullable(value: string | null | undefined): string | null { return value === "" || value === undefined ? null : value; }
@@ -97,12 +101,13 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireUser("products:create"); const input = productSchema.parse(await readJson(request)); const sql = getDb();
+    const updateOnly = input.submissionMode === "update_only";
+    const arrivedAt = input.arrivedAt || null;
+    const initialDepartmentId = input.initialDepartmentId || null;
     const [windowRegistration] = input.windowProductId ? await sql`
       SELECT w.id, w.product_id, w.out_product_id, w.promotion_product_id, w.promotion_out_product_id,
-             w.shop_name, w.selling_price_fen, w.promotion_link, w.service_ratio, w.shop_score,
-             la.name AS promotion_account_name
+             w.shop_name, w.selling_price_fen, w.promotion_link, w.service_ratio, w.shop_score
       FROM talent_window_products w
-      LEFT JOIN league_accounts la ON la.id = w.promotion_account_id
       WHERE w.id = ${input.windowProductId}
     ` : [null];
     if (input.windowProductId && !windowRegistration) return Response.json({ ok: false, message: "橱窗商品已不存在，请返回橱窗重新登记" }, { status: 404 });
@@ -117,8 +122,8 @@ export async function POST(request: Request) {
       supplyChain: nullable(input.supplyChain),
       cooperationMechanism: nullable(input.cooperationMechanism),
     });
-    const [location] = input.initialLocationId ? await sql`SELECT id FROM locations WHERE id = ${input.initialLocationId} AND department_id = ${input.initialDepartmentId} AND active = true` : [null];
-    if (input.initialLocationId && !location) return Response.json({ ok: false, message: "初始存放位置不属于所选部门" }, { status: 400 });
+    const [location] = !updateOnly && input.initialLocationId ? await sql`SELECT id FROM locations WHERE id = ${input.initialLocationId} AND department_id = ${initialDepartmentId} AND active = true` : [null];
+    if (!updateOnly && input.initialLocationId && !location) return Response.json({ ok: false, message: "初始存放位置不属于所选部门" }, { status: 400 });
     const [run] = await sql`SELECT * FROM image_match_runs WHERE id = ${input.matchRunId} AND user_id = ${user.id}`;
     const apiProductIds = [registrationApiProductId, registrationApiOutProductId].filter(Boolean) as string[];
     const [apiMatchedProduct] = apiProductIds.length ? await sql`
@@ -132,6 +137,7 @@ export async function POST(request: Request) {
     ` : [null];
     const effectiveMatchDecision = apiMatchedProduct ? "matched" : input.matchDecision;
     const effectiveMatchedProductId = apiMatchedProduct ? String(apiMatchedProduct.id) : input.matchedProductId;
+    if (updateOnly && effectiveMatchDecision !== "matched") return Response.json({ ok: false, message: "仅更新信息前必须先人工确认同款商品" }, { status: 409 });
     if (!run || (effectiveMatchDecision !== "matched" && !input.imageUrls.some((imageUrl) => urlHash(imageUrl) === run.imageUrlHash))) return Response.json({ ok: false, message: "图片识别结果已失效，请重新识别" }, { status: 409 });
     if (effectiveMatchDecision === "failed_continue" && run.status !== "failed") return Response.json({ ok: false, message: "识别状态与登记方式不一致" }, { status: 409 });
     if (!apiMatchedProduct && input.matchDecision === "matched" && !run.candidates?.some((candidate: { id?: string }) => String(candidate.id) === input.matchedProductId)) return Response.json({ ok: false, message: "确认的同款商品不在识别结果中" }, { status: 409 });
@@ -151,7 +157,7 @@ export async function POST(request: Request) {
         if (previousProductUrl && previousProductUrl !== nextProductUrl) {
           await tx`
             INSERT INTO product_link_history(product_id, url, replaced_by_url, source, changed_by)
-            VALUES(${product.id}, ${previousProductUrl}, ${nextProductUrl || null}, 'intake_merge', ${user.id})
+            VALUES(${product.id}, ${previousProductUrl}, ${nextProductUrl || null}, ${updateOnly ? "product_edit" : "intake_merge"}, ${user.id})
           `;
         }
         const mergedImages = Array.from(new Set([...(Array.isArray(product.imageUrls) ? product.imageUrls : []), ...input.imageUrls]));
@@ -180,23 +186,25 @@ export async function POST(request: Request) {
       await tx`DELETE FROM product_tags WHERE product_id = ${product.id}`;
       for (const tagId of input.tagIds) await tx`INSERT INTO product_tags(product_id,tag_id) VALUES(${product.id},${tagId})`;
       const codes: string[] = []; const sampleIds: string[] = [];
-      for (const specRow of input.specs) {
-        for (let index = 0; index < specRow.quantity; index += 1) {
-          const code = await nextProductSampleCode(tx, String(product.id), String(product.sku));
-          const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,spec,created_by)
-            VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${specRow.spec || null},${user.id}) RETURNING id`;
-          await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)
-            VALUES(${sample.id},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id},${effectiveMatchDecision === "matched" ? "同款再次到样登记" : "样品到货登记"})`;
-          codes.push(code); sampleIds.push(String(sample.id));
+      if (!updateOnly) {
+        for (const specRow of input.specs) {
+          for (let index = 0; index < specRow.quantity; index += 1) {
+            const code = await nextProductSampleCode(tx, String(product.id), String(product.sku));
+            const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,spec,created_by)
+              VALUES(${code},${product.id},${arrivedAt},'active',${initialDepartmentId},${input.initialLocationId || null},${specRow.spec || null},${user.id}) RETURNING id`;
+            await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)
+              VALUES(${sample.id},'active',${initialDepartmentId},${input.initialLocationId || null},${user.id},${effectiveMatchDecision === "matched" ? "同款再次到样登记" : "样品到货登记"})`;
+            codes.push(code); sampleIds.push(String(sample.id));
+          }
         }
       }
-      if (effectiveMatchDecision === "matched") await tx`INSERT INTO product_intake_batches(product_id,match_run_id,user_id,sample_ids,submitted_data,previous_product_data,merged_product_version)
+      if (effectiveMatchDecision === "matched" && !updateOnly) await tx`INSERT INTO product_intake_batches(product_id,match_run_id,user_id,sample_ids,submitted_data,previous_product_data,merged_product_version)
         VALUES(${product.id},${input.matchRunId},${user.id},${tx.json(sampleIds)},${tx.json(input)},${tx.json(previousProductData as never)},${mergedProductVersion})`;
       await tx`UPDATE image_match_runs SET selected_product_id=${effectiveMatchedProductId || null}, decision=${effectiveMatchDecision}, decided_at=now() WHERE id=${input.matchRunId}`;
       await syncProductImageQueue(String(product.id), product.imageUrls as string[], tx);
-      return { id: String(product.id), sku: String(product.sku), name: String(product.name), codes, imageUrls: product.imageUrls as string[], matched: effectiveMatchDecision === "matched" };
+      return { id: String(product.id), sku: String(product.sku), name: String(product.name), codes, imageUrls: product.imageUrls as string[], matched: effectiveMatchDecision === "matched", updatedOnly: updateOnly };
     });
-    await writeAudit(user, result.matched ? "product.match_merge" : "product.create", "product", result.id, result.matched ? `确认同款 ${result.sku}，追加 ${result.codes.length} 件样品` : `登记新商品 ${result.sku}，到样 ${result.codes.length} 件`, input, requestIp(request));
-    return created(result);
+    await writeAudit(user, result.updatedOnly ? "product.match_update" : result.matched ? "product.match_merge" : "product.create", "product", result.id, result.updatedOnly ? `确认同款 ${result.sku}，仅更新商品信息，未新增样品` : result.matched ? `确认同款 ${result.sku}，追加 ${result.codes.length} 件样品` : `登记新商品 ${result.sku}，到样 ${result.codes.length} 件`, input, requestIp(request));
+    return result.updatedOnly ? ok(result) : created(result);
   } catch (error) { return apiError(error); }
 }
