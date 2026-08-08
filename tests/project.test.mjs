@@ -460,7 +460,15 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(productsRoute, /qualitySource\.leagueAccountId/);
   assert.match(productsRoute, /qualitySource\.productId/);
   assert.match(productsRoute, /coalesce\(w\.out_product_id, w\.product_id\)/);
+  assert.match(productsRoute, /LEFT JOIN product_api_ids pai/);
+  assert.match(productsRoute, /pai\.value = coalesce\(w\.out_product_id, w\.product_id\)/);
+  assert.doesNotMatch(productsRoute, /FROM products candidate_product/);
+  assert.doesNotMatch(productsRoute, /candidate_product\.product_url = w\.promotion_link/);
   assert.doesNotMatch(productsRoute, /id_type/);
+  const leagueProduct = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
+  assert.match(leagueProduct, /pai\.value = \$\{effectiveProductId\}/);
+  assert.doesNotMatch(leagueProduct, /pai\.value IN \(\$\{effectiveProductId\}, \$\{String\(row\.productId\)\}\)/);
+  assert.doesNotMatch(leagueProduct, /p\.product_url = \$\{safeText\(row\.promotionLink\)\}/);
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /draftCandidate/);
   assert.match(form, /仅更新商品信息/);

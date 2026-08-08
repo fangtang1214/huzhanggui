@@ -1,5 +1,4 @@
 import { getDb } from "./db";
-import { setCurrentProductApiId } from "./product-api-ids";
 import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 
 const API_BASE = "https://api.weixin.qq.com";
@@ -451,25 +450,13 @@ export async function syncWindowPromotions(talentAccountId: string) {
         const selected = selection.selected;
         const [registered] = await tx`
           SELECT p.id, p.product_url
-          FROM products p
-          WHERE p.archived = false AND (
-            EXISTS (
-              SELECT 1 FROM product_api_ids pai
-              WHERE pai.product_id = p.id AND pai.is_current = true
-                AND pai.value IN (${effectiveProductId}, ${String(row.productId)})
-            )
-            OR (${safeText(row.promotionLink)}::text IS NOT NULL AND (
-              p.product_url = ${safeText(row.promotionLink)}
-              OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id = p.id AND history.url = ${safeText(row.promotionLink)})
-            ))
-          )
-          ORDER BY CASE WHEN EXISTS (
-            SELECT 1 FROM product_api_ids exact_id
-            WHERE exact_id.product_id = p.id AND exact_id.is_current = true AND exact_id.value = ${effectiveProductId}
-          ) THEN 0 ELSE 1 END, p.updated_at DESC, p.id
+          FROM product_api_ids pai
+          JOIN products p ON p.id = pai.product_id
+          WHERE pai.is_current = true
+            AND pai.value = ${effectiveProductId}
+            AND p.archived = false
           LIMIT 1
         `;
-        if (registered) await setCurrentProductApiId(tx, String(registered.id), effectiveProductId);
         let registeredLink = safeText(registered?.productUrl);
         let promotionStatus: "pending" | "selected" | "confirmed" | "needs_choice" | "needs_replacement" = "pending";
         let promotionError: string | null = null;

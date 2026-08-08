@@ -4,7 +4,6 @@ import { requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { fetchLeagueProductDetail, loadLeagueAccount } from "@/lib/league-product";
-import { setCurrentProductApiId } from "@/lib/product-api-ids";
 
 const confirmSchema = z.object({
   windowProductId: z.string().uuid(),
@@ -58,28 +57,12 @@ export async function GET(request: Request) {
               ), '[]'::json) AS promotion_candidates
        FROM talent_window_products w
        LEFT JOIN league_accounts la ON la.id = w.promotion_account_id
-       LEFT JOIN LATERAL (
-         SELECT candidate_product.id, candidate_product.sku, candidate_product.product_url
-         FROM products candidate_product
-         WHERE candidate_product.archived = false AND (
-           EXISTS (
-             SELECT 1 FROM product_api_ids pai
-             WHERE pai.product_id = candidate_product.id AND pai.is_current = true
-               AND pai.value IN (coalesce(w.out_product_id, w.product_id), w.product_id)
-           )
-           OR candidate_product.product_url = w.promotion_link
-           OR EXISTS (
-             SELECT 1 FROM product_link_history history
-             WHERE history.product_id = candidate_product.id AND history.url = w.promotion_link
-           )
-         )
-         ORDER BY CASE WHEN EXISTS (
-           SELECT 1 FROM product_api_ids exact_id
-            WHERE exact_id.product_id = candidate_product.id AND exact_id.is_current = true
-             AND exact_id.value = coalesce(w.out_product_id, w.product_id)
-         ) THEN 0 ELSE 1 END, candidate_product.updated_at DESC
-         LIMIT 1
-       ) p ON true
+       LEFT JOIN product_api_ids pai
+         ON pai.is_current = true
+        AND pai.value = coalesce(w.out_product_id, w.product_id)
+       LEFT JOIN products p
+         ON p.id = pai.product_id
+        AND p.archived = false
       WHERE w.account_id = ${effectiveAccountId}
       ORDER BY w.synced_at DESC, w.product_id DESC
     `;
@@ -108,9 +91,7 @@ export async function POST(request: Request) {
       : null;
     const result = await sql.begin(async (tx) => {
       const [candidate] = await tx`
-        SELECT c.*, coalesce(w.out_product_id, w.product_id) AS product_id_value,
-               w.product_id AS window_product_id_value,
-               w.promotion_link AS old_window_link, w.title
+        SELECT c.*, coalesce(w.out_product_id, w.product_id) AS product_id_value, w.title
         FROM talent_window_promotion_candidates c
         JOIN talent_window_products w ON w.id = c.window_product_id
         WHERE c.id = ${input.candidateId} AND w.id = ${input.windowProductId}
@@ -119,18 +100,13 @@ export async function POST(request: Request) {
       if (!candidate) return null;
       const [registered] = await tx`
         SELECT p.id, p.sku, p.product_url
-        FROM products p
-        WHERE p.archived = false AND EXISTS (
-          SELECT 1 FROM product_api_ids pai
-          WHERE pai.product_id = p.id AND pai.is_current = true
-            AND pai.value IN (${String(candidate.productIdValue)}, ${String(candidate.windowProductIdValue)})
-        )
-        ORDER BY CASE WHEN EXISTS (
-          SELECT 1 FROM product_api_ids exact_id
-          WHERE exact_id.product_id = p.id AND exact_id.is_current = true AND exact_id.value = ${String(candidate.productIdValue)}
-        ) THEN 0 ELSE 1 END, p.updated_at DESC, p.id
+        FROM product_api_ids pai
+        JOIN products p ON p.id = pai.product_id
+        WHERE pai.is_current = true
+          AND pai.value = ${String(candidate.productIdValue)}
+          AND p.archived = false
         LIMIT 1
-        FOR UPDATE
+        FOR UPDATE OF p
       `;
       await tx`
         UPDATE talent_window_products
@@ -151,7 +127,6 @@ export async function POST(request: Request) {
         WHERE id = ${input.windowProductId}
       `;
       if (registered) {
-        await setCurrentProductApiId(tx, String(registered.id), String(candidate.productIdValue));
         if (String(registered.productUrl || "") !== String(candidate.promotionLink)) {
           if (registered.productUrl) await tx`
             INSERT INTO product_link_history(product_id, url, replaced_by_url, source, source_entity_id, changed_by)
