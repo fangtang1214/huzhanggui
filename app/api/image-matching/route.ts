@@ -3,7 +3,7 @@ import { apiError, ok, readJson, requestIp } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
-import { analyzeSubject, getGlmApiKey, GLM_MODEL, reviewCandidates, type SubjectBox } from "@/lib/glm-vision";
+import { analyzeSubject, getGlmRuntime, reviewCandidates, type GlmModel, type SubjectBox } from "@/lib/glm-vision";
 import { embedImage, getMatchSettings, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 
@@ -58,23 +58,23 @@ async function saveFullEmbedding(imageUrl: string, model: string, embedding: str
     ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,embedding=excluded.embedding,last_used_at=now()`;
 }
 
-async function cachedSubject(imageUrl: string) {
+async function cachedSubject(imageUrl: string, glmModel: GlmModel) {
   const sql = getDb();
   const [row] = await sql`SELECT subject_box,embedding::text AS embedding FROM image_subject_cache
-    WHERE url_hash=${urlHash(imageUrl)} AND model=${GLM_MODEL}`;
+    WHERE url_hash=${urlHash(imageUrl)} AND model=${glmModel}`;
   return row?.embedding && Array.isArray(row.subjectBox) ? { box: row.subjectBox as SubjectBox, embedding: String(row.embedding) } : null;
 }
 
-async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string) {
+async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string, glmModel: GlmModel) {
   const sql = getDb();
   await sql`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding)
-    VALUES(${urlHash(imageUrl)},${GLM_MODEL},${imageUrl},${sql.json(box)},${embedding}::vector(512))
+    VALUES(${urlHash(imageUrl)},${glmModel},${imageUrl},${sql.json(box)},${embedding}::vector(512))
     ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,subject_box=excluded.subject_box,embedding=excluded.embedding,updated_at=now()`;
 }
 
-async function imageVectors(imageUrl: string, model: string, apiKey: string, signal: AbortSignal) {
+async function imageVectors(imageUrl: string, model: string, apiKey: string, glmModel: GlmModel, signal: AbortSignal) {
   let full = await cachedFullEmbedding(imageUrl, model);
-  const subjectCached = await cachedSubject(imageUrl);
+  const subjectCached = await cachedSubject(imageUrl, glmModel);
   let subject = subjectCached?.embedding || null;
   if (!full) {
     const result = await embedImage(imageUrl, undefined, "interactive", signal);
@@ -82,10 +82,10 @@ async function imageVectors(imageUrl: string, model: string, apiKey: string, sig
     full = vectorLiteral(result.embedding); await saveFullEmbedding(imageUrl, model, full);
   }
   if (!subject) {
-    const box = await analyzeSubject(apiKey, imageUrl, signal);
+    const box = await analyzeSubject(apiKey, imageUrl, glmModel, signal);
     const result = await embedImage(imageUrl, box, "interactive", signal);
     if (result.model !== model) throw new Error("图片识别模型正在升级，请稍后重试");
-    subject = vectorLiteral(result.embedding); await saveSubject(imageUrl, box, subject);
+    subject = vectorLiteral(result.embedding); await saveSubject(imageUrl, box, subject, glmModel);
   }
   return { full, subject };
 }
@@ -151,8 +151,8 @@ export async function POST(request: Request) {
     }
     const timeout = new AbortController(); const timer = setTimeout(() => timeout.abort(), 90_000);
     try {
-      const apiKey = await getGlmApiKey();
-      const vectors = await Promise.all(input.imageUrls.map((url) => imageVectors(url, settings.model, apiKey, timeout.signal)));
+      const { apiKey, model: glmModel } = await getGlmRuntime();
+      const vectors = await Promise.all(input.imageUrls.map((url) => imageVectors(url, settings.model, apiKey, glmModel, timeout.signal)));
       const local = await findCandidates(vectors, settings.model, settings.threshold, input.excludeProductIds);
       if (!local.length) {
         const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "no_match");
@@ -162,7 +162,7 @@ export async function POST(request: Request) {
       const reviewInputs = local.map((candidate) => ({ id: String(candidate.id), sku: String(candidate.sku), name: String(candidate.name), imageUrls: Array.isArray(candidate.imageUrls) ? candidate.imageUrls.map(String) : [] }));
       const reviewGroups: typeof reviewInputs[] = [];
       for (let index = 0; index < reviewInputs.length; index += 5) reviewGroups.push(reviewInputs.slice(index, index + 5));
-      const reviews = (await Promise.all(reviewGroups.map((group) => reviewCandidates(apiKey, input.imageUrls, group, timeout.signal)))).flat();
+      const reviews = (await Promise.all(reviewGroups.map((group) => reviewCandidates(apiKey, input.imageUrls, group, glmModel, timeout.signal)))).flat();
       const reviewById = new Map(reviews.map((review) => [review.candidateId, review]));
       const candidates = local.flatMap((candidate) => {
         const review = reviewById.get(String(candidate.id));

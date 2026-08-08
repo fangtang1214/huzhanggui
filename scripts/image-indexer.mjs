@@ -4,7 +4,8 @@ import { createDecipheriv, createHash } from "node:crypto";
 const sql = postgres(process.env.DATABASE_URL, { max: 2 });
 const visionUrl = process.env.VISION_URL || "http://vision:3100";
 const modelVersion = process.env.IMAGE_MODEL || "Xenova/clip-vit-base-patch32:q8";
-const glmModel = "glm-4.6v-flash";
+const defaultGlmModel = "glm-4.6v-flash";
+const glmModels = new Set([defaultGlmModel, "glm-4.6v-flashx", "glm-4.6v"]);
 const glmEndpoint = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const hash = (value) => createHash("sha256").update(value.trim()).digest("hex");
 const vectorLiteral = (values) => `[${values.map(Number).join(",")}]`;
@@ -48,7 +49,7 @@ function parseJson(text) {
   return JSON.parse(source.slice(start, end + 1));
 }
 
-async function analyzeSubject(apiKey, imageUrl) {
+async function analyzeSubject(apiKey, imageUrl, glmModel) {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 60_000);
   try {
     const response = await fetch(glmEndpoint, {
@@ -111,10 +112,11 @@ async function processOneSubject() {
   const setting = settingRow?.value || {};
   if (setting.indexingStatus !== "running" || !setting.configured || !setting.apiKeyEncrypted) return false;
   const apiKey = decryptApiKey(setting.apiKeyEncrypted);
+  const glmModel = glmModels.has(setting.model) ? setting.model : defaultGlmModel;
   await sql`UPDATE product_image_features SET subject_status='pending',subject_updated_at=now()
     WHERE subject_status='processing' AND subject_updated_at < now() - interval '10 minutes'`;
   await sql`UPDATE product_image_features f SET subject_status='ready',subject_box=c.subject_box,
-      subject_embedding_vector=c.embedding,subject_error=NULL,subject_updated_at=now()
+      subject_embedding_vector=c.embedding,subject_model=${glmModel},subject_error=NULL,subject_updated_at=now()
     FROM image_subject_cache c
     WHERE f.url_hash=c.url_hash AND c.model=${glmModel} AND f.subject_status IN ('waiting','pending')`;
   const rows = await sql.begin(async (tx) => {
@@ -127,7 +129,7 @@ async function processOneSubject() {
   if (!rows.length) return false;
   const item = rows[0];
   try {
-    const box = await analyzeSubject(apiKey, item.image_url);
+    const box = await analyzeSubject(apiKey, item.image_url, glmModel);
     const response = await fetch(`${visionUrl}/embed`, { method: "POST", headers: { "content-type": "application/json", "x-vision-priority": "background" }, body: JSON.stringify({ imageUrl: item.image_url, box }) });
     const payload = await response.json();
     if (!response.ok || !Array.isArray(payload.embedding)) throw new Error(payload.message || "商品主体特征生成失败");
@@ -137,7 +139,7 @@ async function processOneSubject() {
       await tx`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding)
         VALUES(${item.url_hash},${glmModel},${item.image_url},${tx.json(box)},${embedding}::vector(512))
         ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,subject_box=excluded.subject_box,embedding=excluded.embedding,updated_at=now()`;
-      await tx`UPDATE product_image_features SET subject_status='ready',subject_box=${tx.json(box)},subject_embedding_vector=${embedding}::vector(512),subject_error=NULL,subject_updated_at=now()
+      await tx`UPDATE product_image_features SET subject_status='ready',subject_box=${tx.json(box)},subject_model=${glmModel},subject_embedding_vector=${embedding}::vector(512),subject_error=NULL,subject_updated_at=now()
         WHERE url_hash=${item.url_hash}`;
     });
   } catch (error) {

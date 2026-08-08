@@ -243,7 +243,7 @@ test("图片识别使用预热的 Q8 模型与前后台优先队列", async () =
 
 test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", async () => {
   const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
-  assert.ok(route.indexOf("exactIdMatch(input.apiProductId)") < route.indexOf("getGlmApiKey()"));
+  assert.ok(route.indexOf("exactIdMatch(input.apiProductId)") < route.indexOf("getGlmRuntime()"));
   assert.match(route, /slice\(0, 20\)/);
   assert.match(route, /subject_embedding_vector <=>/);
   assert.match(route, /slice\(0, 5\)/);
@@ -253,6 +253,17 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   const migration = await readFile(new URL("../migrations/025_glm_subject_matching.sql", import.meta.url), "utf8");
   assert.match(migration, /subject_embedding_vector vector\(512\)/);
   assert.match(migration, /image_subject_cache/);
+  const modelMigration = await readFile(new URL("../migrations/026_glm_model_selection.sql", import.meta.url), "utf8");
+  assert.match(modelMigration, /subject_model varchar\(120\)/);
+  const recognitionRoute = await readFile(new URL("../app/api/recognition/route.ts", import.meta.url), "utf8");
+  assert.match(recognitionRoute, /glm-4\.6v-flashx/);
+  assert.match(recognitionRoute, /glm_reindex_all/);
+  const resultRoute = await readFile(new URL("../app/api/recognition/subject-index/route.ts", import.meta.url), "utf8");
+  assert.match(resultRoute, /subject_box/);
+  assert.match(resultRoute, /subject_model/);
+  const resultView = await readFile(new URL("../components/views/subject-index-results.tsx", import.meta.url), "utf8");
+  assert.match(resultView, /绿色框/);
+  assert.match(resultView, /主体框坐标/);
 });
 
 test("问题处理、商品复制、流转图片和状态精简按新流程实现", async () => {

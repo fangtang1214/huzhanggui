@@ -4,7 +4,7 @@ import { AuthError, hasPermission, requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { IMAGE_MODEL, MATCH_THRESHOLDS, syncProductImageQueue } from "@/lib/image-matching";
-import { GLM_MODEL, getGlmApiKey, testGlmConnection } from "@/lib/glm-vision";
+import { GLM_MODELS, getGlmApiKey, normalizeGlmModel, testGlmConnection } from "@/lib/glm-vision";
 import { encryptSecret } from "@/lib/secret-box";
 import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
 import { setCurrentProductApiId } from "@/lib/product-api-ids";
@@ -37,7 +37,8 @@ export async function GET() {
       LEFT JOIN users u ON u.id=b.user_id ORDER BY b.created_at DESC LIMIT 50`;
     return ok({ setting: setting?.value || { mode: "standard", model: IMAGE_MODEL }, thresholds: MATCH_THRESHOLDS, progress, runs, batches,
       isSuperAdmin: user.isSuperAdmin,
-      glm: { configured: Boolean(glmValue.configured && glmValue.apiKeyEncrypted), indexingStatus: glmValue.indexingStatus || "idle", model: GLM_MODEL },
+      glm: { configured: Boolean(glmValue.configured && glmValue.apiKeyEncrypted), indexingStatus: glmValue.indexingStatus || "idle", model: normalizeGlmModel((glmValue as { model?: string }).model) },
+      glmModels: Object.entries(GLM_MODELS).map(([id, item]) => ({ id, ...item })),
       subjectProgress,
     });
   } catch (error) { return apiError(error); }
@@ -48,8 +49,9 @@ const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("retry_failed") }),
   z.object({ action: z.literal("reindex_all") }),
   z.object({ action: z.literal("glm_save_key"), apiKey: z.string().trim().min(8).max(500) }),
-  z.object({ action: z.literal("glm_test"), apiKey: z.string().trim().max(500).optional().default("") }),
-  z.object({ action: z.enum(["glm_start", "glm_pause", "glm_resume", "glm_retry_failed"]) }),
+  z.object({ action: z.literal("glm_test"), apiKey: z.string().trim().max(500).optional().default(""), model: z.enum(["glm-4.6v-flash", "glm-4.6v-flashx", "glm-4.6v"]).optional() }),
+  z.object({ action: z.literal("glm_model"), model: z.enum(["glm-4.6v-flash", "glm-4.6v-flashx", "glm-4.6v"]) }),
+  z.object({ action: z.enum(["glm_start", "glm_pause", "glm_resume", "glm_retry_failed", "glm_reindex_all"]) }),
   z.object({ action: z.literal("correct_merge"), batchId: z.string().uuid(), note: z.string().trim().max(1000).optional().default("") }),
 ]);
 
@@ -60,21 +62,28 @@ export async function POST(request: Request) {
       if (!user.isSuperAdmin) return Response.json({ ok: false, message: "仅超级管理员可以配置和管理 GLM 图片识别" }, { status: 403 });
       if (input.action === "glm_save_key") {
         const [current] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
-        const value = (current?.value || {}) as { indexingStatus?: string };
-        await sql`INSERT INTO app_settings(key,value) VALUES('glm_image_matching',${sql.json({ configured: true, apiKeyEncrypted: encryptSecret(input.apiKey), indexingStatus: value.indexingStatus || "idle", model: GLM_MODEL })})
+        const value = (current?.value || {}) as { indexingStatus?: string; model?: string };
+        await sql`INSERT INTO app_settings(key,value) VALUES('glm_image_matching',${sql.json({ configured: true, apiKeyEncrypted: encryptSecret(input.apiKey), indexingStatus: value.indexingStatus || "idle", model: normalizeGlmModel(value.model) })})
           ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()`;
         await writeAudit(user, "image.glm_key_saved", "app_setting", "glm_image_matching", "已更新 GLM 图片识别密钥", undefined, requestIp(request));
         return ok({ saved: true });
       }
       if (input.action === "glm_test") {
         const apiKey = input.apiKey || await getGlmApiKey();
+        const [current] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
+        const model = input.model || normalizeGlmModel((current?.value as { model?: string } | undefined)?.model);
         const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 30_000);
-        try { await testGlmConnection(apiKey, controller.signal); }
+        try { await testGlmConnection(apiKey, model, controller.signal); }
         finally { clearTimeout(timer); }
         return ok({ connected: true });
       }
+      if (input.action === "glm_model") {
+        await sql`UPDATE app_settings SET value=jsonb_set(value,'{model}',${JSON.stringify(input.model)}::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
+        await writeAudit(user, "image.glm_model", "app_setting", "glm_image_matching", `GLM 图片识别模型已切换为 ${GLM_MODELS[input.model].label}`, { model: input.model }, requestIp(request));
+        return ok({ saved: true });
+      }
       const [current] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
-      const value = (current?.value || {}) as { configured?: boolean; apiKeyEncrypted?: string; indexingStatus?: string };
+      const value = (current?.value || {}) as { configured?: boolean; apiKeyEncrypted?: string; indexingStatus?: string; model?: string };
       if (!value.configured || !value.apiKeyEncrypted) return Response.json({ ok: false, message: "请先保存 GLM API 密钥" }, { status: 409 });
       if (input.action === "glm_start") {
         await sql.begin(async (tx) => {
@@ -85,9 +94,16 @@ export async function POST(request: Request) {
         await sql`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"paused\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
       } else if (input.action === "glm_resume") {
         await sql`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"running\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
-      } else {
+      } else if (input.action === "glm_retry_failed") {
         await sql.begin(async (tx) => {
           await tx`UPDATE product_image_features SET subject_status='pending',subject_error=NULL,subject_attempts=0,subject_updated_at=now() WHERE subject_status='failed'`;
+          await tx`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"running\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
+        });
+      } else {
+        const selectedModel = normalizeGlmModel(value.model);
+        await sql.begin(async (tx) => {
+          await tx`UPDATE product_image_features SET subject_status='pending',subject_box=NULL,subject_model=NULL,subject_embedding_vector=NULL,subject_error=NULL,subject_attempts=0,subject_updated_at=now()`;
+          await tx`DELETE FROM image_subject_cache WHERE model=${selectedModel}`;
           await tx`UPDATE app_settings SET value=jsonb_set(value,'{indexingStatus}','\"running\"'::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
         });
       }
