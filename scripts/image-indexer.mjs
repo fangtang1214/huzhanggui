@@ -49,7 +49,7 @@ function parseJson(text) {
   return JSON.parse(source.slice(start, end + 1));
 }
 
-async function analyzeSubject(apiKey, imageUrl, glmModel, productName) {
+async function analyzeSubjectOnce(apiKey, imageUrl, glmModel, productName) {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 60_000);
   try {
     const response = await fetch(glmEndpoint, {
@@ -62,13 +62,23 @@ async function analyzeSubject(apiKey, imageUrl, glmModel, productName) {
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload?.error?.message || payload?.message || `GLM 接口请求失败（${response.status}）`);
+    if (!response.ok) { const error = new Error(payload?.error?.message || payload?.message || `GLM 接口请求失败（${response.status}）`); error.status = response.status; throw error; }
     const parsed = parseJson(payload?.choices?.[0]?.message?.content || "");
     if (!Array.isArray(parsed.box) || parsed.box.length !== 4) throw new Error("GLM 未识别出商品主体范围");
     const box = parsed.box.map((value) => Math.min(1000, Math.max(0, Number(value) || 0)));
     if (box[2] - box[0] < 10 || box[3] - box[1] < 10) throw new Error("GLM 返回的商品主体范围无效");
-    return box;
+    const paddingX = (box[2] - box[0]) * 0.06; const paddingY = (box[3] - box[1]) * 0.06;
+    return [Math.max(0, box[0] - paddingX), Math.max(0, box[1] - paddingY), Math.min(1000, box[2] + paddingX), Math.min(1000, box[3] + paddingY)];
   } finally { clearTimeout(timer); }
+}
+
+async function analyzeSubject(apiKey, imageUrl, preferredModel, productName) {
+  try { return { box: await analyzeSubjectOnce(apiKey, imageUrl, preferredModel, productName), model: preferredModel, fallbackUsed: false }; }
+  catch (primaryError) {
+    if (primaryError?.status === 401 || primaryError?.status === 403) throw primaryError;
+    try { return { box: await analyzeSubjectOnce(apiKey, imageUrl, defaultGlmModel, productName), model: defaultGlmModel, fallbackUsed: true }; }
+    catch (fallbackError) { throw new Error(`当前模型定位失败：${primaryError instanceof Error ? primaryError.message : "未知错误"}；GLM-4.6V-Flash 兜底失败：${fallbackError instanceof Error ? fallbackError.message : "未知错误"}`); }
+  }
 }
 
 async function processOne() {
@@ -132,7 +142,8 @@ async function processOneSubject() {
   const item = rows[0];
   const manualBox = item.subject_box_source === "manual" && Array.isArray(item.subject_box) && item.subject_box.length === 4;
   try {
-    const box = manualBox ? item.subject_box.map(Number) : await analyzeSubject(apiKey, item.image_url, glmModel, item.product_name);
+    const located = manualBox ? { box: item.subject_box.map(Number), model: glmModel, fallbackUsed: false } : await analyzeSubject(apiKey, item.image_url, glmModel, item.product_name);
+    const box = located.box;
     const response = await fetch(`${visionUrl}/embed`, { method: "POST", headers: { "content-type": "application/json", "x-vision-priority": "background" }, body: JSON.stringify({ imageUrl: item.image_url, box }) });
     const payload = await response.json();
     if (!response.ok || !Array.isArray(payload.embedding)) throw new Error(payload.message || "商品主体特征生成失败");
@@ -140,11 +151,11 @@ async function processOneSubject() {
     const embedding = vectorLiteral(payload.embedding);
     await sql.begin(async (tx) => {
       await tx`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding,box_source)
-        VALUES(${item.url_hash},${glmModel},${item.image_url},${tx.json(box)},${embedding}::vector(512),${manualBox ? "manual" : "glm"})
+        VALUES(${item.url_hash},${located.model},${item.image_url},${tx.json(box)},${embedding}::vector(512),${manualBox ? "manual" : "glm"})
         ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,subject_box=excluded.subject_box,
           embedding=excluded.embedding,box_source=excluded.box_source,updated_at=now()
         WHERE image_subject_cache.box_source<>'manual' OR excluded.box_source='manual'`;
-      await tx`UPDATE product_image_features SET subject_status='ready',subject_box=${tx.json(box)},subject_model=${glmModel},
+      await tx`UPDATE product_image_features SET subject_status='ready',subject_box=${tx.json(box)},subject_model=${located.model},
         subject_embedding_vector=${embedding}::vector(512),subject_error=NULL,
         subject_box_source=${manualBox ? "manual" : "glm"},subject_updated_at=now()
         WHERE url_hash=${item.url_hash} AND (subject_box_source<>'manual' OR ${manualBox})`;

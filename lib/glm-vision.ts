@@ -9,15 +9,13 @@ export const GLM_MODELS = {
 export type GlmModel = keyof typeof GLM_MODELS;
 export const GLM_MODEL: GlmModel = "glm-4.6v-flash";
 const GLM_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const SUBJECT_ATTEMPT_TIMEOUT_MS = 45_000;
 
 export type SubjectBox = [number, number, number, number];
-export type GlmReview = {
-  candidateId: string;
-  result: "same" | "uncertain" | "different";
-  score: number;
-  evidence: string[];
-  differences: string[];
-};
+
+class GlmApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); this.name = "GlmApiError"; }
+}
 
 type GlmSettings = { apiKeyEncrypted?: string; configured?: boolean; indexingStatus?: "idle" | "running" | "paused" };
 
@@ -72,7 +70,7 @@ async function callGlm(apiKey: string, model: GlmModel, content: Array<Record<st
     signal,
   });
   const payload = await response.json().catch(() => ({})) as { choices?: Array<{ message?: { content?: string } }>; error?: { message?: string }; message?: string };
-  if (!response.ok) throw new Error(payload.error?.message || payload.message || `GLM 接口请求失败（${response.status}）`);
+  if (!response.ok) throw new GlmApiError(payload.error?.message || payload.message || `GLM 接口请求失败（${response.status}）`, response.status);
   const text = payload.choices?.[0]?.message?.content;
   if (!text) throw new Error("GLM 未返回识别结果");
   return text;
@@ -81,6 +79,11 @@ async function callGlm(apiKey: string, model: GlmModel, content: Array<Record<st
 export async function testGlmConnection(apiKey: string, model: GlmModel = GLM_MODEL, signal?: AbortSignal) {
   const text = await callGlm(apiKey, model, [{ type: "text", text: "仅回复 OK，用于检查模型连接。" }], signal);
   return Boolean(text.trim());
+}
+
+export function expandSubjectBox(box: SubjectBox, ratio = 0.06): SubjectBox {
+  const paddingX = (box[2] - box[0]) * ratio; const paddingY = (box[3] - box[1]) * ratio;
+  return [clamp(box[0] - paddingX, 0, 1000), clamp(box[1] - paddingY, 0, 1000), clamp(box[2] + paddingX, 0, 1000), clamp(box[3] + paddingY, 0, 1000)];
 }
 
 export async function analyzeSubject(apiKey: string, imageUrl: string, model: GlmModel = GLM_MODEL, signal?: AbortSignal, productName?: string): Promise<SubjectBox> {
@@ -92,28 +95,32 @@ export async function analyzeSubject(apiKey: string, imageUrl: string, model: Gl
   if (!Array.isArray(parsed.box) || parsed.box.length !== 4) throw new Error("GLM 未识别出商品主体范围");
   const box: SubjectBox = [clamp(parsed.box[0], 0, 1000), clamp(parsed.box[1], 0, 1000), clamp(parsed.box[2], 0, 1000), clamp(parsed.box[3], 0, 1000)];
   if (box[2] - box[0] < 10 || box[3] - box[1] < 10) throw new Error("GLM 返回的商品主体范围无效");
-  return box;
+  return expandSubjectBox(box);
 }
 
-export async function reviewCandidates(apiKey: string, newImageUrls: string[], candidates: Array<{ id: string; name: string; sku: string; imageUrls: string[] }>, model: GlmModel = GLM_MODEL, signal?: AbortSignal): Promise<GlmReview[]> {
-  const content: Array<Record<string, unknown>> = [{ type: "text", text: "以下先给出本次新商品图片。所有图片可能背景、光线、拍摄角度不同。" }];
-  for (const url of newImageUrls) content.push({ type: "image_url", image_url: { url } });
-  content.push({ type: "text", text: "下面逐个给出历史候选。请只判断销售商品本体是否同款；背景、模特、手、摆放、光线和广告文字不同不能作为不同款依据。颜色、结构、材质、Logo/文字、拉链、口袋、肩带和五金等商品特征应重点比较。" });
-  for (const candidate of candidates) {
-    content.push({ type: "text", text: `候选 ID=${candidate.id}，货号=${candidate.sku}，名称=${candidate.name}` });
-    for (const url of candidate.imageUrls.slice(0, 3)) content.push({ type: "image_url", image_url: { url } });
+function subjectAttemptSignal(signal?: AbortSignal) {
+  const timeoutSignal = AbortSignal.timeout(SUBJECT_ATTEMPT_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
+function canUseFlashFallback(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return false;
+  return !(error instanceof GlmApiError && (error.status === 401 || error.status === 403));
+}
+
+export async function analyzeSubjectWithFallback(apiKey: string, imageUrl: string, preferredModel: GlmModel, signal?: AbortSignal, productName?: string) {
+  try {
+    return { box: await analyzeSubject(apiKey, imageUrl, preferredModel, subjectAttemptSignal(signal), productName), model: preferredModel, fallbackUsed: false };
+  } catch (primaryError) {
+    if (!canUseFlashFallback(primaryError, signal)) throw primaryError;
+    try {
+      return { box: await analyzeSubject(apiKey, imageUrl, GLM_MODEL, subjectAttemptSignal(signal), productName), model: GLM_MODEL, fallbackUsed: true };
+    } catch (fallbackError) {
+      const primaryMessage = primaryError instanceof Error ? primaryError.message : "当前模型定位失败";
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "免费模型定位失败";
+      throw new Error(`当前模型定位失败：${primaryMessage}；GLM-4.6V-Flash 兜底失败：${fallbackMessage}`, { cause: fallbackError });
+    }
   }
-  content.push({ type: "text", text: "返回严格 JSON 数组，每个候选一项：[{\"candidateId\":\"...\",\"result\":\"same|uncertain|different\",\"score\":0到100,\"evidence\":[\"相同依据\"],\"differences\":[\"可见差异\"]}]。same 仅用于明显同款，uncertain 用于可能同款但证据不足，different 用于明显不同。不要输出 JSON 以外文字。" });
-  const text = await callGlm(apiKey, model, content, signal);
-  const parsed = JSON.parse(jsonText(text)) as Array<Record<string, unknown>>;
-  if (!Array.isArray(parsed)) throw new Error("GLM 候选复核结果格式无效");
-  const allowed = new Set(candidates.map((candidate) => candidate.id));
-  return parsed.flatMap((item): GlmReview[] => {
-    const candidateId = String(item.candidateId || "");
-    const result = item.result === "same" || item.result === "uncertain" || item.result === "different" ? item.result : null;
-    if (!allowed.has(candidateId) || !result) return [];
-    return [{ candidateId, result, score: clamp(item.score, 0, 100), evidence: Array.isArray(item.evidence) ? item.evidence.map(String).slice(0, 4) : [], differences: Array.isArray(item.differences) ? item.differences.map(String).slice(0, 4) : [] }];
-  });
 }
 
 export const _test = { jsonText };

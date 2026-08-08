@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GLM_MODELS, _test, normalizeGlmModel, reviewCandidates, subjectPrompt } from "../lib/glm-vision.ts";
+import { GLM_MODELS, _test, analyzeSubjectWithFallback, expandSubjectBox, normalizeGlmModel, subjectPrompt } from "../lib/glm-vision.ts";
 import { decryptSecret, encryptSecret } from "../lib/secret-box.ts";
 
 test("GLM API 密钥使用服务器密钥加密保存", () => {
@@ -25,25 +25,27 @@ test("GLM 图片识别支持免费、轻量收费和高性能收费三种模型"
   assert.equal(normalizeGlmModel("invalid"), "glm-4.6v-flash");
 });
 
-test("GLM 复核会使用全部新图片且每个历史候选最多三张图", async () => {
-  const firstAcceptanceImage = "https://wst.wxapp.tc.qq.com/161/20304/snscosdownload/SH/reserved/69d8bd29000586e61afc6c53d0692d1e000000a000004f50?imageView2/1/w/800/h/800/q/50";
-  const secondAcceptanceImage = "https://wst.wxapp.tc.qq.com/161/20304/snscosdownload/SH/reserved/69ce5716000994eb19e459f973ad1715000000a000004f50?imageView2/1/w/800/h/800/q/50";
+test("当前主体定位模型失败后使用免费 Flash 兜底", async () => {
   const originalFetch = globalThis.fetch;
-  let requestBody;
+  const models = [];
   globalThis.fetch = async (_url, init) => {
-    requestBody = JSON.parse(String(init.body));
-    return new Response(JSON.stringify({ choices: [{ message: { content: "```json\n[{\"candidateId\":\"candidate-1\",\"result\":\"same\",\"score\":96,\"evidence\":[\"Logo 与拉链结构一致\"],\"differences\":[\"背景不同\"]}]\n```" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    const body = JSON.parse(String(init.body)); models.push(body.model);
+    if (models.length === 1) return new Response(JSON.stringify({ error: { message: "请求过多" } }), { status: 429, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"box\":[100,200,900,800]}" } }] }), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
-    const reviews = await reviewCandidates("test-key", [firstAcceptanceImage, secondAcceptanceImage], [{ id: "candidate-1", sku: "HZG-1", name: "腰包", imageUrls: ["https://old.example/1.jpg", "https://old.example/2.jpg", "https://old.example/3.jpg", "https://old.example/4.jpg"] }], "glm-4.6v-flashx");
-    const serialized = JSON.stringify(requestBody);
-    assert.equal(requestBody.model, "glm-4.6v-flashx");
-    assert.ok(serialized.includes(firstAcceptanceImage));
-    assert.ok(serialized.includes(secondAcceptanceImage));
-    assert.match(serialized, /old\.example\\?\/3\.jpg/);
-    assert.doesNotMatch(serialized, /old\.example\\?\/4\.jpg/);
-    assert.deepEqual(reviews[0], { candidateId: "candidate-1", result: "same", score: 96, evidence: ["Logo 与拉链结构一致"], differences: ["背景不同"] });
+    const result = await analyzeSubjectWithFallback("test-key", "https://example.com/product.jpg", "glm-4.6v-flashx");
+    assert.deepEqual(models, ["glm-4.6v-flashx", "glm-4.6v-flash"]);
+    assert.equal(result.model, "glm-4.6v-flash"); assert.equal(result.fallbackUsed, true);
+    assert.deepEqual(result.box, [52, 164, 948, 836]);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("鉴权错误不会重复调用免费模型", async () => {
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return new Response(JSON.stringify({ error: { message: "API Key 无效" } }), { status: 401, headers: { "content-type": "application/json" } }); };
+  try { await assert.rejects(() => analyzeSubjectWithFallback("bad-key", "https://example.com/product.jpg", "glm-4.6v"), /API Key 无效/); assert.equal(calls, 1); }
+  finally { globalThis.fetch = originalFetch; }
 });
 
 test("GLM JSON 解析兼容代码块返回", () => {
@@ -56,4 +58,5 @@ test("GLM 主体定位会结合商品名称并优先主商品而非小配件", (
   assert.match(prompt, /面积最大、最突出且展示最完整/);
   assert.match(prompt, /不要选择旁边较小的赠品或配件/);
   assert.match(prompt, /套装、组合或子母包/);
+  assert.deepEqual(expandSubjectBox([0, 100, 1000, 900]), [0, 52, 1000, 948]);
 });

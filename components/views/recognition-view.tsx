@@ -48,7 +48,7 @@ export function RecognitionView() {
   if (loading) return <LoadingState label="正在读取图片识别状态…" />; if (error || !data) return <ErrorState message={error || "读取失败"} retry={reload} />;
   const percent = data.progress.total ? Math.round(data.progress.ready / data.progress.total * 100) : 100;
   const subjectPercent = data.subjectProgress.total ? Math.round(data.subjectProgress.ready / data.subjectProgress.total * 100) : 100;
-  const pageHeader = <><PageHeader eyebrow="AI 辅助识别" title="图片识别管理" description="GLM 负责定位和复核商品主体，本地模型负责快速召回；只保存特征数据，不保存商品原图。" /><div className="recognition-tabs"><button type="button" className={pageSection === "settings" ? "selected" : ""} onClick={() => setPageSection("settings")}>识别设置与进度</button><button type="button" className={pageSection === "subject-index" ? "selected" : ""} onClick={() => setPageSection("subject-index")}>GLM 主体索引结果</button></div></>;
+  const pageHeader = <><PageHeader eyebrow="AI 辅助识别" title="图片识别管理" description="GLM 只负责定位商品主体，本地模型负责主体特征召回；只保存特征数据，不保存商品原图。" /><div className="recognition-tabs"><button type="button" className={pageSection === "settings" ? "selected" : ""} onClick={() => setPageSection("settings")}>识别设置与进度</button><button type="button" className={pageSection === "subject-index" ? "selected" : ""} onClick={() => setPageSection("subject-index")}>GLM 主体索引结果</button></div></>;
   if (pageSection === "subject-index") return <>{pageHeader}<SubjectIndexResults models={data.glmModels} /></>;
   const selectedModelInfo = data.glmModels.find((item) => item.id === selectedGlmModel);
   const activeModelInfo = data.glmModels.find((item) => item.id === data.glm.model);

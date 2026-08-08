@@ -237,16 +237,19 @@ test("图片识别使用预热的 Q8 模型与前后台优先队列", async () =
   assert.match(vision, /warmModel/);
   assert.match(vision, /interactiveQueue\.shift\(\) \|\| backgroundQueue\.shift\(\)/);
   const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
-  assert.match(route, /image_embedding_cache/);
-  assert.match(route, /embedding_vector <=>/);
+  assert.match(route, /image_subject_cache/);
+  assert.match(route, /subject_embedding_vector <=>/);
 });
 
 test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", async () => {
   const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
   assert.ok(route.indexOf("exactIdMatch(input.apiProductId)") < route.indexOf("getGlmRuntime()"));
-  assert.match(route, /slice\(0, 20\)/);
   assert.match(route, /subject_embedding_vector <=>/);
   assert.match(route, /slice\(0, 5\)/);
+  assert.match(route, /matchedImageCount/);
+  assert.match(route, /mapWithConcurrency\(input\.imageUrls, 2/);
+  assert.doesNotMatch(route, /reviewCandidates/);
+  assert.doesNotMatch(route, /1-\(embedding_vector <=>/);
   assert.match(route, /manual: z\.boolean/);
   const productsRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
   assert.doesNotMatch(productsRoute, /pai\.is_current = true AND p\.archived = false/);
@@ -280,6 +283,9 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   const indexer = await readFile(new URL("../scripts/image-indexer.mjs", import.meta.url), "utf8");
   assert.match(indexer, /subject_box_source === "manual"/);
   assert.match(indexer, /p\.name AS product_name/);
+  assert.match(indexer, /defaultGlmModel/);
+  const glmVision = await readFile(new URL("../lib/glm-vision.ts", import.meta.url), "utf8");
+  assert.match(glmVision, /analyzeSubjectWithFallback/);
 });
 
 test("问题处理、商品复制、流转图片和状态精简按新流程实现", async () => {

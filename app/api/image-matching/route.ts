@@ -3,7 +3,7 @@ import { apiError, ok, readJson, requestIp } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
-import { analyzeSubject, getGlmRuntime, reviewCandidates, type GlmModel, type SubjectBox } from "@/lib/glm-vision";
+import { analyzeSubjectWithFallback, GLM_MODEL, getGlmRuntime, type GlmModel, type SubjectBox } from "@/lib/glm-vision";
 import { embedImage, getMatchSettings, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 
@@ -41,31 +41,15 @@ async function exactIdMatch(apiProductId?: string | null) {
   return (await productsByIds([String(rows[0].id)]))[0] || null;
 }
 
-async function cachedFullEmbedding(imageUrl: string, model: string) {
-  const sql = getDb(); const hash = urlHash(imageUrl);
-  const [cached] = await sql`UPDATE image_embedding_cache SET hits=hits+1,last_used_at=now()
-    WHERE url_hash=${hash} AND model=${model} RETURNING embedding::text AS embedding`;
-  if (cached?.embedding) return String(cached.embedding);
-  const [feature] = await sql`SELECT embedding_vector::text AS embedding FROM product_image_features
-    WHERE url_hash=${hash} AND model=${model} AND status='ready' AND embedding_vector IS NOT NULL LIMIT 1`;
-  return feature?.embedding ? String(feature.embedding) : null;
-}
-
-async function saveFullEmbedding(imageUrl: string, model: string, embedding: string) {
-  const sql = getDb();
-  await sql`INSERT INTO image_embedding_cache(url_hash,model,image_url,embedding)
-    VALUES(${urlHash(imageUrl)},${model},${imageUrl},${embedding}::vector(512))
-    ON CONFLICT(url_hash,model) DO UPDATE SET image_url=excluded.image_url,embedding=excluded.embedding,last_used_at=now()`;
-}
-
 async function cachedSubject(imageUrl: string, glmModel: GlmModel) {
   const sql = getDb();
-  const [row] = await sql`SELECT subject_box,embedding::text AS embedding,box_source FROM image_subject_cache
-    WHERE url_hash=${urlHash(imageUrl)} AND model=${glmModel}`;
-  if (row?.embedding && Array.isArray(row.subjectBox)) return { box: row.subjectBox as SubjectBox, embedding: String(row.embedding), manual: row.boxSource === "manual" };
+  const [row] = await sql`SELECT subject_box,embedding::text AS embedding,box_source,model FROM image_subject_cache
+    WHERE url_hash=${urlHash(imageUrl)} AND model IN (${glmModel},${GLM_MODEL})
+    ORDER BY (model=${glmModel}) DESC LIMIT 1`;
+  if (row?.embedding && Array.isArray(row.subjectBox)) return { box: row.subjectBox as SubjectBox, embedding: String(row.embedding), manual: row.boxSource === "manual", model: row.model as GlmModel };
   const [manual] = await sql`SELECT subject_box FROM product_image_features
     WHERE url_hash=${urlHash(imageUrl)} AND subject_box_source='manual' AND subject_box IS NOT NULL LIMIT 1`;
-  return Array.isArray(manual?.subjectBox) ? { box: manual.subjectBox as SubjectBox, embedding: null, manual: true } : null;
+  return Array.isArray(manual?.subjectBox) ? { box: manual.subjectBox as SubjectBox, embedding: null, manual: true, model: glmModel } : null;
 }
 
 async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string, glmModel: GlmModel, manual = false) {
@@ -77,53 +61,64 @@ async function saveSubject(imageUrl: string, box: SubjectBox, embedding: string,
     WHERE image_subject_cache.box_source<>'manual' OR excluded.box_source='manual'`;
 }
 
-async function imageVectors(imageUrl: string, model: string, apiKey: string, glmModel: GlmModel, signal: AbortSignal) {
-  let full = await cachedFullEmbedding(imageUrl, model);
+async function subjectVector(imageUrl: string, model: string, apiKey: string, glmModel: GlmModel, signal: AbortSignal) {
   const subjectCached = await cachedSubject(imageUrl, glmModel);
-  let subject = subjectCached?.embedding || null;
-  if (!full) {
-    const result = await embedImage(imageUrl, undefined, "interactive", signal);
-    if (result.model !== model) throw new Error("图片识别模型正在升级，请稍后重试");
-    full = vectorLiteral(result.embedding); await saveFullEmbedding(imageUrl, model, full);
-  }
-  if (!subject) {
-    const box = subjectCached?.manual ? subjectCached.box : await analyzeSubject(apiKey, imageUrl, glmModel, signal);
-    const result = await embedImage(imageUrl, box, "interactive", signal);
-    if (result.model !== model) throw new Error("图片识别模型正在升级，请稍后重试");
-    subject = vectorLiteral(result.embedding); await saveSubject(imageUrl, box, subject, glmModel, Boolean(subjectCached?.manual));
-  }
-  return { full, subject };
+  if (subjectCached?.embedding) return { subject: subjectCached.embedding, imageUrl, box: subjectCached.box, subjectModel: subjectCached.model, fallbackUsed: subjectCached.model !== glmModel, cacheHit: true };
+  const located = subjectCached?.manual
+    ? { box: subjectCached.box, model: glmModel, fallbackUsed: false }
+    : await analyzeSubjectWithFallback(apiKey, imageUrl, glmModel, signal);
+  const result = await embedImage(imageUrl, located.box, "interactive", signal);
+  if (result.model !== model) throw new Error("图片识别模型正在升级，请稍后重试");
+  const subject = vectorLiteral(result.embedding);
+  await saveSubject(imageUrl, located.box, subject, located.model, Boolean(subjectCached?.manual));
+  return { subject, imageUrl, box: located.box, subjectModel: located.model, fallbackUsed: located.fallbackUsed, cacheHit: false };
 }
 
-async function findCandidates(vectors: Array<{ full: string; subject: string | null }>, model: string, threshold: number, excluded: string[]) {
-  const sql = getDb(); const best = new Map<string, number>();
-  const record = (rows: Record<string, unknown>[]) => {
+type SubjectVectorResult = Awaited<ReturnType<typeof subjectVector>>;
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length); let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) { const index = nextIndex++; results[index] = await mapper(items[index]); }
+  }));
+  return results;
+}
+
+async function findCandidates(vectors: SubjectVectorResult[], threshold: number, excluded: string[]) {
+  const sql = getDb();
+  const matches = new Map<string, Array<{ score: number; newImageUrl: string; newBox: SubjectBox; historyImageUrl: string; historyBox: SubjectBox | null }>>();
+  for (const vector of vectors) {
+    const rows = await sql`SELECT product_id,image_url,subject_box,1-(subject_embedding_vector <=> ${vector.subject}::vector) AS similarity
+      FROM product_image_features WHERE subject_status='ready' AND subject_embedding_vector IS NOT NULL
+      AND NOT(product_id=ANY(${excluded}::uuid[])) ORDER BY subject_embedding_vector <=> ${vector.subject}::vector LIMIT 200`;
+    const bestForImage = new Map<string, { score: number; historyImageUrl: string; historyBox: SubjectBox | null }>();
     for (const row of rows) {
       const id = String(row.productId); const score = Number(row.similarity);
-      if (score >= threshold && score > (best.get(id) ?? -1)) best.set(id, score);
+      if (score < threshold || bestForImage.has(id)) continue;
+      bestForImage.set(id, { score, historyImageUrl: String(row.imageUrl), historyBox: Array.isArray(row.subjectBox) ? row.subjectBox as SubjectBox : null });
     }
-  };
-  for (const vector of vectors) {
-    if (vector.subject) record(await sql`SELECT product_id,1-(subject_embedding_vector <=> ${vector.subject}::vector) AS similarity
-      FROM product_image_features WHERE subject_status='ready' AND subject_embedding_vector IS NOT NULL
-      AND NOT(product_id=ANY(${excluded}::uuid[])) ORDER BY subject_embedding_vector <=> ${vector.subject}::vector LIMIT 100`);
-    record(await sql`SELECT product_id,1-(embedding_vector <=> ${vector.full}::vector) AS similarity
-      FROM product_image_features WHERE status='ready' AND model=${model} AND embedding_vector IS NOT NULL
-      AND NOT(product_id=ANY(${excluded}::uuid[])) ORDER BY embedding_vector <=> ${vector.full}::vector LIMIT 100`);
+    for (const [id, match] of bestForImage) {
+      const entries = matches.get(id) || [];
+      entries.push({ ...match, newImageUrl: vector.imageUrl, newBox: vector.box }); matches.set(id, entries);
+    }
   }
-  const ranked = [...best.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
-  const products = await productsByIds(ranked.map(([id]) => id));
+  const ranked = [...matches.entries()].map(([id, entries]) => {
+    const sorted = entries.sort((a, b) => b.score - a.score); const best = sorted[0]; const second = sorted[1];
+    const similarity = second ? best.score * 0.8 + second.score * 0.2 : best.score;
+    return { id, similarity, matchedImageCount: sorted.length, ...best };
+  }).sort((a, b) => b.similarity - a.similarity).slice(0, 5);
+  const products = await productsByIds(ranked.map((item) => item.id));
   const byId = new Map(products.map((product) => [String(product.id), product]));
-  const output: Array<Record<string, unknown> & { localSimilarity: number }> = [];
-  for (const [id, localSimilarity] of ranked) {
-    const product = byId.get(id);
-    if (product) output.push({ ...product, localSimilarity });
+  const output: Array<Record<string, unknown>> = [];
+  for (const item of ranked) {
+    const product = byId.get(item.id);
+    if (product) output.push({ ...product, similarity: item.similarity, localSimilarity: item.similarity, matchedImageCount: item.matchedImageCount, matchedImageUrl: item.historyImageUrl, matchedSubjectBox: item.historyBox, newMatchedImageUrl: item.newImageUrl, newSubjectBox: item.newBox });
   }
   return output;
 }
 
 function minimalCandidates(candidates: Array<Record<string, unknown>>) {
-  return candidates.map((candidate) => ({ id: candidate.id, sku: candidate.sku, name: candidate.name }));
+  return candidates.map((candidate) => ({ id: candidate.id, sku: candidate.sku, name: candidate.name, similarity: candidate.similarity, matchedImageCount: candidate.matchedImageCount }));
 }
 
 async function createRun(userId: string, imageUrl: string, mode: string, threshold: number, status: "matched" | "no_match" | "failed", candidates: Array<Record<string, unknown>> = [], error?: string) {
@@ -152,33 +147,21 @@ export async function POST(request: Request) {
     if (exact) {
       const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", [exact]);
       await writeAudit(user, "image.id_match", "image_match", runId, `商品 ID 已直接匹配货号 ${exact.sku}`, { apiProductId: input.apiProductId }, requestIp(request));
-      return ok({ runId, status: "id_match", candidates: [{ ...exact, similarity: 1, localSimilarity: 1, glmScore: 100, result: "same", evidence: ["达人橱窗商品 ID 与历史登记完全一致"], differences: [] }] });
+      return ok({ runId, status: "id_match", candidates: [{ ...exact, similarity: 1, localSimilarity: 1, matchType: "product_id" }] });
     }
     const timeout = new AbortController(); const timer = setTimeout(() => timeout.abort(), 90_000);
     try {
       const { apiKey, model: glmModel } = await getGlmRuntime();
-      const vectors = await Promise.all(input.imageUrls.map((url) => imageVectors(url, settings.model, apiKey, glmModel, timeout.signal)));
-      const local = await findCandidates(vectors, settings.model, settings.threshold, input.excludeProductIds);
-      if (!local.length) {
+      const vectors = await mapWithConcurrency(input.imageUrls, 2, (url) => subjectVector(url, settings.model, apiKey, glmModel, timeout.signal));
+      const candidates = await findCandidates(vectors, settings.threshold, input.excludeProductIds);
+      if (!candidates.length) {
         const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "no_match");
-        await writeAudit(user, "image.match", "image_match", runId, "图片识别未发现疑似同款", { candidateCount: 0 }, requestIp(request));
+        await writeAudit(user, "image.match", "image_match", runId, "本地主体特征未发现疑似同款", { candidateCount: 0, imageCount: vectors.length, fallbackCount: vectors.filter((item) => item.fallbackUsed).length }, requestIp(request));
         return ok({ runId, status: "no_match", candidates: [] });
       }
-      const reviewInputs = local.map((candidate) => ({ id: String(candidate.id), sku: String(candidate.sku), name: String(candidate.name), imageUrls: Array.isArray(candidate.imageUrls) ? candidate.imageUrls.map(String) : [] }));
-      const reviewGroups: typeof reviewInputs[] = [];
-      for (let index = 0; index < reviewInputs.length; index += 5) reviewGroups.push(reviewInputs.slice(index, index + 5));
-      const reviews = (await Promise.all(reviewGroups.map((group) => reviewCandidates(apiKey, input.imageUrls, group, glmModel, timeout.signal)))).flat();
-      const reviewById = new Map(reviews.map((review) => [review.candidateId, review]));
-      const candidates = local.flatMap((candidate) => {
-        const review = reviewById.get(String(candidate.id));
-        if (!review || review.result === "different") return [];
-        const similarity = Number(candidate.localSimilarity) * 0.45 + review.score / 100 * 0.55;
-        return [{ ...candidate, similarity, glmScore: review.score, result: review.result, evidence: review.evidence, differences: review.differences }];
-      }).sort((a, b) => b.similarity - a.similarity).slice(0, 5);
-      const status = candidates.length ? "matched" : "no_match";
-      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, status, candidates);
-      await writeAudit(user, "image.match", "image_match", runId, candidates.length ? `图片识别发现 ${candidates.length} 个疑似同款` : "GLM 复核后未发现疑似同款", { candidateCount: candidates.length }, requestIp(request));
-      return ok({ runId, status, candidates });
+      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", candidates);
+      await writeAudit(user, "image.match", "image_match", runId, `本地主体特征发现 ${candidates.length} 个疑似同款`, { candidateCount: candidates.length, imageCount: vectors.length, fallbackCount: vectors.filter((item) => item.fallbackUsed).length }, requestIp(request));
+      return ok({ runId, status: "matched", candidates });
     } catch (reason) {
       const message = reason instanceof Error && reason.name === "AbortError" ? "GLM 图片识别超过 90 秒，请重试或确认后继续" : reason instanceof Error ? reason.message : "GLM 图片识别失败";
       const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message.slice(0, 1000));
