@@ -70,13 +70,39 @@ test("网页更新仅允许超级管理员并由宿主机受控执行", async ()
   assert.match(worker, /bash "\$INSTALL_DIR\/update\.sh"/);
 });
 
-test("Excel 导出文件包含中文表头和数据", () => {
-  const archive = createXlsx("实物样品", [{ header: "货号", key: "sku" }, { header: "当前位置", key: "location" }], [{ sku: "HZG-2026-0001", location: "商务部 · A 货架" }]);
+test("商品与样品导出逐行包含当前信息", async () => {
+  const archive = createXlsx("商品与样品明细", [
+    { header: "货号", key: "sku" },
+    { header: "实物编号", key: "sampleCode" },
+    { header: "当前状态", key: "sampleStatus" },
+    { header: "当前位置", key: "location" },
+  ], [
+    { sku: "26080001", sampleCode: "26080001-001", sampleStatus: "在用/在库", location: "商务部 · A 货架" },
+    { sku: "26080001", sampleCode: "26080001-002", sampleStatus: "已退样", location: "已退样" },
+    { sku: "26080002", sampleCode: "", sampleStatus: "", location: "" },
+  ]);
   const files = unzipSync(archive);
   assert.ok(files["xl/workbook.xml"]);
   const sheet = strFromU8(files["xl/worksheets/sheet1.xml"]);
   assert.match(sheet, /货号/);
+  assert.match(sheet, /实物编号/);
+  assert.match(sheet, /当前状态/);
+  assert.equal((sheet.match(/26080001/g) || []).length, 4);
+  assert.match(sheet, /26080001-001/);
+  assert.match(sheet, /26080001-002/);
+  assert.match(sheet, /26080002/);
   assert.match(sheet, /商务部 · A 货架/);
+
+  const exportRoute = await readFile(new URL("../app/api/export/route.ts", import.meta.url), "utf8");
+  assert.match(exportRoute, /LEFT JOIN samples s ON s\.product_id = p\.id AND s\.archived = false/);
+  assert.match(exportRoute, /s\.code AS sample_code/);
+  assert.match(exportRoute, /sampleStatusText/);
+  assert.match(exportRoute, /samplePlace/);
+  assert.doesNotMatch(exportRoute, /header: "样品总数"/);
+
+  const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(productsView, /ProductApiIdSummary/);
+  assert.doesNotMatch(productsView, /当前商品 ID/);
 });
 
 test("商品链接支持标准网址和视频号内部格式", () => {

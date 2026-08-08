@@ -64,8 +64,6 @@ export async function GET(request: Request) {
     const rows = await sql`
        SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.archived,
               p.cooperation_mechanism, p.notes, p.image_urls, p.created_at, p.updated_at,
-              (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'product_id' AND pai.is_current = true LIMIT 1) AS api_product_id,
-              (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'out_product_id' AND pai.is_current = true LIMIT 1) AS api_out_product_id,
              c.name AS category_name, u.name AS business_contact_name, count(DISTINCT s.id)::int AS sample_count,
              count(DISTINCT s.id) FILTER (WHERE s.status = 'active')::int AS active_count,
              string_agg(DISTINCT d.name, '、') AS selected_departments, string_agg(DISTINCT t.name, '、') AS tags,

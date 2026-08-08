@@ -17,23 +17,44 @@ export async function GET(request: Request) {
                (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'product_id' AND pai.is_current = true LIMIT 1) AS api_product_id,
                (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'out_product_id' AND pai.is_current = true LIMIT 1) AS api_out_product_id,
                p.commission, p.store_rating, p.supply_chain, p.cooperation_mechanism,
-               string_agg(DISTINCT d.name, '、') AS departments, string_agg(DISTINCT t.name, '、') AS tags,
-               count(DISTINCT s.id)::int AS quantity, min(s.arrived_at) AS first_arrived_at, max(s.arrived_at) AS last_arrived_at
+               p.notes AS product_notes, p.created_at AS product_created_at, p.updated_at AS product_updated_at,
+               (SELECT string_agg(DISTINCT department.name, '、')
+                  FROM product_departments selected
+                  JOIN departments department ON department.id = selected.department_id
+                 WHERE selected.product_id = p.id) AS departments,
+               (SELECT string_agg(DISTINCT tag.name, '、')
+                  FROM product_tags selected_tag
+                  JOIN tags tag ON tag.id = selected_tag.tag_id
+                 WHERE selected_tag.product_id = p.id) AS tags,
+               s.code AS sample_code, s.spec AS sample_spec, s.arrived_at AS sample_arrived_at,
+               s.status AS sample_status, s.note AS sample_note, s.updated_at AS sample_updated_at,
+               sample_department.name AS sample_department_name, sample_location.name AS sample_location_name
         FROM products p LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users u ON u.id = p.business_contact_id
-        LEFT JOIN product_departments pd ON pd.product_id = p.id LEFT JOIN departments d ON d.id = pd.department_id
-        LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
         LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false
+        LEFT JOIN departments sample_department ON sample_department.id = s.current_department_id
+        LEFT JOIN locations sample_location ON sample_location.id = s.current_location_id
         WHERE p.archived = false
-        GROUP BY p.id, c.name, u.name ORDER BY p.created_at DESC
+        ORDER BY p.created_at DESC, s.created_at, s.code
         LIMIT 50000
       `;
-      workbook = createXlsx("商品档案", [
+      const formatted = rows.map((row) => ({
+        ...row,
+        sampleStatusText: row.sampleCode && row.sampleStatus ? statusLabel(String(row.sampleStatus)) : "",
+        samplePlace: row.sampleCode && row.sampleStatus ? activeLocationLabel({
+          status: String(row.sampleStatus),
+          department_name: row.sampleDepartmentName ? String(row.sampleDepartmentName) : null,
+          location_name: row.sampleLocationName ? String(row.sampleLocationName) : null,
+        }) : "",
+      }));
+      workbook = createXlsx("商品与样品明细", [
         { header: "货号", key: "sku", width: 18 }, { header: "商品名称", key: "name", width: 28 }, { header: "分类", key: "categoryName", width: 14 },
         { header: "选品部门", key: "departments", width: 24 }, { header: "商务对接人", key: "businessContactName", width: 16 }, { header: "店铺名", key: "storeName", width: 22 },
-         { header: "价格", key: "price", width: 12 }, { header: "商品链接", key: "productUrl", width: 36 }, { header: "product_id", key: "apiProductId", width: 20 }, { header: "out_product_id", key: "apiOutProductId", width: 20 }, { header: "佣金", key: "commission", width: 12 },
+        { header: "价格", key: "price", width: 12 }, { header: "商品链接", key: "productUrl", width: 36 }, { header: "product_id", key: "apiProductId", width: 20 }, { header: "out_product_id", key: "apiOutProductId", width: 20 }, { header: "佣金 / 服务费率", key: "commission", width: 16 },
         { header: "店铺评分", key: "storeRating", width: 12 }, { header: "供应链/机构", key: "supplyChain", width: 20 }, { header: "合作机制", key: "cooperationMechanism", width: 28 },
-        { header: "标签", key: "tags", width: 18 }, { header: "样品总数", key: "quantity", width: 12 }, { header: "首次到样", key: "firstArrivedAt", width: 14 }, { header: "最近到样", key: "lastArrivedAt", width: 14 },
-      ], rows as unknown as Record<string, unknown>[]);
+        { header: "标签", key: "tags", width: 18 }, { header: "商品备注", key: "productNotes", width: 28 }, { header: "商品创建时间", key: "productCreatedAt", width: 21 }, { header: "商品更新时间", key: "productUpdatedAt", width: 21 },
+        { header: "实物编号", key: "sampleCode", width: 24 }, { header: "样品规格", key: "sampleSpec", width: 16 }, { header: "到样日期", key: "sampleArrivedAt", width: 14 },
+        { header: "当前状态", key: "sampleStatusText", width: 14 }, { header: "当前位置", key: "samplePlace", width: 24 }, { header: "样品备注", key: "sampleNote", width: 28 }, { header: "样品最后更新", key: "sampleUpdatedAt", width: 21 },
+      ], formatted as unknown as Record<string, unknown>[]);
     } else if (type === "movements") {
       const rows = await sql`
         SELECT m.created_at, s.code, p.sku, p.name AS product_name, m.from_status, m.to_status,
