@@ -13,6 +13,10 @@ function dbValue(value: unknown): string | number | boolean | null {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null;
 }
 
+function settingValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function allowed(user: Awaited<ReturnType<typeof requireUser>>) {
   if (!hasPermission(user, "image_matching:manage") && !hasPermission(user, "products:correct_merge")) throw new AuthError("没有执行此操作的权限", 403);
 }
@@ -61,12 +65,23 @@ export async function POST(request: Request) {
     if (input.action.startsWith("glm_")) {
       if (!user.isSuperAdmin) return Response.json({ ok: false, message: "仅超级管理员可以配置和管理 GLM 图片识别" }, { status: 403 });
       if (input.action === "glm_save_key") {
-        const [current] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
-        const value = (current?.value || {}) as { indexingStatus?: string; model?: string };
-        await sql`INSERT INTO app_settings(key,value) VALUES('glm_image_matching',${sql.json({ configured: true, apiKeyEncrypted: encryptSecret(input.apiKey), indexingStatus: value.indexingStatus || "idle", model: normalizeGlmModel(value.model) })})
-          ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()`;
+        const savedModel = await sql.begin(async (tx) => {
+          const [current] = await tx`SELECT value FROM app_settings WHERE key='glm_image_matching' FOR UPDATE`;
+          const value = settingValue(current?.value);
+          const nextValue = {
+            ...value,
+            configured: true,
+            apiKeyEncrypted: encryptSecret(input.apiKey),
+            indexingStatus: value.indexingStatus === "running" || value.indexingStatus === "paused" ? value.indexingStatus : "idle",
+            model: normalizeGlmModel(value.model),
+          };
+          const [saved] = await tx`INSERT INTO app_settings(key,value) VALUES('glm_image_matching',${tx.json(nextValue as never)})
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()
+            RETURNING value`;
+          return normalizeGlmModel(settingValue(saved?.value).model);
+        });
         await writeAudit(user, "image.glm_key_saved", "app_setting", "glm_image_matching", "已更新 GLM 图片识别密钥", undefined, requestIp(request));
-        return ok({ saved: true });
+        return ok({ saved: true, model: savedModel });
       }
       if (input.action === "glm_test") {
         const apiKey = input.apiKey || await getGlmApiKey();
@@ -78,9 +93,17 @@ export async function POST(request: Request) {
         return ok({ connected: true });
       }
       if (input.action === "glm_model") {
-        await sql`UPDATE app_settings SET value=jsonb_set(value,'{model}',${JSON.stringify(input.model)}::jsonb,true),updated_at=now() WHERE key='glm_image_matching'`;
+        const savedModel = await sql.begin(async (tx) => {
+          const [current] = await tx`SELECT value FROM app_settings WHERE key='glm_image_matching' FOR UPDATE`;
+          const nextValue = { ...settingValue(current?.value), model: input.model };
+          const [saved] = await tx`INSERT INTO app_settings(key,value) VALUES('glm_image_matching',${tx.json(nextValue as never)})
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()
+            RETURNING value`;
+          return normalizeGlmModel(settingValue(saved?.value).model);
+        });
+        if (savedModel !== input.model) throw new Error("GLM 模型配置保存后校验失败，请重试");
         await writeAudit(user, "image.glm_model", "app_setting", "glm_image_matching", `GLM 图片识别模型已切换为 ${GLM_MODELS[input.model].label}`, { model: input.model }, requestIp(request));
-        return ok({ saved: true });
+        return ok({ saved: true, model: savedModel });
       }
       const [current] = await sql`SELECT value FROM app_settings WHERE key='glm_image_matching'`;
       const value = (current?.value || {}) as { configured?: boolean; apiKeyEncrypted?: string; indexingStatus?: string; model?: string };

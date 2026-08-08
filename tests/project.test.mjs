@@ -258,6 +258,11 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   const recognitionRoute = await readFile(new URL("../app/api/recognition/route.ts", import.meta.url), "utf8");
   assert.match(recognitionRoute, /glm-4\.6v-flashx/);
   assert.match(recognitionRoute, /glm_reindex_all/);
+  assert.match(recognitionRoute, /ON CONFLICT\(key\) DO UPDATE SET value=excluded\.value,updated_at=now\(\)\s+RETURNING value/);
+  assert.match(recognitionRoute, /savedModel !== input\.model/);
+  const recognitionView = await readFile(new URL("../components/views/recognition-view.tsx", import.meta.url), "utf8");
+  assert.match(recognitionView, /服务器当前已生效/);
+  assert.match(recognitionView, /保存并立即生效/);
   const resultRoute = await readFile(new URL("../app/api/recognition/subject-index/route.ts", import.meta.url), "utf8");
   assert.match(resultRoute, /subject_box/);
   assert.match(resultRoute, /subject_model/);
