@@ -9,6 +9,7 @@ import { productSearchConditions } from "@/lib/search";
 import { syncProductImageQueue, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
 import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission";
+import { setCurrentProductApiIds } from "@/lib/product-api-ids";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
 const commissionSchema = z.string().trim().max(30).refine(
@@ -32,6 +33,9 @@ const productSchema = z.object({
   initialDepartmentId: z.string().uuid(), initialLocationId: z.string().uuid().optional().nullable(),
   matchRunId: z.string().uuid(), matchDecision: z.enum(["matched", "new", "failed_continue"]),
   matchedProductId: z.string().uuid().optional().nullable(),
+  windowProductId: z.string().uuid().optional().nullable(),
+  apiProductId: z.string().trim().max(100).optional().nullable(),
+  apiOutProductId: z.string().trim().max(100).optional().nullable(),
 }).superRefine((input, context) => {
   if (input.matchDecision === "matched" && !input.matchedProductId) context.addIssue({ code: "custom", path: ["matchedProductId"], message: "请选择确认的同款商品" });
 });
@@ -53,8 +57,10 @@ export async function GET(request: Request) {
     const storageDepartmentFilter = storageDepartmentId ? sql`AND EXISTS (SELECT 1 FROM samples sdept WHERE sdept.product_id = p.id AND (p.archived = true OR sdept.archived = false) AND sdept.current_department_id = ${storageDepartmentId}::uuid)` : sql``;
     const orderBy = priceOrder === "asc" ? sql`p.price ASC NULLS LAST, p.created_at DESC` : priceOrder === "desc" ? sql`p.price DESC NULLS LAST, p.created_at DESC` : sql`p.created_at DESC`;
     const rows = await sql`
-      SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.archived,
-             p.cooperation_mechanism, p.notes, p.image_urls, p.created_at, p.updated_at,
+       SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.archived,
+              p.cooperation_mechanism, p.notes, p.image_urls, p.created_at, p.updated_at,
+              (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'product_id' AND pai.is_current = true LIMIT 1) AS api_product_id,
+              (SELECT pai.value FROM product_api_ids pai WHERE pai.product_id = p.id AND pai.id_type = 'out_product_id' AND pai.is_current = true LIMIT 1) AS api_out_product_id,
              c.name AS category_name, u.name AS business_contact_name, count(DISTINCT s.id)::int AS sample_count,
              count(DISTINCT s.id) FILTER (WHERE s.status = 'active')::int AS active_count,
              string_agg(DISTINCT d.name, '、') AS selected_departments, string_agg(DISTINCT t.name, '、') AS tags,
@@ -93,14 +99,26 @@ export async function POST(request: Request) {
     const [location] = input.initialLocationId ? await sql`SELECT id FROM locations WHERE id = ${input.initialLocationId} AND department_id = ${input.initialDepartmentId} AND active = true` : [null];
     if (input.initialLocationId && !location) return Response.json({ ok: false, message: "初始存放位置不属于所选部门" }, { status: 400 });
     const [run] = await sql`SELECT * FROM image_match_runs WHERE id = ${input.matchRunId} AND user_id = ${user.id}`;
-    if (!run || (input.matchDecision !== "matched" && !input.imageUrls.some((imageUrl) => urlHash(imageUrl) === run.imageUrlHash))) return Response.json({ ok: false, message: "图片识别结果已失效，请重新识别" }, { status: 409 });
-    if (input.matchDecision === "failed_continue" && run.status !== "failed") return Response.json({ ok: false, message: "识别状态与登记方式不一致" }, { status: 409 });
-    if (input.matchDecision === "matched" && !run.candidates?.some((candidate: { id?: string }) => String(candidate.id) === input.matchedProductId)) return Response.json({ ok: false, message: "确认的同款商品不在识别结果中" }, { status: 409 });
+    const apiProductIds = [input.apiProductId, input.apiOutProductId].filter(Boolean) as string[];
+    const [apiMatchedProduct] = apiProductIds.length ? await sql`
+      SELECT p.id, p.sku
+      FROM product_api_ids pai JOIN products p ON p.id = pai.product_id
+      WHERE pai.is_current = true AND p.archived = false
+        AND ((pai.id_type = 'product_id' AND pai.value = ${input.apiProductId || null})
+          OR (pai.id_type = 'out_product_id' AND pai.value = ${input.apiOutProductId || null}))
+      ORDER BY CASE WHEN pai.id_type = 'product_id' THEN 0 ELSE 1 END
+      LIMIT 1
+    ` : [null];
+    const effectiveMatchDecision = apiMatchedProduct ? "matched" : input.matchDecision;
+    const effectiveMatchedProductId = apiMatchedProduct ? String(apiMatchedProduct.id) : input.matchedProductId;
+    if (!run || (effectiveMatchDecision !== "matched" && !input.imageUrls.some((imageUrl) => urlHash(imageUrl) === run.imageUrlHash))) return Response.json({ ok: false, message: "图片识别结果已失效，请重新识别" }, { status: 409 });
+    if (effectiveMatchDecision === "failed_continue" && run.status !== "failed") return Response.json({ ok: false, message: "识别状态与登记方式不一致" }, { status: 409 });
+    if (!apiMatchedProduct && input.matchDecision === "matched" && !run.candidates?.some((candidate: { id?: string }) => String(candidate.id) === input.matchedProductId)) return Response.json({ ok: false, message: "确认的同款商品不在识别结果中" }, { status: 409 });
 
     const result = await sql.begin(async (tx) => {
       let product; let previousProductData: unknown = null; let mergedProductVersion: number | null = null;
-      if (input.matchDecision === "matched") {
-        const matchedProductId = input.matchedProductId as string;
+      if (effectiveMatchDecision === "matched") {
+        const matchedProductId = effectiveMatchedProductId as string;
         const rows = await tx`SELECT * FROM products WHERE id = ${matchedProductId} FOR UPDATE`; product = rows[0];
         if (!product) throw new Error("确认的同款商品已不存在");
         const wasArchived = Boolean(product.archived);
@@ -128,6 +146,15 @@ export async function POST(request: Request) {
           VALUES(${sku},${input.name},${input.businessContactId || null},${nullable(input.storeName)},${input.price ?? null},${nullable(input.productUrl)},${nullable(input.commission)},${input.storeRating ?? null},${nullable(input.supplyChain)},${nullable(input.cooperationMechanism)},${input.categoryId || null},${tx.json(input.imageUrls)},${nullable(input.notes)},${user.id}) RETURNING *`;
         product = inserted[0];
       }
+      await setCurrentProductApiIds(tx, String(product.id), { productId: input.apiProductId, outProductId: input.apiOutProductId });
+      if (input.windowProductId) await tx`
+        UPDATE talent_window_products
+        SET promotion_confirmed = promotion_link IS NOT NULL,
+            promotion_status = CASE WHEN promotion_link IS NOT NULL THEN 'confirmed' ELSE 'pending' END,
+            promotion_error = CASE WHEN promotion_link IS NOT NULL THEN null ELSE promotion_error END
+        WHERE id = ${input.windowProductId}
+          AND product_id = coalesce(${input.apiProductId || null}, product_id)
+      `;
       await tx`DELETE FROM product_departments WHERE product_id = ${product.id}`;
       for (const departmentId of input.departmentIds) await tx`INSERT INTO product_departments(product_id,department_id) VALUES(${product.id},${departmentId})`;
       await tx`DELETE FROM product_tags WHERE product_id = ${product.id}`;
@@ -139,16 +166,15 @@ export async function POST(request: Request) {
           const [sample] = await tx`INSERT INTO samples(code,product_id,arrived_at,status,current_department_id,current_location_id,spec,created_by)
             VALUES(${code},${product.id},${input.arrivedAt},'active',${input.initialDepartmentId},${input.initialLocationId || null},${specRow.spec || null},${user.id}) RETURNING id`;
           await tx`INSERT INTO sample_movements(sample_id,to_status,to_department_id,to_location_id,operator_id,remark)
-            VALUES(${sample.id},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id},${input.matchDecision === "matched" ? "同款再次到样登记" : "样品到货登记"})`;
+            VALUES(${sample.id},'active',${input.initialDepartmentId},${input.initialLocationId || null},${user.id},${effectiveMatchDecision === "matched" ? "同款再次到样登记" : "样品到货登记"})`;
           codes.push(code); sampleIds.push(String(sample.id));
         }
       }
-      const totalQuantity = codes.length;
-      if (input.matchDecision === "matched") await tx`INSERT INTO product_intake_batches(product_id,match_run_id,user_id,sample_ids,submitted_data,previous_product_data,merged_product_version)
+      if (effectiveMatchDecision === "matched") await tx`INSERT INTO product_intake_batches(product_id,match_run_id,user_id,sample_ids,submitted_data,previous_product_data,merged_product_version)
         VALUES(${product.id},${input.matchRunId},${user.id},${tx.json(sampleIds)},${tx.json(input)},${tx.json(previousProductData as never)},${mergedProductVersion})`;
-      await tx`UPDATE image_match_runs SET selected_product_id=${input.matchedProductId || null}, decision=${input.matchDecision}, decided_at=now() WHERE id=${input.matchRunId}`;
+      await tx`UPDATE image_match_runs SET selected_product_id=${effectiveMatchedProductId || null}, decision=${effectiveMatchDecision}, decided_at=now() WHERE id=${input.matchRunId}`;
       await syncProductImageQueue(String(product.id), product.imageUrls as string[], tx);
-      return { id: String(product.id), sku: String(product.sku), name: String(product.name), codes, imageUrls: product.imageUrls as string[], matched: input.matchDecision === "matched" };
+      return { id: String(product.id), sku: String(product.sku), name: String(product.name), codes, imageUrls: product.imageUrls as string[], matched: effectiveMatchDecision === "matched" };
     });
     await writeAudit(user, result.matched ? "product.match_merge" : "product.create", "product", result.id, result.matched ? `确认同款 ${result.sku}，追加 ${result.codes.length} 件样品` : `登记新商品 ${result.sku}，到样 ${result.codes.length} 件`, input, requestIp(request));
     return created(result);

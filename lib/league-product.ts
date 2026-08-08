@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { setCurrentProductApiIds } from "./product-api-ids";
 import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 
 const API_BASE = "https://api.weixin.qq.com";
@@ -19,6 +20,7 @@ export type LeagueAccountRow = {
   accessToken: string | null;
   tokenExpiresAt: string | null;
   active: boolean;
+  isPrimary?: boolean;
 };
 
 export type LeagueProductQuality = {
@@ -80,7 +82,7 @@ async function wechatPost(path: string, token: string, body: Record<string, unkn
 export async function loadLeagueAccount(accountId: string): Promise<LeagueAccountRow | null> {
   const sql = getDb();
   const rows = await sql`
-    SELECT id, name, appid, app_secret, access_token, token_expires_at, active
+    SELECT id, name, appid, app_secret, access_token, token_expires_at, active, is_primary
     FROM league_accounts WHERE id = ${accountId} LIMIT 1
   `;
   return (rows[0] as LeagueAccountRow | undefined) || null;
@@ -157,6 +159,9 @@ export async function fetchLeagueProductDetail(
 }
 
 export type LeagueItemPromotion = {
+  headSupplierItemLink: string;
+  productId: string | null;
+  outProductId: string | null;
   commissionRatio: number | null;
   normalCommissionRatio: number | null;
   serviceRatio: number | null;
@@ -168,6 +173,11 @@ export type LeagueItemPromotion = {
 export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSupplierItemLink: string): Promise<LeagueItemPromotion> {
   const payload = await callLeagueApi<{
     item?: {
+      head_supplier_item_link?: string;
+      product_promotion_link?: string;
+      promotion_link?: string;
+      product_id?: number | string;
+      out_product_id?: number | string;
       commission_info?: {
         plan_type?: number;
         commission_type?: number;
@@ -178,14 +188,20 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
       cooperative_info?: {
         cooperative_status?: number;
         link?: string;
+        head_supplier_item_link?: string;
       };
     };
   }>(account, "/channels/ec/league/headsupplier/item/promotiondetail/get", {
     head_supplier_item_link: headSupplierItemLink,
   });
   const info = payload.item?.commission_info;
-  const coopLink = payload.item?.cooperative_info?.link?.trim() || null;
+  // The cooperative-item list is the authoritative source of the institution promotion link.
+  // Promotion-detail validates that link and returns commission data; it must never be rebuilt from a product ID.
+  const coopLink = safeText(headSupplierItemLink);
   return {
+    headSupplierItemLink,
+    productId: safeText(payload.item?.product_id),
+    outProductId: safeText(payload.item?.out_product_id),
     commissionRatio: typeof info?.ratio === "number" ? info.ratio : null,
     normalCommissionRatio: typeof info?.normal_commission_info?.ratio === "number" ? info.normal_commission_info.ratio : null,
     serviceRatio: typeof info?.service_ratio === "number" ? info.service_ratio : null,
@@ -195,24 +211,37 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
   };
 }
 
-export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, string>> {
-  const links = new Map<string, string>();
+export type CooperativeItem = { productId: string; outProductId: string | null; link: string };
+
+export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, CooperativeItem[]>> {
+  const links = new Map<string, CooperativeItem[]>();
+  const add = (key: string | null, item: CooperativeItem) => {
+    if (!key) return;
+    const current = links.get(key) || [];
+    if (!current.some((entry) => entry.link === item.link)) current.push(item);
+    links.set(key, current);
+  };
   for (const commissionType of [0, 1]) {
     let nextKey = "";
     for (let page = 0; page < 500; page += 1) {
       const payload = await callLeagueApi<{
-        list?: Array<{ product_id?: number | string; head_supplier_item_link?: string }>;
+        list?: Array<{ product_id?: number | string; out_product_id?: number | string; head_supplier_item_link?: string }>;
         next_key?: string;
       }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
         commission_type: commissionType,
-        page_size: 100,
+        page_size: 20,
         next_key: nextKey,
       });
       const list = Array.isArray(payload.list) ? payload.list : [];
       for (const item of list) {
         const productId = safeText(item.product_id);
+        const outProductId = safeText(item.out_product_id);
         const link = safeText(item.head_supplier_item_link);
-        if (productId && link) links.set(productId, link);
+        if (productId && link) {
+          const cooperativeItem = { productId, outProductId, link };
+          add(productId, cooperativeItem);
+          add(outProductId, cooperativeItem);
+        }
       }
       const next = safeText(payload.next_key);
       if (!next || next === nextKey || list.length === 0) break;
@@ -220,6 +249,292 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
     }
   }
   return links;
+}
+
+export async function loadActiveLeagueAccounts(): Promise<LeagueAccountRow[]> {
+  const sql = getDb();
+  const rows = await sql`
+    SELECT id, name, appid, app_secret, access_token, token_expires_at, active, is_primary
+    FROM league_accounts
+    WHERE active = true
+    ORDER BY is_primary DESC, created_at, id
+  `;
+  return rows as unknown as LeagueAccountRow[];
+}
+
+export type LeaguePromotionResolution = {
+  promotionLink: string | null;
+  productId: string | null;
+  outProductId: string | null;
+  commissionRatio: number | null;
+  normalCommissionRatio: number | null;
+  serviceRatio: number | null;
+  commissionType: number | null;
+  planType: number | null;
+  accountId: string | null;
+  error: string | null;
+};
+
+export type LeaguePromotionCandidate = LeaguePromotionResolution & {
+  promotionLink: string;
+  accountId: string;
+  accountName: string;
+  accountIsPrimary: boolean;
+  headSupplierItemLink: string;
+};
+
+export type LeaguePromotionSelection = {
+  selected: LeaguePromotionCandidate | null;
+  requiresChoice: boolean;
+  candidates: LeaguePromotionCandidate[];
+};
+
+function uniqueCooperativeItems(items: CooperativeItem[]) {
+  return Array.from(new Map(items.map((item) => [item.link, item])).values());
+}
+
+export function selectLeaguePromotionCandidate(candidates: LeaguePromotionCandidate[]): LeaguePromotionSelection {
+  const linked = candidates.filter((candidate) => Boolean(candidate.promotionLink));
+  if (!linked.length) return { selected: null, requiresChoice: false, candidates: [] };
+  const primary = linked.filter((candidate) => candidate.accountIsPrimary);
+  const pool = primary.length ? primary : linked;
+  const highestServiceRatio = Math.max(...pool.map((candidate) => candidate.serviceRatio ?? -1));
+  const highest = pool.filter((candidate) => (candidate.serviceRatio ?? -1) === highestServiceRatio);
+  const unique = Array.from(new Map(highest.map((candidate) => [`${candidate.accountId}\u0000${candidate.promotionLink}`, candidate])).values());
+  return {
+    selected: unique.length === 1 ? unique[0] : null,
+    requiresChoice: unique.length > 1,
+    candidates: linked,
+  };
+}
+
+export async function resolveLeaguePromotionCandidates(
+  accounts: LeagueAccountRow[],
+  item: { productId: string; outProductId?: string | null; existingLink?: string | null },
+  cooperativeItems?: Map<string, CooperativeItem[]>[],
+): Promise<{ candidates: LeaguePromotionCandidate[]; errors: string[] }> {
+  const resolved = await Promise.all(accounts.map(async (account, accountIndex) => {
+    const errors: string[] = [];
+    let cooperative = cooperativeItems?.[accountIndex];
+    if (!cooperative) {
+      try { cooperative = await fetchLeagueCooperativeItemLinks(account); }
+      catch (error) {
+        return { candidates: [] as LeaguePromotionCandidate[], errors: [`${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`] };
+      }
+    }
+    const idMatches = [
+      ...(cooperative.get(item.productId) || []),
+      ...(item.outProductId ? cooperative.get(item.outProductId) || [] : []),
+    ];
+    const linkMatches = idMatches.length || !item.existingLink
+      ? []
+      : Array.from(cooperative.values()).flat().filter((entry) => entry.link === item.existingLink);
+    const matches = uniqueCooperativeItems([...idMatches, ...linkMatches]);
+    if (!matches.length) {
+      return { candidates: [] as LeaguePromotionCandidate[], errors: [`${account.name}：合作商品列表中未找到商品 ID ${item.productId}`] };
+    }
+    const candidates: LeaguePromotionCandidate[] = [];
+    for (const match of matches) {
+      try {
+        const promotion = await fetchLeagueItemPromotion(account, match.link);
+        const promotionLink = safeText(promotion.promotionLink) || match.link;
+        candidates.push({
+          promotionLink,
+          productId: promotion.productId || match.productId,
+          outProductId: promotion.outProductId || match.outProductId || item.outProductId || null,
+          commissionRatio: promotion.commissionRatio,
+          normalCommissionRatio: promotion.normalCommissionRatio,
+          serviceRatio: promotion.serviceRatio,
+          commissionType: promotion.commissionType,
+          planType: promotion.planType,
+          accountId: account.id,
+          accountName: account.name,
+          accountIsPrimary: Boolean(account.isPrimary),
+          headSupplierItemLink: match.link,
+          error: null,
+        });
+      } catch (error) {
+        errors.push(`${account.name}：${error instanceof Error ? error.message : "推广详情接口调用失败"}`);
+      }
+    }
+    return { candidates, errors };
+  }));
+  return {
+    candidates: resolved.flatMap((result) => result.candidates),
+    errors: resolved.flatMap((result) => result.errors),
+  };
+}
+
+export async function resolveLeaguePromotion(
+  accounts: LeagueAccountRow[],
+  item: { productId: string; outProductId?: string | null; existingLink?: string | null },
+  cooperativeItems?: Map<string, CooperativeItem[]>[],
+): Promise<LeaguePromotionResolution> {
+  const resolved = await resolveLeaguePromotionCandidates(accounts, item, cooperativeItems);
+  const selection = selectLeaguePromotionCandidate(resolved.candidates);
+  if (selection.selected) return selection.selected;
+  const error = selection.requiresChoice
+    ? "多个机构返回相同最高服务费率，请人工选择推广链接"
+    : resolved.errors[0] || "未找到可用的机构推广商品";
+  return { promotionLink: null, productId: null, outProductId: item.outProductId || null, commissionRatio: null, normalCommissionRatio: null, serviceRatio: null, commissionType: null, planType: null, accountId: null, error };
+}
+
+export async function syncWindowPromotions(talentAccountId: string) {
+  const sql = getDb();
+  const startedAt = Date.now();
+  const accounts = await loadActiveLeagueAccounts();
+  const rows = await sql`
+    SELECT id, product_id, out_product_id, shop_appid, promotion_link, promotion_confirmed
+    FROM talent_window_products
+    WHERE account_id = ${talentAccountId}
+    ORDER BY synced_at DESC
+  `;
+  if (!accounts.length) {
+    await sql`
+      UPDATE talent_window_products
+      SET promotion_link = CASE WHEN promotion_confirmed THEN promotion_link ELSE NULL END,
+          promotion_status = 'pending', promotion_error = '未配置已启用的联盟机构账号', promotion_synced_at = now()
+      WHERE account_id = ${talentAccountId}
+    `;
+    return { total: rows.length, detailed: 0, accounts: 0 };
+  }
+  const cooperativeLoads = await Promise.all(accounts.map(async (account) => {
+    try {
+      return { items: await fetchLeagueCooperativeItemLinks(account), error: null };
+    } catch (error) {
+      return { items: new Map<string, CooperativeItem[]>(), error: `${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}` };
+    }
+  }));
+  const cooperativeItems = cooperativeLoads.map((load) => load.items);
+  const cooperativeErrors = cooperativeLoads.map((load) => load.error).filter(Boolean) as string[];
+  const qualityAccount = accounts.find((account) => account.isPrimary) || accounts[0];
+  let detailed = 0;
+  const concurrency = 5;
+  for (let index = 0; index < rows.length; index += concurrency) {
+    const batch = rows.slice(index, index + concurrency);
+    const resolutions = await Promise.all(batch.map(async (row) => {
+      const promotionTask = resolveLeaguePromotionCandidates(accounts, {
+        productId: String(row.productId),
+        outProductId: row.outProductId ? String(row.outProductId) : null,
+        existingLink: row.promotionLink ? String(row.promotionLink) : null,
+      }, cooperativeItems);
+      const sourceId = row.productId;
+      const qualityTask = qualityAccount && row.shopAppid && sourceId
+        ? fetchLeagueProductDetail(qualityAccount, String(row.shopAppid), String(sourceId)).catch((error) => {
+            console.warn("橱窗商品评分获取失败", error);
+            return null;
+          })
+        : Promise.resolve(null);
+      const [resolved, quality] = await Promise.all([promotionTask, qualityTask]);
+      return { resolved: { ...resolved, errors: [...cooperativeErrors, ...resolved.errors] }, quality };
+    }));
+    for (let offset = 0; offset < batch.length; offset += 1) {
+      const row = batch[offset];
+      const { resolved, quality } = resolutions[offset];
+      const selection = selectLeaguePromotionCandidate(resolved.candidates);
+      await sql.begin(async (tx) => {
+        await tx`DELETE FROM talent_window_promotion_candidates WHERE window_product_id = ${row.id}`;
+        const candidateIds = new Map<string, string>();
+        for (const candidate of resolved.candidates) {
+          const [inserted] = await tx`
+            INSERT INTO talent_window_promotion_candidates(
+              window_product_id, league_account_id, head_supplier_item_link, promotion_link,
+              product_id, out_product_id, commission_ratio, normal_commission_ratio,
+              service_ratio, commission_type, plan_type
+            ) VALUES (
+              ${row.id}, ${candidate.accountId}, ${candidate.headSupplierItemLink}, ${candidate.promotionLink},
+              ${candidate.productId}, ${candidate.outProductId}, ${candidate.commissionRatio}, ${candidate.normalCommissionRatio},
+              ${candidate.serviceRatio}, ${candidate.commissionType}, ${candidate.planType}
+            ) RETURNING id
+          `;
+          candidateIds.set(`${candidate.accountId}\u0000${candidate.promotionLink}`, String(inserted.id));
+        }
+
+        const selected = selection.selected;
+        const productIds = Array.from(new Set([String(row.productId), selected?.productId || ""].filter(Boolean)));
+        const outProductIds = Array.from(new Set([row.outProductId ? String(row.outProductId) : "", selected?.outProductId || ""].filter(Boolean)));
+        const [registered] = await tx`
+          SELECT p.id, p.product_url
+          FROM products p
+          WHERE p.archived = false AND (
+            EXISTS (
+              SELECT 1 FROM product_api_ids pai
+              WHERE pai.product_id = p.id AND pai.is_current = true
+                AND ((pai.id_type = 'product_id' AND pai.value = ANY(${productIds}::text[]))
+                  OR (pai.id_type = 'out_product_id' AND pai.value = ANY(${outProductIds}::text[])))
+            )
+            OR (${safeText(row.promotionLink)}::text IS NOT NULL AND (
+              p.product_url = ${safeText(row.promotionLink)}
+              OR EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id = p.id AND history.url = ${safeText(row.promotionLink)})
+            ))
+          )
+          ORDER BY p.updated_at DESC, p.id
+          LIMIT 1
+        `;
+        let registeredLink = safeText(registered?.productUrl);
+        let promotionStatus: "pending" | "selected" | "confirmed" | "needs_choice" | "needs_replacement" = "pending";
+        let promotionError: string | null = null;
+        if (selection.requiresChoice) {
+          promotionStatus = "needs_choice";
+          promotionError = "多个机构返回相同最高服务费率，请人工选择推广链接";
+        } else if (selected) {
+          if (registeredLink && registeredLink !== selected.promotionLink) {
+            if (row.promotionConfirmed) {
+              promotionStatus = "needs_replacement";
+              promotionError = "已获取新的机构推广链接，等待人工确认是否替换已登记商品链接";
+            } else {
+              await setCurrentProductApiIds(tx, String(registered.id), { productId: selected.productId, outProductId: selected.outProductId });
+              await tx`
+                INSERT INTO product_link_history(product_id, url, replaced_by_url, source, source_entity_id)
+                VALUES (${registered.id}, ${registeredLink}, ${selected.promotionLink}, 'league_link_correction', ${row.id})
+              `;
+              await tx`UPDATE products SET product_url = ${selected.promotionLink}, version = version + 1, updated_at = now() WHERE id = ${registered.id}`;
+              registeredLink = selected.promotionLink;
+              promotionStatus = "selected";
+            }
+          } else if (registered && !registeredLink) {
+            await setCurrentProductApiIds(tx, String(registered.id), { productId: selected.productId, outProductId: selected.outProductId });
+            await tx`UPDATE products SET product_url = ${selected.promotionLink}, version = version + 1, updated_at = now() WHERE id = ${registered.id}`;
+            registeredLink = selected.promotionLink;
+            promotionStatus = "selected";
+          } else if (registeredLink === selected.promotionLink) {
+            promotionStatus = "confirmed";
+          } else {
+            promotionStatus = "selected";
+          }
+        } else {
+          promotionError = resolved.errors.slice(0, 3).join("；") || "联盟机构合作商品列表中未找到该商品";
+        }
+        const preserveConfirmedLink = !selected && Boolean(row.promotionConfirmed) ? safeText(row.promotionLink) : null;
+        const selectedCandidateId = selected ? candidateIds.get(`${selected.accountId}\u0000${selected.promotionLink}`) || null : null;
+        await tx`
+          UPDATE talent_window_products
+          SET promotion_link = ${selected?.promotionLink || preserveConfirmedLink},
+              promotion_product_id = ${selected?.productId || null},
+              promotion_out_product_id = ${selected?.outProductId || null},
+              promotion_account_id = ${selected?.accountId || null},
+              promotion_candidate_id = ${selectedCandidateId},
+              promotion_status = ${promotionStatus},
+              promotion_confirmed = ${promotionStatus === "confirmed"},
+              promotion_error = ${promotionError}, promotion_synced_at = now(),
+              shop_name = coalesce(${quality?.shopName || null}, shop_name),
+              shop_score = coalesce(${quality?.shopScore ?? null}, shop_score),
+              shop_icon = coalesce(${quality?.shopIcon || null}, shop_icon),
+              good_evaluation_ratio = coalesce(${quality?.goodEvaluationRatio ?? null}, good_evaluation_ratio),
+              commission_ratio = ${selected?.commissionRatio ?? null},
+              normal_commission_ratio = ${selected?.normalCommissionRatio ?? null},
+              service_ratio = ${selected?.serviceRatio ?? null},
+              commission_type = ${selected?.commissionType ?? null},
+              plan_type = ${selected?.planType ?? null},
+              quality_synced_at = CASE WHEN ${Boolean(quality)} THEN now() ELSE quality_synced_at END
+          WHERE id = ${row.id}
+        `;
+      });
+      if (selection.selected) detailed += 1;
+    }
+  }
+  console.log(`橱窗推广数据同步完成：${rows.length} 件，获取到推广链接 ${detailed} 件，联盟账号 ${accounts.length} 个，用时 ${Date.now() - startedAt}ms`);
+  return { total: rows.length, detailed, accounts: accounts.length };
 }
 
 export async function syncWindowQuality(leagueAccountId: string, talentAccountId: string): Promise<{ total: number; detailed: number; patchedShopIds: number; patchedLinks: number; backfilledLinks: number }> {
@@ -270,7 +585,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
 
   let patchedLinks = 0;
   const errors: string[] = [];
-  let itemLinks = new Map<string, string>();
+  let itemLinks = new Map<string, CooperativeItem[]>();
   try {
     itemLinks = await fetchLeagueCooperativeItemLinks(leagueAccount);
   } catch (error) {
@@ -280,7 +595,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   const linkPatches: Array<{ id: string; link: string }> = [];
   for (const product of products) {
     const sid = product.outProductId || product.productId;
-    const link = sid ? itemLinks.get(sid) : undefined;
+    const link = sid ? itemLinks.get(sid)?.[0]?.link : undefined;
     if (link && !product.promotionLink) {
       linkPatches.push({ id: product.id, link });
       product.promotionLink = link;
@@ -311,10 +626,13 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     const batch = products.slice(index, index + QUALITY_CONCURRENCY);
     const results = await Promise.all(batch.map(async (item) => {
       const sid = item.outProductId || item.productId;
-      const headSupplierLink = `weixinstorehs/${sid}`;
       const [qualityResult, promotionResult] = await Promise.allSettled([
         sid && item.shopAppid ? fetchLeagueProductDetail(leagueAccount, item.shopAppid, sid) : Promise.resolve(null),
-        sid ? fetchLeagueItemPromotion(leagueAccount, headSupplierLink) : Promise.resolve(null),
+        sid ? resolveLeaguePromotion([leagueAccount], {
+          productId: item.productId,
+          outProductId: item.outProductId,
+          existingLink: item.promotionLink,
+        }, [itemLinks]) : Promise.resolve(null),
       ]);
       return { item, qualityResult, promotionResult };
     }));
@@ -383,39 +701,5 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
     throw new Error(`评分同步失败：${errors[0]}`);
   }
   if (errors.length) console.warn("联盟数据同步部分失败", { leagueAccountId, talentAccountId, errors });
-  let backfilledLinks = 0;
-  try {
-    const candidates = await sql`
-      SELECT p.id AS product_id, p.product_url AS old_url, wp.promotion_link AS new_link
-      FROM talent_window_products wp
-      JOIN products p ON p.product_url IS DISTINCT FROM wp.promotion_link
-        AND (p.product_url = 'weixinstorehs/' || wp.product_id
-          OR (wp.out_product_id IS NOT NULL AND p.product_url = 'weixinstorehs/' || wp.out_product_id))
-      WHERE wp.account_id = ${talentAccountId}
-        AND wp.promotion_link IS NOT NULL
-    ` as Array<{ productId: string; oldUrl: string; newLink: string }>;
-    if (candidates.length > 0) {
-      const pIds = candidates.map(c => c.productId);
-      const newLinks = candidates.map(c => c.newLink);
-      await sql`
-        UPDATE products p SET product_url = t.new_link, updated_at = now()
-        FROM unnest(${pIds}::uuid[], ${newLinks}::text[]) AS t(id, new_link)
-        WHERE p.id = t.id
-      `;
-      const oldUrls = candidates.map(c => c.oldUrl);
-      await sql`
-        INSERT INTO product_link_history(product_id, url, replaced_by_url, source, changed_at)
-        SELECT t.id, t.old_url, t.new_link, 'league_backfill', now()
-        FROM unnest(${pIds}::uuid[], ${oldUrls}::text[], ${newLinks}::text[]) AS t(id, old_url, new_link)
-        WHERE NOT EXISTS (
-          SELECT 1 FROM product_link_history h
-          WHERE h.product_id = t.id AND h.replaced_by_url = t.new_link AND h.source = 'league_backfill'
-        )
-      `;
-      backfilledLinks = candidates.length;
-    }
-  } catch (error) {
-    console.error("商品链接回填失败", error);
-  }
-  return { total: products.length, detailed, patchedShopIds, patchedLinks, backfilledLinks };
+  return { total: products.length, detailed, patchedShopIds, patchedLinks, backfilledLinks: 0 };
 }

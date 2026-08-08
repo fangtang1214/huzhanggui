@@ -190,10 +190,6 @@ export async function fetchWindowProductDetail(account: TalentAccountRow, produc
   };
 }
 
-export function windowProductLink(item: { productId: string; outProductId: string | null }) {
-  return `weixinstorehs/${item.outProductId || item.productId}`;
-}
-
 export async function syncTalentWindow(accountId: string): Promise<{ total: number; detailed: number }> {
   const sql = getDb();
   const account = await loadTalentAccount(accountId);
@@ -266,23 +262,18 @@ export async function syncTalentWindow(accountId: string): Promise<{ total: numb
   return { total: items.length, detailed: detailRows.length };
 }
 
-export async function runTalentWindowSync(accountId: string, leagueAccountId?: string | null) {
+export async function runTalentWindowSync(accountId: string) {
   const sql = getDb();
   try {
     const result = await syncTalentWindow(accountId);
+    const { syncWindowPromotions } = await import("./league-product");
+    const promotionResult = await syncWindowPromotions(accountId);
     await sql`
       UPDATE talent_accounts
       SET sync_status = 'idle', sync_error = null, synced_at = now(), updated_at = now()
       WHERE id = ${accountId}
     `;
-    if (leagueAccountId) {
-      const { syncWindowQuality } = await import("./league-product");
-      try {
-        const qualityResult = await syncWindowQuality(leagueAccountId, accountId);
-        if (qualityResult.backfilledLinks > 0) console.log(`商品链接回填完成：${qualityResult.backfilledLinks} 个商品`);
-      } catch (error) { console.error("橱窗同步后评分同步失败", error); }
-    }
-    return result;
+    return { ...result, promotion: promotionResult };
   } catch (error) {
     const message = error instanceof Error ? error.message : "同步失败";
     await sql`

@@ -65,7 +65,13 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
       WHERE history.product_id = ${id}
       ORDER BY history.changed_at DESC, history.id DESC
     `;
-    return ok({ product: rows[0], samples, linkHistory });
+    const apiIds = await sql`
+      SELECT id, id_type, value, is_current, created_at
+      FROM product_api_ids
+      WHERE product_id = ${id}
+      ORDER BY id_type, is_current DESC, created_at DESC
+    `;
+    return ok({ product: rows[0], samples, linkHistory, apiIds });
   } catch (error) {
     return apiError(error);
   }

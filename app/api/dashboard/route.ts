@@ -2,7 +2,7 @@ import { apiError, ok } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 
-let cacheEntry: { data: any; timestamp: number } | null = null;
+let cacheEntry: { data: unknown; timestamp: number } | null = null;
 const CACHE_TTL = 30_000;
 
 export async function GET() {

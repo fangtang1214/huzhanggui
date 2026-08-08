@@ -1,6 +1,6 @@
 import type { Sql, TransactionSql } from "postgres";
 
-type Queryable = Sql<any> | TransactionSql<any>;
+type Queryable = Sql<Record<string, unknown>> | TransactionSql<Record<string, unknown>>;
 
 export class SkuGenerationError extends Error {
   constructor(message: string) {

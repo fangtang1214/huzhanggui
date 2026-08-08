@@ -479,6 +479,20 @@ select { cursor: pointer; }
 .product-link-history-list span code { flex: 1; color: var(--muted); }
 .product-link-history-list small { margin-top: 3px; display: block; color: var(--muted); font-size: 10px; }
 .product-link-history-actions { display: flex; gap: 5px; }
+.product-id-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.product-id-list code { display: inline-block; padding: 5px 7px; border: 1px solid var(--line-soft); border-radius: 6px; color: var(--ink-soft); font-size: 11px; }
+.product-id-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.product-id-summary > b { margin-right: 4px; }
+.product-id-summary a { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--line-soft); border-radius: 6px; color: inherit; text-decoration: none; }
+.product-id-summary a span { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.product-id-summary code { color: var(--muted); font-size: 11px; }
+.correction-run { width: 100%; display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--paper-strong); color: inherit; text-align: left; cursor: pointer; }
+.correction-run > span { display: grid; gap: 3px; }
+.correction-run small { color: var(--muted); }
+.correction-items { display: grid; gap: 7px; padding-top: 4px; }
+.correction-items > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.correction-items > div { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+.correction-items > div small { color: var(--muted); text-align: right; }
 .sample-copy-mobile { flex: 0 0 38px; color: var(--green); }
 .sample-focus-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) 300px; gap: 15px; margin-bottom: 15px; }
 .sample-identity { padding: 21px; display: flex; gap: 22px; }

@@ -27,7 +27,15 @@ export function apiError(error: unknown) {
   }
   const dbError = error as { code?: string; constraint_name?: string; message?: string };
   if (dbError?.code === "23505") {
-    return NextResponse.json({ ok: false, message: "名称或编号已经存在" }, { status: 409 });
+    const constraint = dbError.constraint_name || "";
+    const message = constraint.includes("product_api_ids")
+      ? "该微信商品 ID 已与现有商品关联，请返回橱窗刷新后直接使用已登记商品"
+      : constraint.includes("products_sku")
+        ? "商品编号发生冲突，请重试；系统会重新生成编号"
+        : constraint.includes("appid")
+          ? "该 AppID 已经配置"
+          : "相同记录已经存在，请刷新后重试";
+    return NextResponse.json({ ok: false, message }, { status: 409 });
   }
   if (dbError?.code === "23503") {
     return NextResponse.json({ ok: false, message: "该数据正在被使用，不能删除" }, { status: 409 });
