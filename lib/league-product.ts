@@ -47,6 +47,9 @@ type LeagueProductDetailItem = {
     selling_price?: number;
     sale_price?: number;
     min_price?: number;
+    price_info?: Record<string, unknown>;
+    skus?: Array<Record<string, unknown>>;
+    sku_list?: Array<Record<string, unknown>>;
     shop_appid?: string;
     good_evaluation_ratio?: number;
   };
@@ -60,6 +63,13 @@ type LeagueProductDetailItem = {
   title?: string;
   head_imgs?: string[];
   selling_price?: number;
+  skus?: Array<{
+    selling_price?: number;
+    sale_price?: number;
+    min_sale_price?: number;
+    market_price?: number;
+    price?: number;
+  }>;
 };
 
 function object(value: unknown): Record<string, unknown> {
@@ -71,6 +81,36 @@ function safeNumber(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+const SALE_PRICE_KEYS = [
+  "selling_price", "sellingPrice",
+  "sale_price", "salePrice",
+  "min_sale_price", "minSalePrice",
+  "min_price", "minPrice",
+  "price",
+  "market_price", "marketPrice",
+] as const;
+
+function priceFromRecord(record: Record<string, unknown>): number | null {
+  for (const key of SALE_PRICE_KEYS) {
+    const price = safeNumber(record[key]);
+    if (price !== null) return price;
+  }
+  const priceInfo = object(record.price_info || record.priceInfo || record.price_range || record.priceRange || record.price);
+  for (const key of [...SALE_PRICE_KEYS, "min", "value", "amount"] as const) {
+    const price = safeNumber(priceInfo[key]);
+    if (price !== null) return price;
+  }
+  return null;
+}
+
+function skuSellingPrice(...values: unknown[]): number | null {
+  const prices = values
+    .flatMap((value) => Array.isArray(value) ? value : [])
+    .map((value) => priceFromRecord(object(value)))
+    .filter((value): value is number => value !== null);
+  return prices.length ? Math.min(...prices) : null;
+}
+
 function imageUrls(value: unknown): string[] {
   const values = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
   return Array.from(new Set(values.map(safeText).filter((item): item is string => Boolean(item))));
@@ -80,6 +120,10 @@ export function parseLeagueProductSnapshot(value: unknown): LeagueProductSnapsho
   const detail = object(value);
   const info = object(detail.product_info || detail.productInfo || detail.product || detail.item_info || detail.itemInfo);
   const shop = object(detail.shop || detail.shop_info || detail.shopInfo);
+  const sellingPriceFen = priceFromRecord(info) ?? priceFromRecord(detail) ?? skuSellingPrice(
+    info.skus, info.sku_list, info.skuList,
+    detail.skus, detail.sku_list, detail.skuList,
+  );
   const images = imageUrls(
     info.head_imgs || info.headImgs || info.image_urls || info.imageUrls || info.img_urls || info.imgUrls
       || detail.head_imgs || detail.headImgs || detail.image_urls || detail.imageUrls || detail.img_urls || detail.imgUrls
@@ -88,7 +132,7 @@ export function parseLeagueProductSnapshot(value: unknown): LeagueProductSnapsho
   return {
     title: safeText(info.title || info.product_name || info.productName || detail.title || detail.product_name || detail.productName),
     imageUrls: images,
-    sellingPriceFen: safeNumber(info.selling_price ?? info.sellingPrice ?? info.sale_price ?? info.salePrice ?? info.min_price ?? info.minPrice ?? detail.selling_price ?? detail.sellingPrice ?? detail.sale_price ?? detail.salePrice ?? detail.min_price ?? detail.minPrice),
+    sellingPriceFen,
     shopAppid: safeText(detail.shop_appid || detail.shopAppid || info.shop_appid || info.shopAppid || shop.appid || shop.app_id || shop.appId),
     shopName: safeText(shop.name || shop.shop_name || shop.shopName || detail.shop_name || detail.shopName),
     shopScore: safeNumber(shop.score ?? shop.shop_score ?? shop.shopScore ?? detail.shop_score ?? detail.shopScore),

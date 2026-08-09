@@ -102,6 +102,30 @@ test("联盟商品详情保留快捷登记需要的名称、图片、价格和�
   });
 });
 
+test("联盟商品详情从多规格中读取最低实际售价", () => {
+  assert.equal(parseLeagueProductDetail({
+    product: {
+      title: "多规格商品",
+      head_imgs: ["https://example.com/sku.jpg"],
+      skus: [
+        { sale_price: 3990, market_price: 4990 },
+        { sale_price: 2990, market_price: 4590 },
+      ],
+    },
+  }).sellingPriceFen, 2990);
+});
+
+test("联盟商品详情兼容价格信息对象", () => {
+  assert.equal(parseLeagueProductDetail({
+    product: {
+      product_info: {
+        title: "价格区间商品",
+        price_info: { min_sale_price: "2590" },
+      },
+    },
+  }).sellingPriceFen, 2590);
+});
+
 test("快捷登记只要求人工选择最高优先级且同费率的机构", () => {
   const preferred = preferredLeaguePromotionCandidates([
     candidate({ accountId: "low", serviceRatio: 8000 }),
