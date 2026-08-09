@@ -25,7 +25,7 @@ export function StatusBadge({ status }: { status: string }) {
 export function ProductImage({ urls, alt, size = "medium" }: { urls?: string[] | null; alt: string; size?: "small" | "medium" | "large" }) {
   const src = Array.isArray(urls) ? urls[0] : null;
   if (!src) return <div className={`product-image image-${size} image-placeholder`}><ImageOff size={size === "small" ? 16 : 22} /></div>;
-  return <div className={`product-image image-${size}`}><img src={src} alt={alt} referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} /></div>;
+  return <div className={`product-image image-${size}`}><img src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.style.display = "none"; }} /></div>;
 }
 
 export function Pagination({ page, pageSize, total, onChange }: { page: number; pageSize: number; total: number; onChange: (page: number) => void }) {

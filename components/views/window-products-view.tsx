@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation";
 import { ArrowDownUp, ChevronDown, ExternalLink, Filter, PenLine, RefreshCw, Search, ShieldCheck, TriangleAlert, X } from "lucide-react";
 import { formatWindowServiceRatio } from "@/lib/window-registration";
 import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
-import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage } from "../ui";
+import { EmptyState, ErrorState, LoadingState, PageHeader, Pagination, ProductImage } from "../ui";
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
 type PromotionCandidate = { id: string; accountId: string; accountName: string; accountIsPrimary: boolean; headSupplierItemLink: string; promotionLink: string; serviceRatio?: number | null; commissionRatio?: number | null };
 type WindowProduct = { id: string; productId: string; promotionError?: string | null; promotionSyncedAt?: string | null; promotionStatus: "pending" | "selected" | "confirmed" | "needs_choice" | "needs_replacement"; promotionConfirmed?: boolean; promotionAccountName?: string | null; promotionCandidates: PromotionCandidate[]; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link?: string | null; registeredProductId?: string | null; registeredSku?: string | null; registeredProductUrl?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null; serviceRatio?: number | null };
 type LeagueState = { activeCount: number; hasPrimary: boolean };
+type WindowProductsData = { accounts: WindowAccount[]; products: WindowProduct[]; total: number; page: number; pageSize: number; leagueState: LeagueState };
+type WindowAccountStatus = Pick<WindowAccount, "id" | "syncStatus" | "syncError" | "syncedAt">;
 type SortField = "" | "price" | "score" | "eval";
 
 const fenToYuan = (fen?: number | null) => typeof fen === "number" ? (fen / 100).toFixed(2) : "";
@@ -30,7 +32,9 @@ export function WindowProductsView() {
   const router = useRouter();
   const toast = useToast();
   const [accountId, setAccountId] = useState(() => { try { return localStorage.getItem("huzhanggui:window-account") || ""; } catch { return ""; } });
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [sortField, setSortField] = useState<SortField>("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [priceRange, setPriceRange] = useState("");
@@ -39,80 +43,68 @@ export function WindowProductsView() {
   const [stockFilter, setStockFilter] = useState("");
   const [regFilter, setRegFilter] = useState("");
   const [confirmingCandidateId, setConfirmingCandidateId] = useState("");
-  const url = accountId ? `/api/window-products?accountId=${accountId}` : "/api/window-products";
-  const { data, loading, error, reload } = useRemote<{ accounts: WindowAccount[]; products: WindowProduct[]; leagueState: LeagueState }>(url);
+  const queryParams = new URLSearchParams({
+    search,
+    sortField,
+    sortDir,
+    priceRange,
+    scoreRange,
+    evalRange,
+    stockFilter,
+    regFilter,
+    page: String(page),
+    pageSize: "20",
+  });
+  if (accountId) queryParams.set("accountId", accountId);
+  const url = `/api/window-products?${queryParams.toString()}`;
+  const { data, loading, error, reload, setData } = useRemote<WindowProductsData>(url);
   const accounts = useMemo(() => data?.accounts || [], [data]);
   const products = useMemo(() => data?.products || [], [data]);
-  const pendingPromotions = useMemo(() => products.filter((item) => item.promotionStatus === "needs_choice" || item.promotionStatus === "needs_replacement"), [products]);
   const selectedId = accountId || accounts[0]?.id || "";
   const activeAccount = accounts.find((a) => a.id === selectedId) || null;
+  const { data: pendingData, reload: reloadPending } = useRemote<{ pendingPromotions: WindowProduct[] }>(selectedId ? `/api/window-products?pending=1&accountId=${encodeURIComponent(selectedId)}` : null);
+  const pendingPromotions = useMemo(() => pendingData?.pendingPromotions || [], [pendingData]);
 
   useEffect(() => { try { if (accountId) localStorage.setItem("huzhanggui:window-account", accountId); } catch { /* localStorage unavailable */ } }, [accountId]);
 
   useEffect(() => {
-    if (activeAccount?.syncStatus !== "syncing") return;
-    const timer = window.setInterval(() => void reload(), 4000);
-    return () => window.clearInterval(timer);
-  }, [activeAccount?.syncStatus, reload]);
+    if (accountId && accounts.length && !accounts.some((account) => account.id === accountId)) setAccountId(accounts[0].id);
+  }, [accountId, accounts]);
 
-  const filteredProducts = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    let list = keyword
-      ? products.filter((item) =>
-          (item.title || "").toLowerCase().includes(keyword) ||
-          item.productId.includes(keyword) ||
-          (item.shopName || "").toLowerCase().includes(keyword) ||
-          (item.link || "").toLowerCase().includes(keyword))
-      : [...products];
-    if (priceRange) {
-      list = list.filter((item) => {
-        const f = (item.sellingPriceFen ?? 0) / 100;
-        if (priceRange === "lt10") return f < 10;
-        if (priceRange === "10to50") return f >= 10 && f < 50;
-        if (priceRange === "50to100") return f >= 50 && f < 100;
-        if (priceRange === "gt100") return f >= 100;
-        return true;
-      });
-    }
-    if (scoreRange) {
-      list = list.filter((item) => {
-        const s = item.shopScore;
-        if (scoreRange === "gte45") return s != null && s >= 450;
-        if (scoreRange === "40to45") return s != null && s >= 400 && s < 450;
-        if (scoreRange === "lt40") return s != null && s < 400;
-        if (scoreRange === "none") return s == null;
-        return true;
-      });
-    }
-    if (evalRange) {
-      list = list.filter((item) => {
-        const r = item.goodEvaluationRatio;
-        if (evalRange === "gte90") return r != null && r >= 90000;
-        if (evalRange === "80to90") return r != null && r >= 80000 && r < 90000;
-        if (evalRange === "lt80") return r != null && r < 80000;
-        if (evalRange === "none") return r == null;
-        return true;
-      });
-    }
-    if (stockFilter) {
-      list = list.filter((item) => stockFilter === "has" ? (item.stock ?? 0) > 0 : (item.stock ?? 0) === 0);
-    }
-    if (regFilter) {
-      list = list.filter((item) => regFilter === "yes" ? Boolean(item.registeredProductId) : !item.registeredProductId);
-    }
-    if (sortField && sortDir) {
-      list.sort((a, b) => {
-        let va = 0; let vb = 0;
-        if (sortField === "price") { va = a.sellingPriceFen ?? 0; vb = b.sellingPriceFen ?? 0; }
-        else if (sortField === "score") { va = a.shopScore ?? 0; vb = b.shopScore ?? 0; }
-        else if (sortField === "eval") { va = a.goodEvaluationRatio ?? 0; vb = b.goodEvaluationRatio ?? 0; }
-        return sortDir === "asc" ? va - vb : vb - va;
-      });
-    }
-    return list;
-  }, [products, search, sortField, sortDir, priceRange, scoreRange, evalRange, stockFilter, regFilter]);
+  useEffect(() => { setPage(1); }, [accountId, sortField, sortDir, priceRange, scoreRange, evalRange, stockFilter, regFilter]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  useEffect(() => {
+    if (activeAccount?.syncStatus !== "syncing" || !selectedId) return;
+    let checking = false;
+    const checkStatus = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const result = await apiFetch<{ account: WindowAccountStatus | null }>(`/api/window-products?status=1&accountId=${encodeURIComponent(selectedId)}`);
+        const status = result.account;
+        if (!status) return;
+        if (status.syncStatus === "syncing") {
+          setData((current) => current ? { ...current, accounts: current.accounts.map((account) => account.id === status.id ? { ...account, ...status } : account) } : current);
+        } else {
+          await Promise.all([reload(), reloadPending()]);
+        }
+      } catch { /* 下一轮继续检查，不影响当前本地列表 */ }
+      finally { checking = false; }
+    };
+    const timer = window.setInterval(() => void checkStatus(), 4000);
+    return () => window.clearInterval(timer);
+  }, [activeAccount?.syncStatus, reload, reloadPending, selectedId, setData]);
 
   function toggleSort(field: SortField) {
+    setPage(1);
     if (sortField === field) {
       if (sortDir === "asc") setSortDir("desc");
       else { setSortField(""); setSortDir("asc"); }
@@ -137,7 +129,7 @@ export function WindowProductsView() {
     try {
       await apiFetch(`/api/talent-accounts/${selectedId}/sync`, { method: "POST" });
       toast("已开始同步橱窗商品和机构推广链接");
-      setTimeout(() => reload(), 2000);
+      setData((current) => current ? { ...current, accounts: current.accounts.map((account) => account.id === selectedId ? { ...account, syncStatus: "syncing", syncError: null } : account) } : current);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "同步失败", "error"); }
   }
 
@@ -153,7 +145,7 @@ export function WindowProductsView() {
     try {
       await apiFetch("/api/window-products", { method: "POST", body: JSON.stringify({ windowProductId: product.id, candidateId: candidate.id }) });
       toast(product.promotionStatus === "needs_replacement" ? "机构推广链接已确认并更新" : "机构推广链接已确认");
-      await reload();
+      await Promise.all([reload(), reloadPending()]);
     } catch (reason) { toast(reason instanceof Error ? reason.message : "确认失败", "error"); }
     finally { setConfirmingCandidateId(""); }
   }
@@ -202,7 +194,7 @@ export function WindowProductsView() {
       {!accounts.length && !loading ? <EmptyState title="尚未配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥后，再回来查看。" /> : <>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", flex: 1 }}>
           <select value={selectedId} onChange={(event) => setAccountId(event.target.value)} style={{ minWidth: 200 }}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.name}（{account.productCount} 件）</option>)}</select>
-          <div className="search-box" style={{ flex: 1, minWidth: 180, maxWidth: 320 }}><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索商品名称、ID、店铺或链接" /></div>
+          <div className="search-box" style={{ flex: 1, minWidth: 180, maxWidth: 320 }}><Search size={17} /><input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="搜索商品名称、ID、店铺或链接" /></div>
           <details className="price-filter"><summary><ArrowDownUp size={15} /><span>{sortLabel()}</span><ChevronDown size={14} /></summary><div className="price-filter-menu"><header><b>排序</b></header><div className="price-sort"><span>售价</span><button type="button" className={sortField !== "price" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "price" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "price" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("price"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>好评率</span><button type="button" className={sortField !== "eval" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "eval" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "eval" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("eval"); setSortDir("desc"); }}>高→低</button></div><div className="price-sort"><span>店铺评分</span><button type="button" className={sortField !== "score" ? "selected" : ""} onClick={() => { setSortField(""); setSortDir("asc"); }}>默认</button><button type="button" className={sortField === "score" && sortDir === "asc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("asc"); }}>低→高</button><button type="button" className={sortField === "score" && sortDir === "desc" ? "selected" : ""} onClick={() => { setSortField("score"); setSortDir("desc"); }}>高→低</button></div></div></details>{(() => { const priceLabel = { lt10: "¥10以下", "10to50": "¥10–50", "50to100": "¥50–100", gt100: "¥100以上" }[priceRange] || "售价"; return <details className="price-filter"><summary><Filter size={14} /><span>{priceLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 180 }}><header><b>售价</b>{priceRange && <button type="button" onClick={() => setPriceRange("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "lt10", l: "¥10 以下" }, { k: "10to50", l: "¥10 – 50" }, { k: "50to100", l: "¥50 – 100" }, { k: "gt100", l: "¥100 以上" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-price" checked={priceRange === opt.k} onChange={() => setPriceRange(priceRange === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const scoreLabel = { gte45: "≥4.5", "40to45": "4.0–4.5", lt40: "<4.0", none: "暂无" }[scoreRange] || "评分"; return <details className="price-filter"><summary><Filter size={14} /><span>{scoreLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 180 }}><header><b>评分</b>{scoreRange && <button type="button" onClick={() => setScoreRange("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "gte45", l: "4.5 分以上" }, { k: "40to45", l: "4.0 – 4.5" }, { k: "lt40", l: "4.0 分以下" }, { k: "none", l: "暂无评分" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-score" checked={scoreRange === opt.k} onChange={() => setScoreRange(scoreRange === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const evalLabel = { gte90: "≥90%", "80to90": "80–90%", lt80: "<80%", none: "暂无" }[evalRange] || "好评率"; return <details className="price-filter"><summary><Filter size={14} /><span>{evalLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 180 }}><header><b>好评率</b>{evalRange && <button type="button" onClick={() => setEvalRange("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "gte90", l: "90% 以上" }, { k: "80to90", l: "80% – 90%" }, { k: "lt80", l: "80% 以下" }, { k: "none", l: "暂无数据" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-eval" checked={evalRange === opt.k} onChange={() => setEvalRange(evalRange === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const stockLabel = { has: "有库存", empty: "无库存" }[stockFilter] || "库存"; return <details className="price-filter"><summary><Filter size={14} /><span>{stockLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 150 }}><header><b>库存</b>{stockFilter && <button type="button" onClick={() => setStockFilter("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "has", l: "有库存" }, { k: "empty", l: "无库存" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-stock" checked={stockFilter === opt.k} onChange={() => setStockFilter(stockFilter === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}{(() => { const regLabel = { yes: "已登记", no: "未登记" }[regFilter] || "登记"; return <details className="price-filter"><summary><Filter size={14} /><span>{regLabel}</span><ChevronDown size={14} /></summary><div className="price-filter-menu" style={{ width: 150 }}><header><b>登记</b>{regFilter && <button type="button" onClick={() => setRegFilter("")}><X size={14} /></button>}</header><div className="price-option-list">{[{ k: "yes", l: "已登记" }, { k: "no", l: "未登记" }].map((opt) => <label key={opt.k}><input type="radio" name="filter-reg" checked={regFilter === opt.k} onChange={() => setRegFilter(regFilter === opt.k ? "" : opt.k)} />{opt.l}</label>)}</div></div></details>; })()}
           <span style={{ fontSize: 12, color: "var(--muted)" }}>{activeAccount ? `${activeAccount.syncStatus === "syncing" ? "正在同步橱窗与评分数据…" : activeAccount.syncedAt ? `最近同步：${formatDate(activeAccount.syncedAt, true)}` : "橱窗尚未同步"}` : ""}{activeAccount?.syncStatus === "failed" && activeAccount.syncError ? ` · 失败：${activeAccount.syncError}` : ""}</span>
         </div>
@@ -218,7 +210,7 @@ export function WindowProductsView() {
       </article>)}</div>
     </section>}
     <section className="panel table-panel">
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !accounts.length ? <EmptyState title="请先配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥。" /> : !products.length ? <EmptyState title="橱窗商品为空" description="请点击右上角「同步橱窗」从微信拉取数据。" /> : <div className="data-table-wrap"><table className="data-table">
+      {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !accounts.length ? <EmptyState title="请先配置带货账号" description="请超管在「系统管理 → 带货账号」添加微信小店带货助手的 AppID 与密钥。" /> : !products.length ? <EmptyState title={search || priceRange || scoreRange || evalRange || stockFilter || regFilter ? "没有找到符合条件的商品" : "橱窗商品为空"} description={search || priceRange || scoreRange || evalRange || stockFilter || regFilter ? "试试更换搜索词或筛选条件。" : "请点击右上角「同步橱窗」从微信拉取数据。"} /> : <><div className="data-table-wrap"><table className="data-table">
         <thead><tr>
           <th>商品</th>
           <th>店铺 / 评分</th>
@@ -229,7 +221,7 @@ export function WindowProductsView() {
           <th>链接</th>
           <th>操作</th>
         </tr></thead>
-        <tbody>{filteredProducts.map((item) => <tr key={item.id}>
+        <tbody>{products.map((item) => <tr key={item.id}>
           <td><div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <ProductImage urls={item.imgUrl ? [item.imgUrl] : []} alt={item.title || "橱窗商品"} size="small" />
             <div style={{ minWidth: 0 }}>
@@ -248,7 +240,7 @@ export function WindowProductsView() {
           </div></td>
           <td>{item.registeredProductId ? <span style={{ fontSize: 13 }}>{item.registeredSku || "已登记"}</span> : <button type="button" className="button button-primary button-compact" style={{ fontSize: 12 }} disabled={!item.title || !item.imgUrl} onClick={() => startRegistration(item)}><PenLine size={13} />登记</button>}</td>
         </tr>)}</tbody>
-      </table></div>}
+      </table></div><Pagination page={data?.page || page} pageSize={data?.pageSize || 20} total={data?.total || 0} onChange={setPage} /></>}
     </section>
      <section className="panel" style={{ padding: 20 }}>
        <p style={{ fontSize: 13, color: "var(--muted)" }}><ShieldCheck size={14} style={{ marginRight: 4 }} />橱窗同步会逐一查询全部已启用的联盟机构账号。主账号结果优先；主账号失败时按实时服务费率选择。未获得机构推广链接的商品仍可人工登记，但链接保持为空并标记待确认，不会使用达人原始链接冒充机构链接。</p>

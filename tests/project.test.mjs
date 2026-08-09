@@ -518,6 +518,10 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(productsRoute, /coalesce\(w\.out_product_id, w\.product_id\)/);
   assert.match(productsRoute, /LEFT JOIN product_api_ids pai/);
   assert.match(productsRoute, /pai\.value = coalesce\(w\.out_product_id, w\.product_id\)/);
+  assert.match(productsRoute, /LIMIT \$\{pageSize\} OFFSET \$\{offset\}/);
+  assert.match(productsRoute, /pendingPromotions/);
+  assert.match(productsRoute, /params\.get\("status"\) === "1"/);
+  assert.match(productsRoute, /'\[\]'::json AS promotion_candidates/);
   assert.doesNotMatch(productsRoute, /FROM products candidate_product/);
   assert.doesNotMatch(productsRoute, /candidate_product\.product_url = w\.promotion_link/);
   assert.doesNotMatch(productsRoute, /id_type/);
@@ -545,9 +549,15 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(windowView, /startRegistration/);
   assert.match(windowView, /goodEvaluationRatio/);
   assert.match(windowView, /shopScore/);
+  assert.match(windowView, /<Pagination page=/);
+  assert.match(windowView, /status=1&accountId=/);
+  assert.doesNotMatch(windowView, /filteredProducts/);
   assert.match(windowView, /supplyChain: ""/);
   assert.doesNotMatch(windowView, /supplyChain: product\.promotionAccountName/);
   assert.doesNotMatch(windowView, /outProductId|apiOutProductId|promotionProductId/);
+  const listPerformanceMigration = await readFile(new URL("../migrations/028_window_product_list_performance.sql", import.meta.url), "utf8");
+  assert.match(listPerformanceMigration, /talent_window_products_account_synced_product_idx/);
+  assert.match(listPerformanceMigration, /talent_window_products_pending_promotion_idx/);
   const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/productdetail\/get/);
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/cooperativeitem\/list\/get/);
