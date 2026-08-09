@@ -4,6 +4,7 @@ import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 const API_BASE = "https://api.weixin.qq.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const QUALITY_CONCURRENCY = 10;
+const COOPERATIVE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 function safeText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -334,6 +335,7 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
 export type CooperativeItem = LeagueProductSnapshot & { productId: string; link: string };
 
 export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, CooperativeItem[]>> {
+  await getLeagueAccessToken(account);
   const links = new Map<string, CooperativeItem[]>();
   const add = (key: string | null, item: CooperativeItem) => {
     if (!key) return;
@@ -341,7 +343,8 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
     if (!current.some((entry) => entry.link === item.link)) current.push(item);
     links.set(key, current);
   };
-  for (const commissionType of [0, 1]) {
+  const itemGroups = await Promise.all([0, 1].map(async (commissionType) => {
+    const items: CooperativeItem[] = [];
     let nextKey = "";
     for (let page = 0; page < 500; page += 1) {
       const payload = await callLeagueApi<{
@@ -357,16 +360,101 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
         const productId = safeText(item.product_id);
         const link = safeText(item.head_supplier_item_link);
         if (productId && link) {
-          const cooperativeItem = { productId, link, ...parseLeagueProductSnapshot(item) };
-          add(productId, cooperativeItem);
+          items.push({ productId, link, ...parseLeagueProductSnapshot(item) });
         }
       }
       const next = safeText(payload.next_key);
       if (!next || next === nextKey || list.length === 0) break;
       nextKey = next;
     }
-  }
+    return items;
+  }));
+  for (const item of itemGroups.flat()) add(item.productId, item);
   return links;
+}
+
+async function saveLeagueCooperativeItemCache(accountId: string, items: Map<string, CooperativeItem[]>) {
+  const sql = getDb();
+  const rows = Array.from(items.values()).flat();
+  await sql.begin(async (tx) => {
+    await tx`DELETE FROM league_cooperative_item_cache WHERE league_account_id = ${accountId}`;
+    if (rows.length) await tx`
+      INSERT INTO league_cooperative_item_cache(
+        league_account_id, product_id, head_supplier_item_link, title, image_urls,
+        selling_price_fen, shop_appid, shop_name, shop_score, shop_icon, good_evaluation_ratio, synced_at
+      )
+      SELECT ${accountId}::uuid, cached.product_id, cached.head_supplier_item_link, cached.title,
+             cached.image_urls::jsonb, cached.selling_price_fen, cached.shop_appid, cached.shop_name,
+             cached.shop_score, cached.shop_icon, cached.good_evaluation_ratio, now()
+      FROM unnest(
+        ${rows.map((item) => item.productId)}::text[],
+        ${rows.map((item) => item.link)}::text[],
+        ${rows.map((item) => item.title)}::text[],
+        ${rows.map((item) => JSON.stringify(item.imageUrls || []))}::text[],
+        ${rows.map((item) => item.sellingPriceFen)}::integer[],
+        ${rows.map((item) => item.shopAppid)}::text[],
+        ${rows.map((item) => item.shopName)}::text[],
+        ${rows.map((item) => item.shopScore)}::integer[],
+        ${rows.map((item) => item.shopIcon)}::text[],
+        ${rows.map((item) => item.goodEvaluationRatio)}::integer[]
+      ) AS cached(
+        product_id, head_supplier_item_link, title, image_urls, selling_price_fen,
+        shop_appid, shop_name, shop_score, shop_icon, good_evaluation_ratio
+      )
+    `;
+    await tx`
+      INSERT INTO league_cooperative_cache_state(league_account_id, item_count, synced_at)
+      VALUES (${accountId}, ${rows.length}, now())
+      ON CONFLICT (league_account_id) DO UPDATE
+      SET item_count = excluded.item_count, synced_at = excluded.synced_at
+    `;
+  });
+}
+
+const cooperativeCacheRefreshes = new Map<string, Promise<Map<string, CooperativeItem[]>>>();
+
+export function refreshLeagueCooperativeItemCache(account: LeagueAccountRow): Promise<Map<string, CooperativeItem[]>> {
+  const running = cooperativeCacheRefreshes.get(account.id);
+  if (running) return running;
+  const refresh = (async () => {
+    const items = await fetchLeagueCooperativeItemLinks(account);
+    await saveLeagueCooperativeItemCache(account.id, items);
+    return items;
+  })();
+  cooperativeCacheRefreshes.set(account.id, refresh);
+  refresh.then(
+    () => cooperativeCacheRefreshes.delete(account.id),
+    () => cooperativeCacheRefreshes.delete(account.id),
+  );
+  return refresh;
+}
+
+async function loadCachedLeagueCooperativeItems(accountId: string, productId: string) {
+  const sql = getDb();
+  const [stateRows, rows] = await Promise.all([
+    sql`SELECT synced_at FROM league_cooperative_cache_state WHERE league_account_id = ${accountId}`,
+    sql`
+      SELECT product_id, head_supplier_item_link, title, image_urls, selling_price_fen,
+             shop_appid, shop_name, shop_score, shop_icon, good_evaluation_ratio
+      FROM league_cooperative_item_cache
+      WHERE league_account_id = ${accountId} AND product_id = ${productId}
+      ORDER BY head_supplier_item_link
+    `,
+  ]);
+  const syncedAt = stateRows[0]?.syncedAt ? new Date(String(stateRows[0].syncedAt)).getTime() : 0;
+  const items = rows.map((row) => ({
+    productId: String(row.productId),
+    link: String(row.headSupplierItemLink),
+    title: safeText(row.title),
+    imageUrls: imageUrls(row.imageUrls),
+    sellingPriceFen: safeNumber(row.sellingPriceFen),
+    shopAppid: safeText(row.shopAppid),
+    shopName: safeText(row.shopName),
+    shopScore: safeNumber(row.shopScore),
+    shopIcon: safeText(row.shopIcon),
+    goodEvaluationRatio: safeNumber(row.goodEvaluationRatio),
+  } satisfies CooperativeItem));
+  return { items, fresh: syncedAt > 0 && syncedAt >= Date.now() - COOPERATIVE_CACHE_TTL_MS };
 }
 
 export async function loadActiveLeagueAccounts(): Promise<LeagueAccountRow[]> {
@@ -435,53 +523,102 @@ export function selectLeaguePromotionCandidate(candidates: LeaguePromotionCandid
   };
 }
 
-export async function lookupLeagueProductCandidates(productId: string): Promise<{ candidates: LeagueProductLookupCandidate[]; errors: string[]; accountCount: number }> {
-  const accounts = await loadActiveLeagueAccounts();
-  const results = await Promise.all(accounts.map(async (account) => {
-    let cooperative: Map<string, CooperativeItem[]>;
+async function resolveLeagueLookupMatches(account: LeagueAccountRow, productId: string, matches: CooperativeItem[]) {
+  const errors: string[] = [];
+  const candidates: LeagueProductLookupCandidate[] = [];
+  for (const match of uniqueCooperativeItems(matches)) {
     try {
-      cooperative = await fetchLeagueCooperativeItemLinks(account);
-    } catch (error) {
-      return { candidates: [] as LeagueProductLookupCandidate[], errors: [`${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`] };
-    }
-    const matches = uniqueCooperativeItems(cooperative.get(productId) || []);
-    if (!matches.length) return { candidates: [] as LeagueProductLookupCandidate[], errors: [] as string[] };
-    const candidates: LeagueProductLookupCandidate[] = [];
-    const errors: string[] = [];
-    for (const match of matches) {
-      try {
-        const promotion = await fetchLeagueItemPromotion(account, match.link);
-        const preliminary = mergeLeagueProductSnapshots(promotion.product, match);
-        let detail: LeagueProductSnapshot | null = null;
-        if (preliminary.shopAppid) {
-          try { detail = await fetchLeagueProductDetail(account, preliminary.shopAppid, productId); }
-          catch (error) { errors.push(`${account.name}：${error instanceof Error ? error.message : "商品详情获取失败"}`); }
-        }
-        const product = mergeLeagueProductSnapshots(detail, promotion.product, match);
-        candidates.push({
-          promotionLink: promotion.promotionLink || match.link,
-          commissionRatio: promotion.commissionRatio,
-          normalCommissionRatio: promotion.normalCommissionRatio,
-          serviceRatio: promotion.serviceRatio,
-          commissionType: promotion.commissionType,
-          planType: promotion.planType,
-          accountId: account.id,
-          accountName: account.name,
-          accountIsPrimary: Boolean(account.isPrimary),
-          headSupplierItemLink: match.link,
-          error: null,
-          ...product,
-        });
-      } catch (error) {
-        errors.push(`${account.name}：${error instanceof Error ? error.message : "推广详情接口调用失败"}`);
+      const promotion = await fetchLeagueItemPromotion(account, match.link);
+      const preliminary = mergeLeagueProductSnapshots(promotion.product, match);
+      let detail: LeagueProductSnapshot | null = null;
+      if (preliminary.shopAppid) {
+        try { detail = await fetchLeagueProductDetail(account, preliminary.shopAppid, productId); }
+        catch (error) { errors.push(`${account.name}：${error instanceof Error ? error.message : "商品详情获取失败"}`); }
       }
+      const product = mergeLeagueProductSnapshots(detail, promotion.product, match);
+      candidates.push({
+        promotionLink: promotion.promotionLink || match.link,
+        commissionRatio: promotion.commissionRatio,
+        normalCommissionRatio: promotion.normalCommissionRatio,
+        serviceRatio: promotion.serviceRatio,
+        commissionType: promotion.commissionType,
+        planType: promotion.planType,
+        accountId: account.id,
+        accountName: account.name,
+        accountIsPrimary: Boolean(account.isPrimary),
+        headSupplierItemLink: match.link,
+        error: null,
+        ...product,
+      });
+    } catch (error) {
+      errors.push(`${account.name}：${error instanceof Error ? error.message : "推广详情接口调用失败"}`);
     }
-    return { candidates, errors };
-  }));
+  }
+  return { candidates, errors };
+}
+
+async function lookupLeagueAccountProductCandidates(account: LeagueAccountRow, productId: string) {
+  const cached = await loadCachedLeagueCooperativeItems(account.id, productId);
+  let matches = cached.items;
+  let refreshed = false;
+  let refreshError: string | null = null;
+  if (!cached.fresh && !matches.length) {
+    try {
+      const cooperative = await refreshLeagueCooperativeItemCache(account);
+      matches = cooperative.get(productId) || [];
+      refreshed = true;
+    } catch (error) {
+      refreshError = `${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`;
+    }
+  }
+  let resolved = await resolveLeagueLookupMatches(account, productId, matches);
+  // A cached link can be removed or replaced. Refresh the catalog once only when live validation fails.
+  if (matches.length && !resolved.candidates.length && !refreshed) {
+    try {
+      const cooperative = await refreshLeagueCooperativeItemCache(account);
+      matches = cooperative.get(productId) || [];
+      refreshed = true;
+      resolved = await resolveLeagueLookupMatches(account, productId, matches);
+    } catch (error) {
+      refreshError = `${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`;
+    }
+  }
+  return {
+    candidates: resolved.candidates,
+    errors: [...(refreshError ? [refreshError] : []), ...resolved.errors],
+    cacheHit: !refreshed && (cached.fresh || cached.items.length > 0),
+    refreshed,
+  };
+}
+
+export async function lookupLeagueProductCandidates(productId: string): Promise<{
+  candidates: LeagueProductLookupCandidate[];
+  errors: string[];
+  accountCount: number;
+  cacheHits: number;
+  refreshedAccounts: number;
+}> {
+  const accounts = await loadActiveLeagueAccounts();
+  const primary = accounts.find((account) => account.isPrimary) || null;
+  const others = primary ? accounts.filter((account) => account.id !== primary.id) : accounts;
+  const primaryResult = primary ? await lookupLeagueAccountProductCandidates(primary, productId) : null;
+  if (primaryResult?.candidates.length) {
+    return {
+      candidates: primaryResult.candidates,
+      errors: primaryResult.errors,
+      accountCount: accounts.length,
+      cacheHits: primaryResult.cacheHit ? 1 : 0,
+      refreshedAccounts: primaryResult.refreshed ? 1 : 0,
+    };
+  }
+  const otherResults = await Promise.all(others.map((account) => lookupLeagueAccountProductCandidates(account, productId)));
+  const results = [...(primaryResult ? [primaryResult] : []), ...otherResults];
   return {
     candidates: results.flatMap((result) => result.candidates),
     errors: results.flatMap((result) => result.errors),
     accountCount: accounts.length,
+    cacheHits: results.filter((result) => result.cacheHit).length,
+    refreshedAccounts: results.filter((result) => result.refreshed).length,
   };
 }
 
@@ -494,7 +631,7 @@ export async function resolveLeaguePromotionCandidates(
     const errors: string[] = [];
     let cooperative = cooperativeItems?.[accountIndex];
     if (!cooperative) {
-      try { cooperative = await fetchLeagueCooperativeItemLinks(account); }
+      try { cooperative = await refreshLeagueCooperativeItemCache(account); }
       catch (error) {
         return { candidates: [] as LeaguePromotionCandidate[], errors: [`${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`] };
       }
@@ -572,7 +709,7 @@ export async function syncWindowPromotions(talentAccountId: string) {
   }
   const cooperativeLoads = await Promise.all(accounts.map(async (account) => {
     try {
-      return { items: await fetchLeagueCooperativeItemLinks(account), error: null };
+      return { items: await refreshLeagueCooperativeItemCache(account), error: null };
     } catch (error) {
       return { items: new Map<string, CooperativeItem[]>(), error: `${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}` };
     }
@@ -749,7 +886,7 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   const errors: string[] = [];
   let itemLinks = new Map<string, CooperativeItem[]>();
   try {
-    itemLinks = await fetchLeagueCooperativeItemLinks(leagueAccount);
+    itemLinks = await refreshLeagueCooperativeItemCache(leagueAccount);
   } catch (error) {
     errors.push(error instanceof Error ? error.message : "合作商品列表获取失败");
   }

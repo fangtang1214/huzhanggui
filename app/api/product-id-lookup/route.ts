@@ -78,6 +78,7 @@ export async function POST(request: Request) {
   try {
     const user = await requireUser("products:create");
     const input = schema.parse(await readJson(request));
+    const lookupStartedAt = Date.now();
     const [existingProduct, windowFallback, lookup] = await Promise.all([
       loadExistingProduct(input.outProductId),
       loadWindowFallback(input.outProductId),
@@ -93,7 +94,12 @@ export async function POST(request: Request) {
         : lookup.errors.length
           ? `联盟机构未能返回该商品：${lookup.errors[0]}`
           : "所有已启用的联盟机构账号中都未找到该商品 ID";
-      await writeAudit(user, "product_id.lookup_not_found", "product_api_id", input.outProductId, `快捷登记未找到商品 ID ${input.outProductId}`, { errors: lookup.errors.slice(0, 5) }, requestIp(request));
+      await writeAudit(user, "product_id.lookup_not_found", "product_api_id", input.outProductId, `快捷登记未找到商品 ID ${input.outProductId}`, {
+        cacheHits: lookup.cacheHits,
+        refreshedAccounts: lookup.refreshedAccounts,
+        durationMs: Date.now() - lookupStartedAt,
+        errors: lookup.errors.slice(0, 5),
+      }, requestIp(request));
       return Response.json({ ok: false, message }, { status: 404 });
     }
 
@@ -116,7 +122,14 @@ export async function POST(request: Request) {
       "product_api_id",
       input.outProductId,
       `快捷登记查询商品 ID ${input.outProductId}${existingProduct ? "，已关联现有商品" : ""}`,
-      { candidateCount: candidates.length, requiresChoice: choices.length > 1, errors: lookup.errors.slice(0, 5) },
+      {
+        candidateCount: candidates.length,
+        requiresChoice: choices.length > 1,
+        cacheHits: lookup.cacheHits,
+        refreshedAccounts: lookup.refreshedAccounts,
+        durationMs: Date.now() - lookupStartedAt,
+        errors: lookup.errors.slice(0, 5),
+      },
       requestIp(request),
     );
     return ok({

@@ -612,13 +612,27 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(route, /lookupLeagueProductCandidates\(input\.outProductId\)/);
   assert.match(route, /preferredLeaguePromotionCandidates/);
   assert.match(route, /existingProduct/);
+  assert.match(route, /cacheHits: lookup\.cacheHits/);
+  assert.match(route, /refreshedAccounts: lookup\.refreshedAccounts/);
   assert.doesNotMatch(route, /INSERT INTO talent_window_products/);
 
   const league = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(league, /export async function lookupLeagueProductCandidates/);
   assert.match(league, /fetchLeagueCooperativeItemLinks\(account\)/);
+  assert.match(league, /COOPERATIVE_CACHE_TTL_MS/);
+  assert.match(league, /refreshLeagueCooperativeItemCache/);
+  assert.match(league, /loadCachedLeagueCooperativeItems/);
+  assert.match(league, /Promise\.all\(\[0, 1\]\.map/);
+  assert.match(league, /if \(primaryResult\?\.candidates\.length\)/);
+  assert.match(league, /!cached\.fresh && !matches\.length/);
+  assert.match(league, /cached link can be removed or replaced/);
   assert.match(league, /fetchLeagueItemPromotion\(account, match\.link\)/);
   assert.match(league, /fetchLeagueProductDetail\(account, preliminary\.shopAppid, productId\)/);
+
+  const cacheMigration = await readFile(new URL("../migrations/029_league_cooperative_item_cache.sql", import.meta.url), "utf8");
+  assert.match(cacheMigration, /CREATE TABLE IF NOT EXISTS league_cooperative_item_cache/);
+  assert.match(cacheMigration, /PRIMARY KEY \(league_account_id, product_id, head_supplier_item_link\)/);
+  assert.match(cacheMigration, /CREATE TABLE IF NOT EXISTS league_cooperative_cache_state/);
 
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /选择登记方式/);

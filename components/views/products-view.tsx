@@ -662,8 +662,8 @@ export function ProductFormView({ id }: { id?: string }) {
     {error && <div className="form-error page-form-error">{error}</div>}
     <form className="panel product-id-lookup-card" onSubmit={lookupProductId}>
       <span className="product-id-lookup-icon"><Hash size={30} /></span>
-      <div className="product-id-lookup-copy"><h2>货源商品 ID</h2><p>填写微信接口中的 out_product_id，不要求商品已经在达人橱窗中。</p></div>
-      <div className="product-id-lookup-row"><input autoFocus value={productIdInput} onChange={(event) => setProductIdInput(event.target.value)} placeholder="请输入 out_product_id" autoCapitalize="none" spellCheck={false} /><button className="button button-primary" disabled={productIdLooking || !productIdInput.trim()}>{productIdLooking ? <><LoaderCircle className="spin" size={17} />正在查询全部机构…</> : <><Search size={17} />获取商品资料</>}</button></div>
+      <div className="product-id-lookup-copy"><h2>货源商品 ID</h2><p>填写微信接口中的 out_product_id，不要求商品已经在达人橱窗中。系统优先查询主机构，首次使用时可能需要同步机构商品目录。</p></div>
+      <div className="product-id-lookup-row"><input autoFocus value={productIdInput} onChange={(event) => setProductIdInput(event.target.value)} placeholder="请输入 out_product_id" autoCapitalize="none" spellCheck={false} /><button className="button button-primary" disabled={productIdLooking || !productIdInput.trim()}>{productIdLooking ? <><LoaderCircle className="spin" size={17} />正在查询机构商品…</> : <><Search size={17} />获取商品资料</>}</button></div>
       {draftCandidate?.form.apiProductId && <div className="product-id-draft-resume"><div><b>发现上次未完成的商品 ID 登记</b><small>{draftCandidate.form.apiProductId} · 保存于 {formatDate(new Date(draftCandidate.savedAt), true)}</small></div><button type="button" className="button button-secondary button-compact" onClick={continueProductIdDraft}>继续上次登记</button></div>}
       {error && <div className="product-id-lookup-actions"><button type="button" className="button button-secondary" onClick={() => selectRegistrationMode("manual")}><FilePenLine size={16} />改为手动填写资料</button></div>}
     </form>
