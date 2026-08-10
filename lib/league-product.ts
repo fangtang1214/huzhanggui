@@ -293,6 +293,15 @@ export type LeagueItemPromotion = {
   product: LeagueProductSnapshot;
 };
 
+export type LeaguePromotionLinkType = "merchant_assigned" | "institution_assigned";
+
+type InstitutionPromotionLink = {
+  link: string;
+  subItemId: string | null;
+  ratio: number | null;
+  ratioExt: number | null;
+};
+
 export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSupplierItemLink: string): Promise<LeagueItemPromotion> {
   const payload = await callLeagueApi<{
     item?: {
@@ -331,7 +340,86 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
   };
 }
 
-export type CooperativeItem = Partial<LeagueProductSnapshot> & { productId: string; link: string };
+export async function fetchLeagueInstitutionPromotionLinks(account: LeagueAccountRow, cooperativeItemId: string): Promise<InstitutionPromotionLink[]> {
+  const numericId = Number(cooperativeItemId);
+  if (!Number.isFinite(numericId) || numericId <= 0) throw new Error("机构合作计划 ID 无效");
+  const results: InstitutionPromotionLink[] = [];
+  let nextKey = "";
+  const seenKeys = new Set<string>();
+  while (true) {
+    const payload = await callLeagueApi<{
+      list?: Array<{
+        sub_item_id?: number | string;
+        head_supplier_item_link?: string;
+        status?: number;
+        ratio?: number;
+        ratio_ext?: number;
+      }>;
+      next_key?: string;
+    }>(account, "/channels/ec/league/headsupplier/subitem/list/get", {
+      cooperative_item_id: numericId,
+      page_size: 20,
+      next_key: nextKey,
+    });
+    const list = Array.isArray(payload.list) ? payload.list : [];
+    for (const item of list) {
+      const link = safeText(item.head_supplier_item_link);
+      if (!link || (item.status !== undefined && Number(item.status) !== 1)) continue;
+      results.push({
+        link,
+        subItemId: safeText(item.sub_item_id),
+        ratio: typeof item.ratio === "number" ? item.ratio : null,
+        ratioExt: typeof item.ratio_ext === "number" ? item.ratio_ext : null,
+      });
+    }
+    const next = safeText(payload.next_key);
+    if (!next || seenKeys.has(next) || list.length === 0) break;
+    seenKeys.add(next);
+    nextKey = next;
+  }
+  return Array.from(new Map(results.map((item) => [item.link, item])).values());
+}
+
+export type CooperativeItem = Partial<LeagueProductSnapshot> & {
+  productId: string;
+  link: string;
+  promotionDetailLink: string;
+  linkType: LeaguePromotionLinkType;
+  cooperativeItemId: string | null;
+};
+
+async function cooperativeItemsFromApiItem(account: LeagueAccountRow, item: Record<string, unknown>, commissionType: number): Promise<CooperativeItem[]> {
+  const productId = safeText(item.product_id);
+  const promotionDetailLink = safeText(item.head_supplier_item_link);
+  if (!productId || !promotionDetailLink) return [];
+  const product = parseLeagueProductSnapshot(item);
+  const cooperativeItemId = safeText(item.cooperative_item_id ?? item.id);
+  if (commissionType === 0) {
+    return [{ productId, link: promotionDetailLink, promotionDetailLink, linkType: "merchant_assigned", cooperativeItemId, ...product }];
+  }
+  if (!cooperativeItemId) return [];
+  const subItems = await fetchLeagueInstitutionPromotionLinks(account, cooperativeItemId);
+  return subItems.map((subItem) => ({
+    productId,
+    link: subItem.link,
+    promotionDetailLink,
+    linkType: "institution_assigned" as const,
+    cooperativeItemId,
+    ...product,
+  }));
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index]);
+    }
+  }));
+  return results;
+}
 
 export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, CooperativeItem[]>> {
   await getLeagueAccessToken(account);
@@ -348,7 +436,7 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
     const seenKeys = new Set<string>();
     while (true) {
       const payload = await callLeagueApi<{
-        list?: Array<Record<string, unknown> & { product_id?: number | string; head_supplier_item_link?: string }>;
+        list?: Array<Record<string, unknown> & { product_id?: number | string; cooperative_item_id?: number | string; head_supplier_item_link?: string }>;
         next_key?: string;
       }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
         commission_type: commissionType,
@@ -356,13 +444,8 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
         next_key: nextKey,
       });
       const list = Array.isArray(payload.list) ? payload.list : [];
-      for (const item of list) {
-        const productId = safeText(item.product_id);
-        const link = safeText(item.head_supplier_item_link);
-        if (productId && link) {
-          items.push({ productId, link, ...parseLeagueProductSnapshot(item) });
-        }
-      }
+      const pageItems = await mapWithConcurrency(list, 5, (item) => cooperativeItemsFromApiItem(account, item, commissionType));
+      items.push(...pageItems.flat());
       const next = safeText(payload.next_key);
       if (!next || seenKeys.has(next) || list.length === 0) break;
       seenKeys.add(next);
@@ -381,12 +464,19 @@ async function saveLeagueCooperativeItemCache(accountId: string, items: Map<stri
   await sql.begin(async (tx) => {
     await tx`DELETE FROM league_cooperative_item_cache WHERE league_account_id = ${accountId}`;
     if (rows.length) await tx`
-      INSERT INTO league_cooperative_item_cache(league_account_id, product_id, head_supplier_item_link, synced_at)
-      SELECT ${accountId}::uuid, cached.product_id, cached.head_supplier_item_link, now()
+      INSERT INTO league_cooperative_item_cache(
+        league_account_id, product_id, head_supplier_item_link, promotion_detail_link,
+        link_type, cooperative_item_id, synced_at
+      )
+      SELECT ${accountId}::uuid, cached.product_id, cached.head_supplier_item_link,
+             cached.promotion_detail_link, cached.link_type, cached.cooperative_item_id, now()
       FROM unnest(
         ${rows.map((item) => item.productId)}::text[],
-        ${rows.map((item) => item.link)}::text[]
-      ) AS cached(product_id, head_supplier_item_link)
+        ${rows.map((item) => item.link)}::text[],
+        ${rows.map((item) => item.promotionDetailLink)}::text[],
+        ${rows.map((item) => item.linkType)}::text[],
+        ${rows.map((item) => item.cooperativeItemId)}::text[]
+      ) AS cached(product_id, head_supplier_item_link, promotion_detail_link, link_type, cooperative_item_id)
     `;
     await tx`
       INSERT INTO league_cooperative_cache_state(league_account_id, item_count, synced_at, sync_status, sync_error)
@@ -419,7 +509,7 @@ export function refreshLeagueCooperativeItemCache(account: LeagueAccountRow): Pr
 async function loadCachedLeagueCooperativeItems(accountId: string, productId: string) {
   const sql = getDb();
   const rows = await sql`
-    SELECT product_id, head_supplier_item_link
+    SELECT product_id, head_supplier_item_link, promotion_detail_link, link_type, cooperative_item_id
     FROM league_cooperative_item_cache
     WHERE league_account_id = ${accountId} AND product_id = ${productId}
     ORDER BY head_supplier_item_link
@@ -427,6 +517,9 @@ async function loadCachedLeagueCooperativeItems(accountId: string, productId: st
   const items = rows.map((row) => ({
     productId: String(row.productId),
     link: String(row.headSupplierItemLink),
+    promotionDetailLink: String(row.promotionDetailLink),
+    linkType: row.linkType as LeaguePromotionLinkType,
+    cooperativeItemId: row.cooperativeItemId ? String(row.cooperativeItemId) : null,
   } satisfies CooperativeItem));
   return items;
 }
@@ -446,14 +539,13 @@ async function fetchLeagueCooperativeProductMatches(account: LeagueAccountRow, p
     if (!(await reservePrimaryProductScan(account.id, productId))) {
       return { matches: [], limited: true } satisfies TargetedCooperativeScanResult;
     }
-    let found = false;
     const groups = await Promise.all([0, 1].map(async (commissionType) => {
       const matches: CooperativeItem[] = [];
       let nextKey = "";
       const seenKeys = new Set<string>();
-      while (!found) {
+      while (true) {
         const payload = await callLeagueApi<{
-          list?: Array<Record<string, unknown> & { product_id?: number | string; head_supplier_item_link?: string }>;
+          list?: Array<Record<string, unknown> & { product_id?: number | string; cooperative_item_id?: number | string; head_supplier_item_link?: string }>;
           next_key?: string;
         }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
           commission_type: commissionType,
@@ -463,10 +555,9 @@ async function fetchLeagueCooperativeProductMatches(account: LeagueAccountRow, p
         const list = Array.isArray(payload.list) ? payload.list : [];
         for (const item of list) {
           if (safeText(item.product_id) !== productId) continue;
-          const link = safeText(item.head_supplier_item_link);
-          if (link) matches.push({ productId, link, ...parseLeagueProductSnapshot(item) });
+          matches.push(...await cooperativeItemsFromApiItem(account, item, commissionType));
         }
-        if (matches.length) { found = true; break; }
+        if (matches.length) break;
         const next = safeText(payload.next_key);
         if (!next || seenKeys.has(next) || list.length === 0) break;
         seenKeys.add(next);
@@ -492,11 +583,22 @@ async function saveTargetedCooperativeMatches(accountId: string, productId: stri
   await sql.begin(async (tx) => {
     await tx`DELETE FROM league_cooperative_item_cache WHERE league_account_id = ${accountId} AND product_id = ${productId}`;
     if (matches.length) await tx`
-      INSERT INTO league_cooperative_item_cache(league_account_id, product_id, head_supplier_item_link, synced_at)
-      SELECT ${accountId}::uuid, ${productId}, link, now()
-      FROM unnest(${matches.map((item) => item.link)}::text[]) AS links(link)
+      INSERT INTO league_cooperative_item_cache(
+        league_account_id, product_id, head_supplier_item_link, promotion_detail_link,
+        link_type, cooperative_item_id, synced_at
+      )
+      SELECT ${accountId}::uuid, ${productId}, links.link, links.promotion_detail_link,
+             links.link_type, links.cooperative_item_id, now()
+      FROM unnest(
+        ${matches.map((item) => item.link)}::text[],
+        ${matches.map((item) => item.promotionDetailLink)}::text[],
+        ${matches.map((item) => item.linkType)}::text[],
+        ${matches.map((item) => item.cooperativeItemId)}::text[]
+      ) AS links(link, promotion_detail_link, link_type, cooperative_item_id)
       ON CONFLICT (league_account_id, product_id, head_supplier_item_link)
-      DO UPDATE SET synced_at = excluded.synced_at
+      DO UPDATE SET promotion_detail_link=excluded.promotion_detail_link,
+        link_type=excluded.link_type,cooperative_item_id=excluded.cooperative_item_id,
+        synced_at=excluded.synced_at
     `;
     await tx`
       UPDATE league_cooperative_cache_state
@@ -552,6 +654,7 @@ export type LeaguePromotionResolution = {
   commissionType: number | null;
   planType: number | null;
   accountId: string | null;
+  linkType?: LeaguePromotionLinkType | null;
   error: string | null;
 };
 
@@ -561,6 +664,7 @@ export type LeaguePromotionCandidate = LeaguePromotionResolution & {
   accountName: string;
   accountIsPrimary: boolean;
   headSupplierItemLink: string;
+  linkType: LeaguePromotionLinkType;
 };
 
 export type LeagueProductLookupCandidate = LeaguePromotionCandidate & LeagueProductSnapshot;
@@ -575,11 +679,17 @@ function uniqueCooperativeItems(items: CooperativeItem[]) {
   return Array.from(new Map(items.map((item) => [item.link, item])).values());
 }
 
+function isInstitutionAssignedLink(candidate: Pick<LeaguePromotionCandidate, "promotionLink"> & { linkType?: LeaguePromotionLinkType | null }) {
+  return candidate.linkType === "institution_assigned" || candidate.promotionLink.startsWith("weixinstoresubhs/");
+}
+
 export function preferredLeaguePromotionCandidates(candidates: LeaguePromotionCandidate[]) {
   const linked = candidates.filter((candidate) => Boolean(candidate.promotionLink));
   if (!linked.length) return [];
-  const primary = linked.filter((candidate) => candidate.accountIsPrimary);
-  const pool = primary.length ? primary : linked;
+  const institutionAssigned = linked.filter(isInstitutionAssignedLink);
+  const typePool = institutionAssigned.length ? institutionAssigned : linked;
+  const primary = typePool.filter((candidate) => candidate.accountIsPrimary);
+  const pool = primary.length ? primary : typePool;
   const highestServiceRatio = Math.max(...pool.map((candidate) => candidate.serviceRatio ?? -1));
   return Array.from(new Map(
     pool
@@ -604,7 +714,7 @@ async function resolveLeagueLookupMatches(account: LeagueAccountRow, productId: 
   const candidates: LeagueProductLookupCandidate[] = [];
   for (const match of uniqueCooperativeItems(matches)) {
     try {
-      const promotion = await fetchLeagueItemPromotion(account, match.link);
+      const promotion = await fetchLeagueItemPromotion(account, match.promotionDetailLink);
       const preliminary = mergeLeagueProductSnapshots(promotion.product, match);
       let detail: LeagueProductSnapshot | null = null;
       if (preliminary.shopAppid) {
@@ -613,7 +723,7 @@ async function resolveLeagueLookupMatches(account: LeagueAccountRow, productId: 
       }
       const product = mergeLeagueProductSnapshots(detail, promotion.product, match);
       candidates.push({
-        promotionLink: promotion.promotionLink || match.link,
+        promotionLink: match.link,
         commissionRatio: promotion.commissionRatio,
         normalCommissionRatio: promotion.normalCommissionRatio,
         serviceRatio: promotion.serviceRatio,
@@ -623,6 +733,7 @@ async function resolveLeagueLookupMatches(account: LeagueAccountRow, productId: 
         accountName: account.name,
         accountIsPrimary: Boolean(account.isPrimary),
         headSupplierItemLink: match.link,
+        linkType: match.linkType,
         error: null,
         ...product,
       });
@@ -676,7 +787,7 @@ export async function lookupLeagueProductCandidates(productId: string): Promise<
   const primary = accounts.find((account) => account.isPrimary) || null;
   const others = primary ? accounts.filter((account) => account.id !== primary.id) : accounts;
   const primaryResult = primary ? await lookupLeagueAccountProductCandidates(primary, productId, true) : null;
-  if (primaryResult?.candidates.length) {
+  if (primaryResult?.candidates.some(isInstitutionAssignedLink)) {
     return {
       candidates: primaryResult.candidates,
       errors: primaryResult.errors,
@@ -723,8 +834,8 @@ export async function resolveLeaguePromotionCandidates(
     const candidates: LeaguePromotionCandidate[] = [];
     for (const match of matches) {
       try {
-        const promotion = await fetchLeagueItemPromotion(account, match.link);
-        const promotionLink = safeText(promotion.promotionLink) || match.link;
+        const promotion = await fetchLeagueItemPromotion(account, match.promotionDetailLink);
+        const promotionLink = match.link;
         candidates.push({
           promotionLink,
           commissionRatio: promotion.commissionRatio,
@@ -736,6 +847,7 @@ export async function resolveLeaguePromotionCandidates(
           accountName: account.name,
           accountIsPrimary: Boolean(account.isPrimary),
           headSupplierItemLink: match.link,
+          linkType: match.linkType,
           error: null,
         });
       } catch (error) {
@@ -759,7 +871,7 @@ export async function resolveLeaguePromotion(
   const selection = selectLeaguePromotionCandidate(resolved.candidates);
   if (selection.selected) return selection.selected;
   const error = selection.requiresChoice
-    ? "多个机构返回相同最高服务费率，请人工选择推广链接"
+    ? "多个同优先级推广链接的机构服务费率相同，请人工选择推广链接"
     : resolved.errors[0] || "未找到可用的机构推广商品";
   return { promotionLink: null, commissionRatio: null, normalCommissionRatio: null, serviceRatio: null, commissionType: null, planType: null, accountId: null, error };
 }
@@ -825,10 +937,10 @@ export async function syncWindowPromotions(talentAccountId: string) {
           const [inserted] = await tx`
             INSERT INTO talent_window_promotion_candidates(
               window_product_id, league_account_id, head_supplier_item_link, promotion_link,
-              commission_ratio, normal_commission_ratio, service_ratio, commission_type, plan_type
+              link_type, commission_ratio, normal_commission_ratio, service_ratio, commission_type, plan_type
             ) VALUES (
               ${row.id}, ${candidate.accountId}, ${candidate.headSupplierItemLink}, ${candidate.promotionLink},
-              ${candidate.commissionRatio}, ${candidate.normalCommissionRatio}, ${candidate.serviceRatio},
+              ${candidate.linkType}, ${candidate.commissionRatio}, ${candidate.normalCommissionRatio}, ${candidate.serviceRatio},
               ${candidate.commissionType}, ${candidate.planType}
             ) RETURNING id
           `;
@@ -850,7 +962,7 @@ export async function syncWindowPromotions(talentAccountId: string) {
         let promotionError: string | null = null;
         if (selection.requiresChoice) {
           promotionStatus = "needs_choice";
-          promotionError = "多个机构返回相同最高服务费率，请人工选择推广链接";
+          promotionError = "多个同优先级推广链接的机构服务费率相同，请人工选择推广链接";
         } else if (selected) {
           if (registeredLink && registeredLink !== selected.promotionLink) {
             if (row.promotionConfirmed) {
@@ -970,7 +1082,8 @@ export async function syncWindowQuality(leagueAccountId: string, talentAccountId
   const linkPatches: Array<{ id: string; link: string }> = [];
   for (const product of products) {
     const effectiveProductId = effectiveWindowProductId(product.productId, product.outProductId);
-    const link = itemLinks.get(effectiveProductId)?.[0]?.link;
+    const availableLinks = itemLinks.get(effectiveProductId) || [];
+    const link = availableLinks.find((item) => item.linkType === "institution_assigned")?.link || availableLinks[0]?.link;
     if (link && !product.promotionLink) {
       linkPatches.push({ id: product.id, link });
       product.promotionLink = link;

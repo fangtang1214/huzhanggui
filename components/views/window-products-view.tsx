@@ -8,7 +8,7 @@ import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast 
 import { EmptyState, ErrorState, LoadingState, PageHeader, Pagination, ProductImage } from "../ui";
 
 type WindowAccount = { id: string; name: string; appid: string; syncStatus: "idle" | "syncing" | "failed"; syncError?: string | null; syncedAt?: string | null; productCount: number };
-type PromotionCandidate = { id: string; accountId: string; accountName: string; accountIsPrimary: boolean; headSupplierItemLink: string; promotionLink: string; serviceRatio?: number | null; commissionRatio?: number | null };
+type PromotionCandidate = { id: string; accountId: string; accountName: string; accountIsPrimary: boolean; headSupplierItemLink: string; promotionLink: string; linkType?: "merchant_assigned" | "institution_assigned"; serviceRatio?: number | null; commissionRatio?: number | null };
 type WindowProduct = { id: string; productId: string; promotionError?: string | null; promotionSyncedAt?: string | null; promotionStatus: "pending" | "selected" | "confirmed" | "needs_choice" | "needs_replacement"; promotionConfirmed?: boolean; promotionAccountName?: string | null; promotionCandidates: PromotionCandidate[]; title?: string | null; imgUrl?: string | null; sellingPriceFen?: number | null; stock?: number | null; sales?: number | null; status?: number | null; isHide?: boolean | null; link?: string | null; registeredProductId?: string | null; registeredSku?: string | null; registeredProductUrl?: string | null; shopName?: string | null; shopScore?: number | null; shopIcon?: string | null; goodEvaluationRatio?: number | null; qualitySyncedAt?: string | null; serviceRatio?: number | null };
 type LeagueState = { activeCount: number; hasPrimary: boolean };
 type WindowProductsData = { accounts: WindowAccount[]; products: WindowProduct[]; total: number; page: number; pageSize: number; leagueState: LeagueState };
@@ -21,8 +21,10 @@ const scoreText = (score?: number | null) => typeof score === "number" ? `${(sco
 const serviceRatioText = (ratio?: number | null) => typeof ratio === "number" ? `${parseFloat((ratio / 10000).toFixed(2))}%` : "未返回";
 function decisionCandidates(product: WindowProduct) {
   if (product.promotionStatus !== "needs_choice") return product.promotionCandidates;
-  const primary = product.promotionCandidates.filter((candidate) => candidate.accountIsPrimary);
-  const pool = primary.length ? primary : product.promotionCandidates;
+  const institutionAssigned = product.promotionCandidates.filter((candidate) => candidate.linkType === "institution_assigned" || candidate.promotionLink.startsWith("weixinstoresubhs/"));
+  const typePool = institutionAssigned.length ? institutionAssigned : product.promotionCandidates;
+  const primary = typePool.filter((candidate) => candidate.accountIsPrimary);
+  const pool = primary.length ? primary : typePool;
   const highest = Math.max(...pool.map((candidate) => candidate.serviceRatio ?? -1));
   return pool.filter((candidate) => (candidate.serviceRatio ?? -1) === highest);
 }
@@ -243,7 +245,7 @@ export function WindowProductsView() {
       </table></div><Pagination page={data?.page || page} pageSize={data?.pageSize || 20} total={data?.total || 0} onChange={setPage} /></>}
     </section>
      <section className="panel" style={{ padding: 20 }}>
-       <p style={{ fontSize: 13, color: "var(--muted)" }}><ShieldCheck size={14} style={{ marginRight: 4 }} />橱窗同步会逐一查询全部已启用的联盟机构账号。主账号结果优先；主账号失败时按实时服务费率选择。未获得机构推广链接的商品仍可人工登记，但链接保持为空并标记待确认，不会使用达人原始链接冒充机构链接。</p>
+       <p style={{ fontSize: 13, color: "var(--muted)" }}><ShieldCheck size={14} style={{ marginRight: 4 }} />橱窗同步会逐一查询全部已启用的联盟机构账号。优先使用机构分配达人佣金链接；同类型下先选主机构账号，再选机构服务费率最高的链接。没有机构分配链接时才使用商家指定达人佣金链接。未获得机构推广链接的商品仍可人工登记，但链接保持为空并标记待确认，不会使用达人原始链接冒充机构链接。</p>
      </section>
   </>;
 }

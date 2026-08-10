@@ -521,7 +521,9 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     `, [["https://example.com/old.jpg"], []]);
     assert.equal(exactImageMatch.rows[0].product_id, repairedProduct.rows[0].id);
     const directoryCacheColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_item_cache' ORDER BY column_name");
-    assert.deepEqual(directoryCacheColumns.rows.map((row) => row.column_name), ["head_supplier_item_link", "league_account_id", "product_id", "synced_at"]);
+    assert.deepEqual(directoryCacheColumns.rows.map((row) => row.column_name), ["cooperative_item_id", "head_supplier_item_link", "league_account_id", "link_type", "product_id", "promotion_detail_link", "synced_at"]);
+    const promotionCandidateTypeColumn = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='talent_window_promotion_candidates' AND column_name='link_type'");
+    assert.deepEqual(promotionCandidateTypeColumn.rows.map((row) => row.column_name), ["link_type"]);
     const directoryStateColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_cache_state' AND column_name IN ('sync_status','sync_requested_at','sync_started_at','sync_error','sync_progress_count','sync_heartbeat_at') ORDER BY column_name");
     assert.deepEqual(directoryStateColumns.rows.map((row) => row.column_name), ["sync_error", "sync_heartbeat_at", "sync_progress_count", "sync_requested_at", "sync_started_at", "sync_status"]);
     const recoveredDirectorySync = await database.query("SELECT sync_status,sync_requested_at,sync_started_at,sync_progress_count FROM league_cooperative_cache_state state JOIN league_accounts account ON account.id=state.league_account_id WHERE account.appid='wx-sync-recovery'");
@@ -633,7 +635,10 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   const leagueApi = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/productdetail\/get/);
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/cooperativeitem\/list\/get/);
+  assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/subitem\/list\/get/);
   assert.match(leagueApi, /\/channels\/ec\/league\/headsupplier\/item\/promotiondetail\/get/);
+  assert.match(leagueApi, /cooperative_item_id/);
+  assert.match(leagueApi, /institution_assigned/);
   assert.match(leagueApi, /head_supplier_item_link/);
   assert.match(leagueApi, /fetchLeagueCooperativeItemLinks/);
   assert.match(leagueApi, /const coopLink = safeText\(headSupplierItemLink\)/);
@@ -696,7 +701,9 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(league, /refreshLeagueCooperativeItemCache/);
   assert.match(league, /loadCachedLeagueCooperativeItems/);
   assert.match(league, /Promise\.all\(\[0, 1\]\.map/);
-  assert.match(league, /if \(primaryResult\?\.candidates\.length\)/);
+  assert.match(league, /fetchLeagueInstitutionPromotionLinks/);
+  assert.match(league, /match\.promotionDetailLink/);
+  assert.match(league, /primaryResult\?\.candidates\.some\(isInstitutionAssignedLink\)/);
   assert.match(league, /fetchLeagueCooperativeProductMatches/);
   assert.match(league, /reservePrimaryProductScan/);
   assert.match(league, /interval '5 minutes'/);
@@ -704,7 +711,7 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(league, /lookupLeagueAccountProductCandidates\(primary, productId, true\)/);
   assert.match(league, /lookupLeagueAccountProductCandidates\(account, productId, false\)/);
   assert.match(league, /if \(allowTargetedScan && !matches\.length\)/);
-  assert.match(league, /fetchLeagueItemPromotion\(account, match\.link\)/);
+  assert.match(league, /fetchLeagueItemPromotion\(account, match\.promotionDetailLink\)/);
   assert.match(league, /fetchLeagueProductDetail\(account, preliminary\.shopAppid, productId\)/);
   assert.doesNotMatch(league, /cached\.image_urls/);
   assert.doesNotMatch(league, /page < 500/);
@@ -721,6 +728,9 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(recoveryMigration, /sync_progress_count/);
   assert.match(recoveryMigration, /sync_heartbeat_at/);
   assert.match(recoveryMigration, /state\.sync_status = 'running'/);
+  const institutionLinkMigration = await readFile(new URL("../migrations/033_institution_assigned_promotion_links.sql", import.meta.url), "utf8");
+  assert.match(institutionLinkMigration, /promotion_detail_link/);
+  assert.match(institutionLinkMigration, /institution_assigned/);
 
   const directoryWorker = await readFile(new URL("../scripts/league-directory-sync.mjs", import.meta.url), "utf8");
   assert.match(directoryWorker, /primaryIntervalMinutes = 30/);
@@ -732,6 +742,7 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(directoryWorker, /recoverInterruptedSyncs/);
   assert.match(directoryWorker, /syncTimeoutMinutes = 20/);
   assert.match(directoryWorker, /updateSyncProgress/);
+  assert.match(directoryWorker, /\/channels\/ec\/league\/headsupplier\/subitem\/list\/get/);
   assert.match(directoryWorker, /sync_heartbeat_at,state\.sync_started_at\)<now\(\)-interval '5 minutes'/);
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
   assert.match(compose, /league-sync:/);

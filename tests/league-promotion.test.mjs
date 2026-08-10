@@ -14,6 +14,7 @@ function candidate(overrides = {}) {
     accountName: "机构一",
     accountIsPrimary: false,
     headSupplierItemLink: "weixinstorehs/100",
+    linkType: "merchant_assigned",
     error: null,
     ...overrides,
   };
@@ -32,6 +33,34 @@ test("主账号未成功时选择实时服务费率最高的机构链接", () =>
   const selection = selectLeaguePromotionCandidate([
     candidate({ accountId: "low", promotionLink: "weixinstorehs/200", serviceRatio: 8000 }),
     candidate({ accountId: "high", promotionLink: "weixinstorehs/300", serviceRatio: 18000 }),
+  ]);
+  assert.equal(selection.selected?.accountId, "high");
+  assert.equal(selection.requiresChoice, false);
+});
+
+test("机构分配达人佣金链接优先于主账号的商家指定链接", () => {
+  const selection = selectLeaguePromotionCandidate([
+    candidate({ accountId: "primary", accountIsPrimary: true, promotionLink: "weixinstorehs/300", serviceRatio: 30000 }),
+    candidate({ accountId: "secondary", promotionLink: "weixinstoresubhs/6000000016843667", headSupplierItemLink: "weixinstoresubhs/6000000016843667", linkType: "institution_assigned", serviceRatio: 5000 }),
+  ]);
+  assert.equal(selection.selected?.accountId, "secondary");
+  assert.equal(selection.selected?.promotionLink, "weixinstoresubhs/6000000016843667");
+  assert.equal(selection.requiresChoice, false);
+});
+
+test("多个机构分配链接先选主账号再比较服务费率", () => {
+  const selection = selectLeaguePromotionCandidate([
+    candidate({ accountId: "secondary", promotionLink: "weixinstoresubhs/200", linkType: "institution_assigned", serviceRatio: 30000 }),
+    candidate({ accountId: "primary", accountIsPrimary: true, promotionLink: "weixinstoresubhs/300", linkType: "institution_assigned", serviceRatio: 5000 }),
+  ]);
+  assert.equal(selection.selected?.accountId, "primary");
+  assert.equal(selection.requiresChoice, false);
+});
+
+test("没有主账号的机构分配链接选择服务费率最高者", () => {
+  const selection = selectLeaguePromotionCandidate([
+    candidate({ accountId: "low", promotionLink: "weixinstoresubhs/200", linkType: "institution_assigned", serviceRatio: 8000 }),
+    candidate({ accountId: "high", promotionLink: "weixinstoresubhs/300", linkType: "institution_assigned", serviceRatio: 18000 }),
   ]);
   assert.equal(selection.selected?.accountId, "high");
   assert.equal(selection.requiresChoice, false);

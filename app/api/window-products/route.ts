@@ -39,9 +39,10 @@ export async function GET(request: Request) {
                    'accountIsPrimary', ca.is_primary,
                    'headSupplierItemLink', c.head_supplier_item_link,
                    'promotionLink', c.promotion_link,
+                   'linkType', c.link_type,
                    'serviceRatio', c.service_ratio,
                    'commissionRatio', c.commission_ratio
-                 ) ORDER BY ca.is_primary DESC, c.service_ratio DESC NULLS LAST, ca.name, c.id)
+                 ) ORDER BY (c.link_type = 'institution_assigned') DESC, ca.is_primary DESC, c.service_ratio DESC NULLS LAST, ca.name, c.id)
                  FROM talent_window_promotion_candidates c
                  JOIN league_accounts ca ON ca.id = c.league_account_id
                  WHERE c.window_product_id = w.id

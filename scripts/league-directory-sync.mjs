@@ -72,6 +72,43 @@ async function updateSyncProgress(accountId, progressCount) {
   `;
 }
 
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index]);
+    }
+  }));
+  return results;
+}
+
+async function fetchInstitutionAssignedLinks(account, cooperativeItemId, signal) {
+  const numericId = Number(cooperativeItemId);
+  if (!Number.isFinite(numericId) || numericId <= 0) throw new Error("机构合作计划 ID 无效");
+  const links = [];
+  let nextKey = "";
+  const seenKeys = new Set();
+  while (true) {
+    const payload = await callLeagueApi(account, "/channels/ec/league/headsupplier/subitem/list/get", {
+      cooperative_item_id: numericId,
+      page_size: 20,
+      next_key: nextKey,
+    }, signal);
+    const list = Array.isArray(payload.list) ? payload.list : [];
+    for (const item of list) {
+      const link = safeText(item.head_supplier_item_link);
+      if (link && (item.status === undefined || Number(item.status) === 1)) links.push(link);
+    }
+    const next = safeText(payload.next_key);
+    if (!next || seenKeys.has(next) || list.length === 0) break;
+    seenKeys.add(next);
+    nextKey = next;
+  }
+  return [...new Set(links)];
+}
+
 async function fetchDirectory(account, signal) {
   const rows = new Map();
   const productIds = new Set();
@@ -85,13 +122,31 @@ async function fetchDirectory(account, signal) {
         next_key: nextKey,
       }, signal);
       const list = Array.isArray(payload.list) ? payload.list : [];
-      for (const item of list) {
+      const pageRows = await mapWithConcurrency(list, 5, async (item) => {
         const productId = safeText(item.product_id);
-        const link = safeText(item.head_supplier_item_link);
-        if (productId && link) {
-          rows.set(`${productId}\u0000${link}`, { productId, link });
-          productIds.add(productId);
-        }
+        const promotionDetailLink = safeText(item.head_supplier_item_link);
+        const cooperativeItemId = safeText(item.cooperative_item_id ?? item.id);
+        if (!productId || !promotionDetailLink) return [];
+        if (commissionType === 0) return [{
+          productId,
+          link: promotionDetailLink,
+          promotionDetailLink,
+          linkType: "merchant_assigned",
+          cooperativeItemId,
+        }];
+        if (!cooperativeItemId) return [];
+        const subItemLinks = await fetchInstitutionAssignedLinks(account, cooperativeItemId, signal);
+        return subItemLinks.map((link) => ({
+          productId,
+          link,
+          promotionDetailLink,
+          linkType: "institution_assigned",
+          cooperativeItemId,
+        }));
+      });
+      for (const item of pageRows.flat()) {
+        rows.set(`${item.productId}\u0000${item.link}`, item);
+        productIds.add(item.productId);
       }
       await updateSyncProgress(account.id, productIds.size);
       const next = safeText(payload.next_key);
@@ -118,12 +173,19 @@ async function saveDirectory(accountId, rows) {
   await sql.begin(async (tx) => {
     await tx`DELETE FROM league_cooperative_item_cache WHERE league_account_id=${accountId}`;
     if (rows.length) await tx`
-      INSERT INTO league_cooperative_item_cache(league_account_id,product_id,head_supplier_item_link,synced_at)
-      SELECT ${accountId}::uuid,items.product_id,items.link,now()
+      INSERT INTO league_cooperative_item_cache(
+        league_account_id,product_id,head_supplier_item_link,promotion_detail_link,
+        link_type,cooperative_item_id,synced_at
+      )
+      SELECT ${accountId}::uuid,items.product_id,items.link,items.promotion_detail_link,
+             items.link_type,items.cooperative_item_id,now()
       FROM unnest(
         ${rows.map((item) => item.productId)}::text[],
-        ${rows.map((item) => item.link)}::text[]
-      ) AS items(product_id,link)
+        ${rows.map((item) => item.link)}::text[],
+        ${rows.map((item) => item.promotionDetailLink)}::text[],
+        ${rows.map((item) => item.linkType)}::text[],
+        ${rows.map((item) => item.cooperativeItemId)}::text[]
+      ) AS items(product_id,link,promotion_detail_link,link_type,cooperative_item_id)
     `;
     await tx`
       UPDATE league_cooperative_cache_state
