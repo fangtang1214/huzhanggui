@@ -413,6 +413,13 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
       if (file === "009_product_workflow_optimizations.sql") await database.exec(`
         UPDATE samples SET status='consumed' WHERE id=(SELECT id FROM samples ORDER BY created_at LIMIT 1);
       `);
+      if (file === "032_league_directory_sync_recovery.sql") await database.exec(`
+        INSERT INTO league_accounts(name,appid,app_secret,active)
+        VALUES('同步恢复测试机构','wx-sync-recovery','secret',true);
+        INSERT INTO league_cooperative_cache_state(league_account_id,item_count,synced_at,sync_status,sync_started_at)
+        SELECT id,1599,now()-interval '1 hour','running',now()-interval '10 minutes'
+        FROM league_accounts WHERE appid='wx-sync-recovery';
+      `);
       await database.exec(await readFile(new URL(file, directory), "utf8"));
     }
     await database.exec(`
@@ -515,8 +522,13 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(exactImageMatch.rows[0].product_id, repairedProduct.rows[0].id);
     const directoryCacheColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_item_cache' ORDER BY column_name");
     assert.deepEqual(directoryCacheColumns.rows.map((row) => row.column_name), ["head_supplier_item_link", "league_account_id", "product_id", "synced_at"]);
-    const directoryStateColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_cache_state' AND column_name IN ('sync_status','sync_requested_at','sync_started_at','sync_error') ORDER BY column_name");
-    assert.deepEqual(directoryStateColumns.rows.map((row) => row.column_name), ["sync_error", "sync_requested_at", "sync_started_at", "sync_status"]);
+    const directoryStateColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_cache_state' AND column_name IN ('sync_status','sync_requested_at','sync_started_at','sync_error','sync_progress_count','sync_heartbeat_at') ORDER BY column_name");
+    assert.deepEqual(directoryStateColumns.rows.map((row) => row.column_name), ["sync_error", "sync_heartbeat_at", "sync_progress_count", "sync_requested_at", "sync_started_at", "sync_status"]);
+    const recoveredDirectorySync = await database.query("SELECT sync_status,sync_requested_at,sync_started_at,sync_progress_count FROM league_cooperative_cache_state state JOIN league_accounts account ON account.id=state.league_account_id WHERE account.appid='wx-sync-recovery'");
+    assert.equal(recoveredDirectorySync.rows[0].sync_status, "pending");
+    assert.ok(recoveredDirectorySync.rows[0].sync_requested_at);
+    assert.equal(recoveredDirectorySync.rows[0].sync_started_at, null);
+    assert.equal(recoveredDirectorySync.rows[0].sync_progress_count, 0);
     const lookupThrottleTable = await database.query("SELECT to_regclass('league_product_lookup_throttles') AS name");
     assert.equal(lookupThrottleTable.rows[0].name, "league_product_lookup_throttles");
     await database.query("INSERT INTO product_link_history(product_id,url,replaced_by_url,source) VALUES($1,'https://example.com/old-product-link','https://example.com/latest-product-link','product_edit')", [product.rows[0].id]);
@@ -583,6 +595,10 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(form, /draftCandidate/);
   assert.match(form, /仅更新商品信息/);
   assert.match(form, /value="update_only"/);
+  assert.match(form, /!result\.updatedOnly && result\.codes\.length === 1/);
+  assert.match(form, /router\.push\(`\/samples\/\$\{result\.codes\[0\]\}`\)/);
+  assert.match(form, /router\.push\(`\/products\/\$\{result\.id\}`\)/);
+  assert.doesNotMatch(form, /result\.updatedOnly \|\| !returnUrl/);
   const registrationRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
   assert.match(registrationRoute, /submissionMode: z\.enum\(\["add_samples", "update_only"\]\)/);
   assert.match(registrationRoute, /if \(!updateOnly\)/);
@@ -695,6 +711,10 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(directoryMigration, /DROP COLUMN IF EXISTS image_urls/);
   assert.match(directoryMigration, /sync_status/);
   assert.match(directoryMigration, /CREATE TABLE IF NOT EXISTS league_product_lookup_throttles/);
+  const recoveryMigration = await readFile(new URL("../migrations/032_league_directory_sync_recovery.sql", import.meta.url), "utf8");
+  assert.match(recoveryMigration, /sync_progress_count/);
+  assert.match(recoveryMigration, /sync_heartbeat_at/);
+  assert.match(recoveryMigration, /state\.sync_status = 'running'/);
 
   const directoryWorker = await readFile(new URL("../scripts/league-directory-sync.mjs", import.meta.url), "utf8");
   assert.match(directoryWorker, /primaryIntervalMinutes = 30/);
@@ -703,6 +723,10 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(directoryWorker, /league_cooperative_item_cache/);
   assert.doesNotMatch(directoryWorker, /image_urls/);
   assert.doesNotMatch(directoryWorker, /page < 500/);
+  assert.match(directoryWorker, /recoverInterruptedSyncs/);
+  assert.match(directoryWorker, /syncTimeoutMinutes = 20/);
+  assert.match(directoryWorker, /updateSyncProgress/);
+  assert.match(directoryWorker, /sync_heartbeat_at,state\.sync_started_at\)<now\(\)-interval '5 minutes'/);
   const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
   assert.match(compose, /league-sync:/);
   assert.match(compose, /scripts\/league-directory-sync\.mjs/);
@@ -712,6 +736,8 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   const accountRoute = await readFile(new URL("../app/api/league-accounts/route.ts", import.meta.url), "utf8");
   assert.match(accountRoute, /directory_item_count/);
   assert.match(accountRoute, /directory_sync_status/);
+  assert.match(accountRoute, /directory_sync_progress_count/);
+  assert.match(accountRoute, /directory_sync_started_at/);
   const manualSyncRoute = await readFile(new URL("../app/api/league-accounts/[id]/cooperative-sync/route.ts", import.meta.url), "utf8");
   assert.match(manualSyncRoute, /requireSuperAdmin/);
   assert.match(manualSyncRoute, /sync_requested_at=now\(\)/);
@@ -719,6 +745,9 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(accountView, /合作商品目录/);
   assert.match(accountView, /同步目录/);
   assert.match(accountView, /主机构目录每 30 分钟自动同步/);
+  assert.match(accountView, /已扫描/);
+  assert.match(accountView, /已保存/);
+  assert.match(accountView, /开始于/);
 
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /选择登记方式/);

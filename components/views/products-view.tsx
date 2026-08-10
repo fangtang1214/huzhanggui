@@ -650,9 +650,8 @@ export function ProductFormView({ id }: { id?: string }) {
         localStorage.removeItem(draftKey); setDraftReady(false);
         toast(result.updatedOnly ? `商品 ${result.sku} 信息已更新，本次未新增样品` : result.matched ? form.windowProductId ? `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品，并更新店铺、机构链接和服务费率` : `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品` : `新商品 ${result.sku} 登记成功`);
         try { localStorage.setItem(`huzhanggui:product-form-defaults:${user.id}`, JSON.stringify({ departmentIds: form.departmentIds, initialDepartmentId: form.initialDepartmentId })); } catch { /* ignore */ }
-        const returnUrl = new URLSearchParams(window.location.search).get("returnUrl");
-        if (result.updatedOnly || !returnUrl) router.push(`/products/${result.id}`);
-        else router.push(`/samples/${result.codes[0]}`);
+        if (!result.updatedOnly && result.codes.length === 1) router.push(`/samples/${result.codes[0]}`);
+        else router.push(`/products/${result.id}`);
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); window.scrollTo({ top: 0, behavior: "smooth" }); }
     finally { setSaving(false); }

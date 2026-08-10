@@ -26,7 +26,10 @@ export async function GET(request: Request) {
               state.item_count AS directory_item_count,
               CASE WHEN state.synced_at > '1970-01-02 00:00:00+00' THEN state.synced_at ELSE null END AS directory_synced_at,
               coalesce(state.sync_status, CASE WHEN a.active THEN 'pending' ELSE 'idle' END) AS directory_sync_status,
-              state.sync_error AS directory_sync_error
+              state.sync_error AS directory_sync_error,
+              state.sync_started_at AS directory_sync_started_at,
+              state.sync_progress_count AS directory_sync_progress_count,
+              state.sync_heartbeat_at AS directory_sync_heartbeat_at
        FROM league_accounts a
        LEFT JOIN users u ON u.id = a.created_by
        LEFT JOIN league_cooperative_cache_state state ON state.league_account_id = a.id
