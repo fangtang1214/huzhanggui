@@ -93,10 +93,11 @@ export async function POST(request: Request) {
         ? "尚未配置已启用的联盟机构账号"
         : lookup.errors.length
           ? `联盟机构未能返回该商品：${lookup.errors[0]}`
-          : "所有已启用的联盟机构账号中都未找到该商品 ID";
+          : "该商品未与任何已启用机构合作";
       await writeAudit(user, "product_id.lookup_not_found", "product_api_id", input.outProductId, `快捷登记未找到商品 ID ${input.outProductId}`, {
         cacheHits: lookup.cacheHits,
         refreshedAccounts: lookup.refreshedAccounts,
+        primaryScanLimited: lookup.scanLimited,
         durationMs: Date.now() - lookupStartedAt,
         errors: lookup.errors.slice(0, 5),
       }, requestIp(request));
@@ -127,6 +128,7 @@ export async function POST(request: Request) {
         requiresChoice: choices.length > 1,
         cacheHits: lookup.cacheHits,
         refreshedAccounts: lookup.refreshedAccounts,
+        primaryScanLimited: lookup.scanLimited,
         durationMs: Date.now() - lookupStartedAt,
         errors: lookup.errors.slice(0, 5),
       },

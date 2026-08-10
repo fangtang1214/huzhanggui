@@ -5,6 +5,7 @@ import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import { analyzeSubjectsWithFallback, GLM_MODEL, getGlmRuntime, SUBJECT_BATCH_SIZE, SUBJECT_STAGE_TIMEOUT_MS, type GlmModel, type LocatedSubject, type SubjectBox } from "@/lib/glm-vision";
 import { embedImage, getMatchSettings, urlHash } from "@/lib/image-matching";
+import { groupImageMatchFailures } from "@/lib/image-match-failures";
 import { imageUrlSchema } from "@/lib/image-url";
 
 const schema = z.object({
@@ -234,11 +235,12 @@ export async function POST(request: Request) {
       const coverageMessage = unprocessedCount ? `已使用 ${collected.vectors.length} 张图片完成比对，另 ${unprocessedCount} 张因超时、失败或超过实时上限未参与` : undefined;
       const timingBase = { cacheHit: collected.vectors.length > 0 && collected.vectors.every((item) => item.cacheHit), processedImageCount: collected.vectors.length, failedImageCount: unprocessedCount, requestedImageCount: collected.requestedImageCount, fallbackCount: collected.vectors.filter((item) => item.fallbackUsed).length };
       if (!collected.vectors.length) {
-        const message = "10 秒内未能完成任何图片的主体定位与本地特征提取，请重试";
+        const message = "所有参与识别的图片均处理失败，请查看下方具体原因";
+        const failureReasons = groupImageMatchFailures(input.imageUrls, collected.failures, REALTIME_IMAGE_LIMIT);
         const timings = { ...timingBase, totalMs: Math.round(performance.now() - startedAt) };
         const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message, timings);
         await writeAudit(user, "image.match_failed", "image_match", runId, message, { failures: collected.failures.slice(0, 8) }, requestIp(request));
-        return ok({ runId, status: "failed", candidates: [], message, timings });
+        return ok({ runId, status: "failed", candidates: [], message, failureReasons, timings });
       }
       const candidates = await findCandidates(collected.vectors, settings.threshold, input.excludeProductIds);
       const timings = { ...timingBase, totalMs: Math.round(performance.now() - startedAt) };
@@ -252,10 +254,12 @@ export async function POST(request: Request) {
       return ok({ runId, status: "matched", candidates, message: coverageMessage, timings });
     } catch (reason) {
       const message = reason instanceof Error && reason.name === "AbortError" ? "图片识别超过 10 秒，请重试或确认后继续" : reason instanceof Error ? reason.message : "GLM 图片识别失败";
+      const affectedImages = [...new Set(input.imageUrls)].slice(0, REALTIME_IMAGE_LIMIT).map((imageUrl) => ({ imageUrl, message }));
+      const failureReasons = groupImageMatchFailures(input.imageUrls, affectedImages, REALTIME_IMAGE_LIMIT);
       const timings = { totalMs: Math.round(performance.now() - startedAt) };
       const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message.slice(0, 1000), timings);
       await writeAudit(user, "image.match_failed", "image_match", runId, "GLM 图片识别失败", undefined, requestIp(request));
-      return ok({ runId, status: "failed", candidates: [], message, timings });
+      return ok({ runId, status: "failed", candidates: [], message, failureReasons, timings });
     } finally { clearTimeout(timer); }
   } catch (error) { return apiError(error); }
 }

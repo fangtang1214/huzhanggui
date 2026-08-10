@@ -5,12 +5,13 @@ import { Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { apiFetch, formatDate, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, Modal, PageHeader } from "../ui";
 
-type LeagueAccount = { id: string; name: string; appid: string; active: boolean; isPrimary: boolean; createdAt: string; createdByName?: string | null; };
+type LeagueAccount = { id: string; name: string; appid: string; active: boolean; isPrimary: boolean; createdAt: string; createdByName?: string | null; directoryItemCount?: number | null; directorySyncedAt?: string | null; directorySyncStatus: "idle" | "pending" | "running" | "failed"; directorySyncError?: string | null; };
 type CorrectionRun = { id: string; status: "pending" | "running" | "completed" | "failed"; totalCount: number; processedCount: number; successCount: number; failedCount: number; createdAt: string; completedAt?: string | null; error?: string | null; };
 type CorrectionItem = { id: string; status: "pending" | "success" | "failed"; sku: string; productName: string; oldProductUrl?: string | null; newProductUrl?: string | null; apiProductId?: string | null; error?: string | null; };
 type CorrectionData = { runs: CorrectionRun[]; items: CorrectionItem[]; selectedRunId?: string | null };
 
 const blankDraft = { name: "", appid: "", appSecret: "", active: true, isPrimary: false };
+const directoryStatusLabels: Record<LeagueAccount["directorySyncStatus"], string> = { idle: "同步正常", pending: "等待同步", running: "正在同步", failed: "同步失败" };
 
 export function LeagueAccountsView() {
   const toast = useToast();
@@ -27,12 +28,19 @@ export function LeagueAccountsView() {
   const [draft, setDraft] = useState(blankDraft);
   const [saving, setSaving] = useState(false);
   const [startingCorrection, setStartingCorrection] = useState(false);
+  const [syncingDirectory, setSyncingDirectory] = useState("");
 
   useEffect(() => {
     if (!correction.data?.runs.some((run) => run.status === "pending" || run.status === "running")) return;
     const timer = window.setInterval(() => void correction.reload(), 3000);
     return () => window.clearInterval(timer);
   }, [correction]);
+
+  useEffect(() => {
+    if (!data?.some((account) => account.directorySyncStatus === "pending" || account.directorySyncStatus === "running")) return;
+    const timer = window.setInterval(() => void reload(), 3000);
+    return () => window.clearInterval(timer);
+  }, [data, reload]);
 
   function openNew() { setDraft(blankDraft); setEditing("new"); }
   function openEdit(account: LeagueAccount) { setDraft({ name: account.name, appid: account.appid, appSecret: "", active: account.active, isPrimary: account.isPrimary }); setEditing(account); }
@@ -64,6 +72,16 @@ export function LeagueAccountsView() {
     } catch (reason) { toast(reason instanceof Error ? reason.message : "删除失败", "error"); }
   }
 
+  async function syncDirectory(account: LeagueAccount) {
+    setSyncingDirectory(account.id);
+    try {
+      await apiFetch(`/api/league-accounts/${account.id}/cooperative-sync`, { method: "POST" });
+      toast(`${account.name}的合作商品目录已进入同步队列`);
+      await reload();
+    } catch (reason) { toast(reason instanceof Error ? reason.message : "目录同步启动失败", "error"); }
+    finally { setSyncingDirectory(""); }
+  }
+
   async function startCorrection(action: "start" | "retry", runId?: string) {
     if (action === "start" && !confirm("将校正全部在用商品的机构推广链接。任务会在后台执行，是否继续？")) return;
     setStartingCorrection(true);
@@ -77,14 +95,16 @@ export function LeagueAccountsView() {
   }
 
   return <>
-    <PageHeader eyebrow="系统管理" title="联盟带货机构" description="配置联盟带货机构账号后，橱窗同步会自动使用全部已启用账号获取真实推广链接。" actions={<button className="button button-primary" onClick={openNew}><Plus size={17} />添加机构账号</button>} />
+    <PageHeader eyebrow="系统管理" title="联盟带货机构" description="本地仅保存商品 ID 与机构推广标识；商品资料、推广链接和服务费率在使用时通过接口获取最新值。" actions={<button className="button button-primary" onClick={openNew}><Plus size={17} />添加机构账号</button>} />
      <section className="panel table-panel">
-       {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.length ? <EmptyState title="尚未配置机构账号" description="在微信开发者平台注册联盟带货机构后，把 AppID 和密钥添加到这里。" /> : <div className="data-table-wrap"><table className="data-table"><thead><tr><th>账号名称</th><th>机构 AppID</th><th>添加时间</th><th>状态</th><th /></tr></thead><tbody>{data.map((account) => <tr key={account.id}>
+       {loading ? <LoadingState /> : error ? <ErrorState message={error} retry={reload} /> : !data?.length ? <EmptyState title="尚未配置机构账号" description="在微信开发者平台注册联盟带货机构后，把 AppID 和密钥添加到这里。" /> : <div className="data-table-wrap"><table className="data-table"><thead><tr><th>账号名称</th><th>机构 AppID</th><th>合作商品目录</th><th>添加时间</th><th>状态</th><th /></tr></thead><tbody>{data.map((account) => <tr key={account.id}>
          <td><b>{account.name}</b>{account.isPrimary && <small style={{ display: "block", color: "var(--green)" }}>主账号</small>}</td>
         <td><code>{account.appid}</code></td>
+        <td><b>{account.directoryItemCount ?? 0} 件</b><small style={{ display: "block", marginTop: 3, color: account.directorySyncStatus === "failed" ? "var(--red)" : "var(--muted)" }}>{directoryStatusLabels[account.directorySyncStatus]}{account.directorySyncedAt ? ` · ${formatDate(account.directorySyncedAt, true)}` : " · 尚未完成首次同步"}</small>{account.directorySyncError && <small style={{ display: "block", maxWidth: 320, color: "var(--red)" }}>{account.directorySyncError}</small>}</td>
         <td>{formatDate(account.createdAt, true)}</td>
         <td>{account.active ? "已启用" : "已停用"}</td>
         <td><div className="table-actions">
+          <button type="button" className="button button-compact button-secondary" disabled={!account.active || syncingDirectory === account.id || account.directorySyncStatus === "pending" || account.directorySyncStatus === "running"} onClick={() => syncDirectory(account)}><RefreshCw size={14} className={account.directorySyncStatus === "running" ? "spin" : undefined} />{account.directorySyncStatus === "pending" || account.directorySyncStatus === "running" ? "同步中" : "同步目录"}</button>
           <button type="button" className="button button-compact button-secondary" onClick={() => openEdit(account)}>编辑</button>
           <button type="button" className="button button-compact button-ghost" onClick={() => remove(account)}><Trash2 size={15} />删除</button>
         </div></td>
@@ -101,6 +121,6 @@ export function LeagueAccountsView() {
         <div className="modal-actions"><button type="button" className="button button-ghost" disabled={saving} onClick={() => setEditing(null)}>取消</button><button className="button button-primary" disabled={saving || !draft.name.trim() || !draft.appid.trim() || (editing === "new" && !draft.appSecret.trim())}>{saving ? "正在保存…" : "保存"}</button></div>
       </form>
     </Modal>}
-     <section className="panel" style={{ padding: 20 }}><header style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}><ShieldCheck size={18} /><b>说明</b></header><p style={{ margin: 0, lineHeight: 1.9, fontSize: 13, color: "var(--muted)" }}>联盟带货机构账号用于获取真实推广链接、好评率和店铺评分；商品 ID 只使用达人橱窗接口返回的 product_id。多个账号同时成功时，推广链接按主账号和服务费率规则选择，店铺信息随最终选中的机构更新。</p></section>
+     <section className="panel" style={{ padding: 20 }}><header style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}><ShieldCheck size={18} /><b>说明</b></header><p style={{ margin: 0, lineHeight: 1.9, fontSize: 13, color: "var(--muted)" }}>主机构目录每 30 分钟自动同步，其他机构每 3 小时自动同步。商品 ID 在主机构本地目录未命中时会即时分页查找，找到后立即返回；同一商品 ID 五分钟内最多触发三次。其他机构只使用最近一次后台同步的目录。</p></section>
   </>;
 }

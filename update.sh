@@ -262,7 +262,7 @@ BACKUP_STAMP="$(TZ=Asia/Shanghai date +%Y%m%d-%H%M%S)"
 echo "升级前数据库备份已创建。"
 
 if [ "$DEPLOY_MODE" = "nginx" ]; then
-  "${COMPOSE[@]}" up -d --build --remove-orphans database backup-init model-init vision indexer app backup
+  "${COMPOSE[@]}" up -d --build --remove-orphans database backup-init model-init vision indexer league-sync app backup
 else
   "${COMPOSE[@]}" up -d --build --remove-orphans
 fi

@@ -38,6 +38,18 @@ export async function PATCH(request: Request, context: RouteContext) {
         WHERE id = ${id}
         RETURNING id, name, appid, active, is_primary
       `;
+      const shouldSync = updated.active && (!before.active || secretChanging || before.appid !== input.appid || (!before.isPrimary && updated.isPrimary));
+      if (shouldSync) await tx`
+        INSERT INTO league_cooperative_cache_state(
+          league_account_id,item_count,synced_at,sync_status,sync_requested_at
+        ) VALUES(${id},0,'1970-01-01 00:00:00+00','pending',now())
+        ON CONFLICT(league_account_id) DO UPDATE
+        SET sync_requested_at=now(),sync_error=null,
+            sync_status=CASE WHEN league_cooperative_cache_state.sync_status='running' THEN 'running' ELSE 'pending' END
+      `;
+      if (!updated.active) await tx`
+        UPDATE league_cooperative_cache_state SET sync_status='idle',sync_error=null WHERE league_account_id=${id}
+      `;
       return updated;
     });
     if (!row) return Response.json({ ok: false, message: "机构账号不存在" }, { status: 404 });

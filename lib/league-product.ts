@@ -4,7 +4,6 @@ import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 const API_BASE = "https://api.weixin.qq.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const QUALITY_CONCURRENCY = 10;
-const COOPERATIVE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 function safeText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -332,7 +331,7 @@ export async function fetchLeagueItemPromotion(account: LeagueAccountRow, headSu
   };
 }
 
-export type CooperativeItem = LeagueProductSnapshot & { productId: string; link: string };
+export type CooperativeItem = Partial<LeagueProductSnapshot> & { productId: string; link: string };
 
 export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow): Promise<Map<string, CooperativeItem[]>> {
   await getLeagueAccessToken(account);
@@ -346,7 +345,8 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
   const itemGroups = await Promise.all([0, 1].map(async (commissionType) => {
     const items: CooperativeItem[] = [];
     let nextKey = "";
-    for (let page = 0; page < 500; page += 1) {
+    const seenKeys = new Set<string>();
+    while (true) {
       const payload = await callLeagueApi<{
         list?: Array<Record<string, unknown> & { product_id?: number | string; head_supplier_item_link?: string }>;
         next_key?: string;
@@ -364,7 +364,8 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
         }
       }
       const next = safeText(payload.next_key);
-      if (!next || next === nextKey || list.length === 0) break;
+      if (!next || seenKeys.has(next) || list.length === 0) break;
+      seenKeys.add(next);
       nextKey = next;
     }
     return items;
@@ -376,37 +377,23 @@ export async function fetchLeagueCooperativeItemLinks(account: LeagueAccountRow)
 async function saveLeagueCooperativeItemCache(accountId: string, items: Map<string, CooperativeItem[]>) {
   const sql = getDb();
   const rows = Array.from(items.values()).flat();
+  const itemCount = new Set(rows.map((item) => item.productId)).size;
   await sql.begin(async (tx) => {
     await tx`DELETE FROM league_cooperative_item_cache WHERE league_account_id = ${accountId}`;
     if (rows.length) await tx`
-      INSERT INTO league_cooperative_item_cache(
-        league_account_id, product_id, head_supplier_item_link, title, image_urls,
-        selling_price_fen, shop_appid, shop_name, shop_score, shop_icon, good_evaluation_ratio, synced_at
-      )
-      SELECT ${accountId}::uuid, cached.product_id, cached.head_supplier_item_link, cached.title,
-             cached.image_urls::jsonb, cached.selling_price_fen, cached.shop_appid, cached.shop_name,
-             cached.shop_score, cached.shop_icon, cached.good_evaluation_ratio, now()
+      INSERT INTO league_cooperative_item_cache(league_account_id, product_id, head_supplier_item_link, synced_at)
+      SELECT ${accountId}::uuid, cached.product_id, cached.head_supplier_item_link, now()
       FROM unnest(
         ${rows.map((item) => item.productId)}::text[],
-        ${rows.map((item) => item.link)}::text[],
-        ${rows.map((item) => item.title)}::text[],
-        ${rows.map((item) => JSON.stringify(item.imageUrls || []))}::text[],
-        ${rows.map((item) => item.sellingPriceFen)}::integer[],
-        ${rows.map((item) => item.shopAppid)}::text[],
-        ${rows.map((item) => item.shopName)}::text[],
-        ${rows.map((item) => item.shopScore)}::integer[],
-        ${rows.map((item) => item.shopIcon)}::text[],
-        ${rows.map((item) => item.goodEvaluationRatio)}::integer[]
-      ) AS cached(
-        product_id, head_supplier_item_link, title, image_urls, selling_price_fen,
-        shop_appid, shop_name, shop_score, shop_icon, good_evaluation_ratio
-      )
+        ${rows.map((item) => item.link)}::text[]
+      ) AS cached(product_id, head_supplier_item_link)
     `;
     await tx`
-      INSERT INTO league_cooperative_cache_state(league_account_id, item_count, synced_at)
-      VALUES (${accountId}, ${rows.length}, now())
+      INSERT INTO league_cooperative_cache_state(league_account_id, item_count, synced_at, sync_status, sync_error)
+      VALUES (${accountId}, ${itemCount}, now(), 'idle', null)
       ON CONFLICT (league_account_id) DO UPDATE
-      SET item_count = excluded.item_count, synced_at = excluded.synced_at
+      SET item_count = excluded.item_count, synced_at = excluded.synced_at,
+          sync_status = 'idle', sync_error = null
     `;
   });
 }
@@ -431,30 +418,119 @@ export function refreshLeagueCooperativeItemCache(account: LeagueAccountRow): Pr
 
 async function loadCachedLeagueCooperativeItems(accountId: string, productId: string) {
   const sql = getDb();
-  const [stateRows, rows] = await Promise.all([
-    sql`SELECT synced_at FROM league_cooperative_cache_state WHERE league_account_id = ${accountId}`,
-    sql`
-      SELECT product_id, head_supplier_item_link, title, image_urls, selling_price_fen,
-             shop_appid, shop_name, shop_score, shop_icon, good_evaluation_ratio
-      FROM league_cooperative_item_cache
-      WHERE league_account_id = ${accountId} AND product_id = ${productId}
-      ORDER BY head_supplier_item_link
-    `,
-  ]);
-  const syncedAt = stateRows[0]?.syncedAt ? new Date(String(stateRows[0].syncedAt)).getTime() : 0;
+  const rows = await sql`
+    SELECT product_id, head_supplier_item_link
+    FROM league_cooperative_item_cache
+    WHERE league_account_id = ${accountId} AND product_id = ${productId}
+    ORDER BY head_supplier_item_link
+  `;
   const items = rows.map((row) => ({
     productId: String(row.productId),
     link: String(row.headSupplierItemLink),
-    title: safeText(row.title),
-    imageUrls: imageUrls(row.imageUrls),
-    sellingPriceFen: safeNumber(row.sellingPriceFen),
-    shopAppid: safeText(row.shopAppid),
-    shopName: safeText(row.shopName),
-    shopScore: safeNumber(row.shopScore),
-    shopIcon: safeText(row.shopIcon),
-    goodEvaluationRatio: safeNumber(row.goodEvaluationRatio),
   } satisfies CooperativeItem));
-  return { items, fresh: syncedAt > 0 && syncedAt >= Date.now() - COOPERATIVE_CACHE_TTL_MS };
+  return items;
+}
+
+type TargetedCooperativeScanResult = {
+  matches: CooperativeItem[];
+  limited: boolean;
+};
+
+const targetedCooperativeScans = new Map<string, Promise<TargetedCooperativeScanResult>>();
+
+async function fetchLeagueCooperativeProductMatches(account: LeagueAccountRow, productId: string) {
+  const key = `${account.id}\u0000${productId}`;
+  const running = targetedCooperativeScans.get(key);
+  if (running) return running;
+  const scan = (async () => {
+    if (!(await reservePrimaryProductScan(account.id, productId))) {
+      return { matches: [], limited: true } satisfies TargetedCooperativeScanResult;
+    }
+    let found = false;
+    const groups = await Promise.all([0, 1].map(async (commissionType) => {
+      const matches: CooperativeItem[] = [];
+      let nextKey = "";
+      const seenKeys = new Set<string>();
+      while (!found) {
+        const payload = await callLeagueApi<{
+          list?: Array<Record<string, unknown> & { product_id?: number | string; head_supplier_item_link?: string }>;
+          next_key?: string;
+        }>(account, "/channels/ec/league/headsupplier/cooperativeitem/list/get", {
+          commission_type: commissionType,
+          page_size: 20,
+          next_key: nextKey,
+        });
+        const list = Array.isArray(payload.list) ? payload.list : [];
+        for (const item of list) {
+          if (safeText(item.product_id) !== productId) continue;
+          const link = safeText(item.head_supplier_item_link);
+          if (link) matches.push({ productId, link, ...parseLeagueProductSnapshot(item) });
+        }
+        if (matches.length) { found = true; break; }
+        const next = safeText(payload.next_key);
+        if (!next || seenKeys.has(next) || list.length === 0) break;
+        seenKeys.add(next);
+        nextKey = next;
+      }
+      return matches;
+    }));
+    return {
+      matches: uniqueCooperativeItems(groups.flat()),
+      limited: false,
+    } satisfies TargetedCooperativeScanResult;
+  })();
+  targetedCooperativeScans.set(key, scan);
+  scan.then(
+    () => targetedCooperativeScans.delete(key),
+    () => targetedCooperativeScans.delete(key),
+  );
+  return scan;
+}
+
+async function saveTargetedCooperativeMatches(accountId: string, productId: string, matches: CooperativeItem[]) {
+  const sql = getDb();
+  await sql.begin(async (tx) => {
+    await tx`DELETE FROM league_cooperative_item_cache WHERE league_account_id = ${accountId} AND product_id = ${productId}`;
+    if (matches.length) await tx`
+      INSERT INTO league_cooperative_item_cache(league_account_id, product_id, head_supplier_item_link, synced_at)
+      SELECT ${accountId}::uuid, ${productId}, link, now()
+      FROM unnest(${matches.map((item) => item.link)}::text[]) AS links(link)
+      ON CONFLICT (league_account_id, product_id, head_supplier_item_link)
+      DO UPDATE SET synced_at = excluded.synced_at
+    `;
+    await tx`
+      UPDATE league_cooperative_cache_state
+      SET item_count = (
+        SELECT count(DISTINCT product_id)::int
+        FROM league_cooperative_item_cache
+        WHERE league_account_id = ${accountId}
+      )
+      WHERE league_account_id = ${accountId}
+    `;
+  });
+}
+
+async function reservePrimaryProductScan(accountId: string, productId: string) {
+  const sql = getDb();
+  const rows = await sql`
+    INSERT INTO league_product_lookup_throttles(
+      league_account_id, product_id, window_started_at, attempt_count, last_attempt_at
+    ) VALUES (${accountId}, ${productId}, now(), 1, now())
+    ON CONFLICT (league_account_id, product_id) DO UPDATE
+    SET attempt_count = CASE
+          WHEN league_product_lookup_throttles.window_started_at <= now() - interval '5 minutes' THEN 1
+          ELSE league_product_lookup_throttles.attempt_count + 1
+        END,
+        window_started_at = CASE
+          WHEN league_product_lookup_throttles.window_started_at <= now() - interval '5 minutes' THEN now()
+          ELSE league_product_lookup_throttles.window_started_at
+        END,
+        last_attempt_at = now()
+    WHERE league_product_lookup_throttles.window_started_at <= now() - interval '5 minutes'
+       OR league_product_lookup_throttles.attempt_count < 3
+    RETURNING attempt_count
+  `;
+  return rows.length > 0;
 }
 
 export async function loadActiveLeagueAccounts(): Promise<LeagueAccountRow[]> {
@@ -557,37 +633,34 @@ async function resolveLeagueLookupMatches(account: LeagueAccountRow, productId: 
   return { candidates, errors };
 }
 
-async function lookupLeagueAccountProductCandidates(account: LeagueAccountRow, productId: string) {
+async function lookupLeagueAccountProductCandidates(account: LeagueAccountRow, productId: string, allowTargetedScan: boolean) {
   const cached = await loadCachedLeagueCooperativeItems(account.id, productId);
-  let matches = cached.items;
+  let matches = cached;
   let refreshed = false;
+  let scanLimited = false;
   let refreshError: string | null = null;
-  if (!cached.fresh && !matches.length) {
-    try {
-      const cooperative = await refreshLeagueCooperativeItemCache(account);
-      matches = cooperative.get(productId) || [];
-      refreshed = true;
-    } catch (error) {
-      refreshError = `${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`;
-    }
-  }
   let resolved = await resolveLeagueLookupMatches(account, productId, matches);
-  // A cached link can be removed or replaced. Refresh the catalog once only when live validation fails.
-  if (matches.length && !resolved.candidates.length && !refreshed) {
+  if (allowTargetedScan && !matches.length) {
     try {
-      const cooperative = await refreshLeagueCooperativeItemCache(account);
-      matches = cooperative.get(productId) || [];
-      refreshed = true;
-      resolved = await resolveLeagueLookupMatches(account, productId, matches);
+      const scan = await fetchLeagueCooperativeProductMatches(account, productId);
+      if (scan.limited) {
+        scanLimited = true;
+      } else {
+        matches = scan.matches;
+        await saveTargetedCooperativeMatches(account.id, productId, matches);
+        refreshed = true;
+        resolved = await resolveLeagueLookupMatches(account, productId, matches);
+      }
     } catch (error) {
-      refreshError = `${account.name}：${error instanceof Error ? error.message : "合作商品列表获取失败"}`;
+      refreshError = `${account.name}：${error instanceof Error ? error.message : "合作商品目录扫描失败"}`;
     }
   }
   return {
     candidates: resolved.candidates,
     errors: [...(refreshError ? [refreshError] : []), ...resolved.errors],
-    cacheHit: !refreshed && (cached.fresh || cached.items.length > 0),
+    cacheHit: !refreshed && cached.length > 0,
     refreshed,
+    scanLimited,
   };
 }
 
@@ -597,11 +670,12 @@ export async function lookupLeagueProductCandidates(productId: string): Promise<
   accountCount: number;
   cacheHits: number;
   refreshedAccounts: number;
+  scanLimited: boolean;
 }> {
   const accounts = await loadActiveLeagueAccounts();
   const primary = accounts.find((account) => account.isPrimary) || null;
   const others = primary ? accounts.filter((account) => account.id !== primary.id) : accounts;
-  const primaryResult = primary ? await lookupLeagueAccountProductCandidates(primary, productId) : null;
+  const primaryResult = primary ? await lookupLeagueAccountProductCandidates(primary, productId, true) : null;
   if (primaryResult?.candidates.length) {
     return {
       candidates: primaryResult.candidates,
@@ -609,9 +683,10 @@ export async function lookupLeagueProductCandidates(productId: string): Promise<
       accountCount: accounts.length,
       cacheHits: primaryResult.cacheHit ? 1 : 0,
       refreshedAccounts: primaryResult.refreshed ? 1 : 0,
+      scanLimited: primaryResult.scanLimited,
     };
   }
-  const otherResults = await Promise.all(others.map((account) => lookupLeagueAccountProductCandidates(account, productId)));
+  const otherResults = await Promise.all(others.map((account) => lookupLeagueAccountProductCandidates(account, productId, false)));
   const results = [...(primaryResult ? [primaryResult] : []), ...otherResults];
   return {
     candidates: results.flatMap((result) => result.candidates),
@@ -619,6 +694,7 @@ export async function lookupLeagueProductCandidates(productId: string): Promise<
     accountCount: accounts.length,
     cacheHits: results.filter((result) => result.cacheHit).length,
     refreshedAccounts: results.filter((result) => result.refreshed).length,
+    scanLimited: Boolean(primaryResult?.scanLimited),
   };
 }
 

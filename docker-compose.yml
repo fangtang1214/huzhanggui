@@ -75,6 +75,19 @@ services:
     networks:
       - internal
 
+  league-sync:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["node", "scripts/league-directory-sync.mjs"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      TZ: Asia/Shanghai
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - internal
+
   app:
     build: .
     restart: unless-stopped

@@ -68,6 +68,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 .recognition-status > div { display: flex; flex-direction: column; flex: 1; }
 .recognition-status > div span { color: var(--ink-soft); font-size: 12px; }
 .recognition-status > div small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.recognition-failure-reasons { margin: 8px 0 2px; padding: 0; display: grid; gap: 6px; list-style: none; }
+.recognition-failure-reasons li { padding: 7px 9px; display: grid; grid-template-columns: minmax(110px,auto) 1fr; gap: 8px; border-radius: 7px; color: var(--ink-soft); background: rgba(255,255,255,.72); }
+.recognition-failure-reasons li b { color: var(--red); font-size: 12px; }
 .match-intro { padding: 12px; border-radius: 12px; background: var(--green-pale); display: flex; align-items: center; gap: 14px; }
 .match-intro img { width: 78px; height: 78px; object-fit: cover; border-radius: 9px; background: #fff; }
 .match-intro p { margin: 4px 0 0; color: var(--ink-soft); }

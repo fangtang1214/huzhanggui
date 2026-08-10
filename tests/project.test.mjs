@@ -35,7 +35,7 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   const updateScript = await readFile(new URL("../update.sh", import.meta.url), "utf8");
   assert.match(updateScript, /ADMIN_PASSWORD=.*BOOTSTRAP_PLACEHOLDER/);
   assert.match(updateScript, /8800 8000 8080 8008/);
-  assert.match(updateScript, /model-init vision indexer app backup/);
+  assert.match(updateScript, /model-init vision indexer league-sync app backup/);
   assert.match(updateScript, /ALTER DATABASE siyuan RENAME TO huzhanggui/);
   assert.match(updateScript, /ALTER ROLE siyuan RENAME TO huzhanggui/);
   assert.match(updateScript, /copy_volume .*huzhanggui_database_data/);
@@ -483,6 +483,12 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(historyTable.rows[0].name, "product_link_history");
     const existingHistory = await database.query("SELECT count(*)::int AS count FROM product_link_history");
     assert.equal(existingHistory.rows[0].count, 0);
+    const directoryCacheColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_item_cache' ORDER BY column_name");
+    assert.deepEqual(directoryCacheColumns.rows.map((row) => row.column_name), ["head_supplier_item_link", "league_account_id", "product_id", "synced_at"]);
+    const directoryStateColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_cache_state' AND column_name IN ('sync_status','sync_requested_at','sync_started_at','sync_error') ORDER BY column_name");
+    assert.deepEqual(directoryStateColumns.rows.map((row) => row.column_name), ["sync_error", "sync_requested_at", "sync_started_at", "sync_status"]);
+    const lookupThrottleTable = await database.query("SELECT to_regclass('league_product_lookup_throttles') AS name");
+    assert.equal(lookupThrottleTable.rows[0].name, "league_product_lookup_throttles");
     await database.query("INSERT INTO product_link_history(product_id,url,replaced_by_url,source) VALUES($1,'https://example.com/old-product-link','https://example.com/latest-product-link','product_edit')", [product.rows[0].id]);
     const fuzzyHistory = await database.query("SELECT count(*)::int AS count FROM products p WHERE EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE $1)", ["%old-product%"]);
     assert.equal(fuzzyHistory.rows[0].count, 1);
@@ -628,25 +634,61 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(route, /existingProduct/);
   assert.match(route, /cacheHits: lookup\.cacheHits/);
   assert.match(route, /refreshedAccounts: lookup\.refreshedAccounts/);
+  assert.match(route, /primaryScanLimited: lookup\.scanLimited/);
+  assert.match(route, /该商品未与任何已启用机构合作/);
   assert.doesNotMatch(route, /INSERT INTO talent_window_products/);
 
   const league = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(league, /export async function lookupLeagueProductCandidates/);
   assert.match(league, /fetchLeagueCooperativeItemLinks\(account\)/);
-  assert.match(league, /COOPERATIVE_CACHE_TTL_MS/);
   assert.match(league, /refreshLeagueCooperativeItemCache/);
   assert.match(league, /loadCachedLeagueCooperativeItems/);
   assert.match(league, /Promise\.all\(\[0, 1\]\.map/);
   assert.match(league, /if \(primaryResult\?\.candidates\.length\)/);
-  assert.match(league, /!cached\.fresh && !matches\.length/);
-  assert.match(league, /cached link can be removed or replaced/);
+  assert.match(league, /fetchLeagueCooperativeProductMatches/);
+  assert.match(league, /reservePrimaryProductScan/);
+  assert.match(league, /interval '5 minutes'/);
+  assert.match(league, /attempt_count < 3/);
+  assert.match(league, /lookupLeagueAccountProductCandidates\(primary, productId, true\)/);
+  assert.match(league, /lookupLeagueAccountProductCandidates\(account, productId, false\)/);
+  assert.match(league, /if \(allowTargetedScan && !matches\.length\)/);
   assert.match(league, /fetchLeagueItemPromotion\(account, match\.link\)/);
   assert.match(league, /fetchLeagueProductDetail\(account, preliminary\.shopAppid, productId\)/);
+  assert.doesNotMatch(league, /cached\.image_urls/);
+  assert.doesNotMatch(league, /page < 500/);
 
   const cacheMigration = await readFile(new URL("../migrations/029_league_cooperative_item_cache.sql", import.meta.url), "utf8");
   assert.match(cacheMigration, /CREATE TABLE IF NOT EXISTS league_cooperative_item_cache/);
   assert.match(cacheMigration, /PRIMARY KEY \(league_account_id, product_id, head_supplier_item_link\)/);
   assert.match(cacheMigration, /CREATE TABLE IF NOT EXISTS league_cooperative_cache_state/);
+  const directoryMigration = await readFile(new URL("../migrations/031_league_cooperative_directory_sync.sql", import.meta.url), "utf8");
+  assert.match(directoryMigration, /DROP COLUMN IF EXISTS image_urls/);
+  assert.match(directoryMigration, /sync_status/);
+  assert.match(directoryMigration, /CREATE TABLE IF NOT EXISTS league_product_lookup_throttles/);
+
+  const directoryWorker = await readFile(new URL("../scripts/league-directory-sync.mjs", import.meta.url), "utf8");
+  assert.match(directoryWorker, /primaryIntervalMinutes = 30/);
+  assert.match(directoryWorker, /secondaryIntervalMinutes = 180/);
+  assert.match(directoryWorker, /account\.is_primary THEN interval '30 minutes' ELSE interval '3 hours'/);
+  assert.match(directoryWorker, /league_cooperative_item_cache/);
+  assert.doesNotMatch(directoryWorker, /image_urls/);
+  assert.doesNotMatch(directoryWorker, /page < 500/);
+  const compose = await readFile(new URL("../docker-compose.yml", import.meta.url), "utf8");
+  assert.match(compose, /league-sync:/);
+  assert.match(compose, /scripts\/league-directory-sync\.mjs/);
+  const updateScript = await readFile(new URL("../update.sh", import.meta.url), "utf8");
+  assert.match(updateScript, /model-init vision indexer league-sync app backup/);
+
+  const accountRoute = await readFile(new URL("../app/api/league-accounts/route.ts", import.meta.url), "utf8");
+  assert.match(accountRoute, /directory_item_count/);
+  assert.match(accountRoute, /directory_sync_status/);
+  const manualSyncRoute = await readFile(new URL("../app/api/league-accounts/[id]/cooperative-sync/route.ts", import.meta.url), "utf8");
+  assert.match(manualSyncRoute, /requireSuperAdmin/);
+  assert.match(manualSyncRoute, /sync_requested_at=now\(\)/);
+  const accountView = await readFile(new URL("../components/views/league-accounts-view.tsx", import.meta.url), "utf8");
+  assert.match(accountView, /合作商品目录/);
+  assert.match(accountView, /同步目录/);
+  assert.match(accountView, /主机构目录每 30 分钟自动同步/);
 
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /选择登记方式/);
