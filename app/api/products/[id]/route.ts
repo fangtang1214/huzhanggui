@@ -26,7 +26,7 @@ const schema = z.object({
   cooperationMechanism: optionalText,
   categoryId: z.string().uuid().optional().nullable(),
   tagIds: z.array(z.string().uuid()).default([]),
-  imageUrls: z.array(imageUrlSchema).max(100).default([]),
+  imageUrls: z.array(imageUrlSchema).min(1, "请至少保留一张商品图片").max(100),
   notes: optionalText,
 });
 

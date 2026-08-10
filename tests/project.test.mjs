@@ -12,6 +12,7 @@ import { extractSampleCode } from "../lib/scan-code.ts";
 import { formatCommission, normalizeCommission } from "../lib/commission.ts";
 import { DEFAULT_PRODUCT_COPY_CONFIG, normalizeProductCopyConfig } from "../lib/product-copy.ts";
 import { SAMPLE_STATUSES, statusLabel } from "../lib/constants.ts";
+import { syncProductImageQueue, urlHash } from "../lib/image-matching.ts";
 
 test("系统包含核心样品流转数据结构", async () => {
   const migration = await readFile(new URL("../migrations/001_initial.sql", import.meta.url), "utf8");
@@ -485,6 +486,19 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     await database.query("INSERT INTO product_link_history(product_id,url,replaced_by_url,source) VALUES($1,'https://example.com/old-product-link','https://example.com/latest-product-link','product_edit')", [product.rows[0].id]);
     const fuzzyHistory = await database.query("SELECT count(*)::int AS count FROM products p WHERE EXISTS (SELECT 1 FROM product_link_history history WHERE history.product_id=p.id AND history.url ILIKE $1)", ["%old-product%"]);
     assert.equal(fuzzyHistory.rows[0].count, 1);
+    const recognizedImageUrl = "https://example.com/realtime-recognized.jpg";
+    const recognizedVector = `[${Array.from({ length: 512 }, () => "0.01").join(",")}]`;
+    await database.query(`INSERT INTO image_subject_cache(url_hash,model,image_url,subject_box,embedding,box_source)
+      VALUES($1,'glm-4.6v-flash',$2,'[10,20,900,950]'::jsonb,$3::vector,'glm')`, [urlHash(recognizedImageUrl), recognizedImageUrl, recognizedVector]);
+    await syncProductImageQueue(product.rows[0].id, [recognizedImageUrl], {
+      unsafe: async (query, parameters = []) => (await database.query(query, parameters)).rows,
+    });
+    const reusedSubject = await database.query("SELECT subject_status,subject_box,subject_model,subject_box_source,subject_embedding_vector IS NOT NULL AS has_embedding FROM product_image_features WHERE product_id=$1 AND url_hash=$2", [product.rows[0].id, urlHash(recognizedImageUrl)]);
+    assert.equal(reusedSubject.rows[0].subject_status, "ready");
+    assert.deepEqual(reusedSubject.rows[0].subject_box, [10, 20, 900, 950]);
+    assert.equal(reusedSubject.rows[0].subject_model, "glm-4.6v-flash");
+    assert.equal(reusedSubject.rows[0].subject_box_source, "glm");
+    assert.equal(reusedSubject.rows[0].has_embedding, true);
   } finally {
     await database.close();
   }
@@ -642,4 +656,26 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(form, /registrationMode === "product-id"/);
   assert.match(form, /正在核验商品 ID 和疑似同款/);
   assert.match(form, /更换登记方式/);
+  assert.match(form, /function removeProductImage\(index: number\)/);
+  assert.match(form, /nextRecognitionKey/);
+  assert.match(form, /disabled=\{imageUrls\.length <= 1\}/);
+  assert.match(form, /至少保留一张商品图片/);
+  assert.match(form, /imageUrls\.map\(\(url, index\)/);
+  assert.doesNotMatch(form, /imageUrls\.slice\(0, 6\)/);
+  const productUpdateRoute = await readFile(new URL("../app/api/products/[id]/route.ts", import.meta.url), "utf8");
+  assert.match(productUpdateRoute, /imageUrls: z\.array\(imageUrlSchema\)\.min\(1, "请至少保留一张商品图片"\)/);
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(styles, /\.image-preview-delete/);
+});
+
+test("登记时已完成的 GLM 主体识别会直接复用到正式索引", async () => {
+  const matching = await readFile(new URL("../lib/image-matching.ts", import.meta.url), "utf8");
+  assert.match(matching, /FROM product_image_features feature[\s\S]*JOIN image_subject_cache cache/);
+  assert.match(matching, /cache\.model IN \(setting\.model, 'glm-4\.6v-flash'\)/);
+  assert.match(matching, /subject_status = 'ready'/);
+  assert.match(matching, /subject_embedding_vector = cached\.embedding/);
+  assert.match(matching, /subject_box_source = cached\.box_source/);
+  const backfill = await readFile(new URL("../migrations/030_reuse_realtime_subject_cache.sql", import.meta.url), "utf8");
+  assert.match(backfill, /WHERE feature\.subject_status IN \('waiting', 'pending'\)/);
+  assert.match(backfill, /UPDATE product_image_features feature/);
 });
