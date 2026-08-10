@@ -246,6 +246,8 @@ test("同商品 ID 或主图链接直接关联，主体相似候选仍需人工�
   const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
   assert.ok(route.indexOf("exactIdMatch(input.apiProductId)") < route.indexOf("getGlmRuntime()"));
   assert.ok(route.indexOf("exactImageMatches([primary], input.excludeProductIds)") < route.indexOf("getGlmRuntime()"));
+  assert.match(route, /canonicalImageResourceUrl/);
+  assert.match(route, /regexp_replace\(trim\(stored\.image_url\), '\[\?\]imageView2\/\.\*\$'/);
   assert.match(route, /status: "exact_match"/);
   assert.match(route, /subject_embedding_vector <=>/);
   assert.match(route, /slice\(0, 5\)/);

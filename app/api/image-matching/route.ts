@@ -6,7 +6,7 @@ import { getDb } from "@/lib/db";
 import { analyzeSubjectsWithFallback, GLM_MODEL, getGlmRuntime, SUBJECT_BATCH_SIZE, SUBJECT_STAGE_TIMEOUT_MS, type GlmModel, type LocatedSubject, type SubjectBox } from "@/lib/glm-vision";
 import { embedImage, getMatchSettings, urlHash } from "@/lib/image-matching";
 import { groupImageMatchFailures } from "@/lib/image-match-failures";
-import { imageUrlSchema } from "@/lib/image-url";
+import { canonicalImageResourceUrl, imageUrlSchema } from "@/lib/image-url";
 
 const schema = z.object({
   imageUrls: z.array(imageUrlSchema).min(1).max(100),
@@ -48,7 +48,7 @@ async function exactIdMatch(apiProductId?: string | null) {
 }
 
 async function exactImageMatches(imageUrls: string[], excluded: string[]): Promise<Array<Record<string, unknown>>> {
-  const uniqueUrls = [...new Set(imageUrls.map((imageUrl) => imageUrl.trim()).filter(Boolean))];
+  const uniqueUrls = [...new Set(imageUrls.map(canonicalImageResourceUrl).filter(Boolean))];
   if (!uniqueUrls.length) return [];
   const sql = getDb();
   const rows = await sql`
@@ -61,7 +61,7 @@ async function exactImageMatches(imageUrls: string[], excluded: string[]): Promi
     JOIN products p ON EXISTS (
       SELECT 1
       FROM jsonb_array_elements_text(p.image_urls) AS stored(image_url)
-      WHERE trim(stored.image_url) = incoming.image_url
+      WHERE regexp_replace(trim(stored.image_url), '[?]imageView2/.*$', '', 'i') = incoming.image_url
     )
     WHERE NOT(p.id=ANY(${excluded}::uuid[]))
     ORDER BY incoming.image_order, p.archived, p.updated_at DESC
