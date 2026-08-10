@@ -1,8 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { CheckCircle2, CircleAlert, Clipboard, ClipboardCheck, ClipboardList, Database, Download, FileSpreadsheet, HardDrive, KeyRound, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
-import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
+import { CheckCircle2, CircleAlert, ClipboardList, Database, Download, FileSpreadsheet, HardDrive, KeyRound, Link2, Plus, RefreshCw, Send, ServerCog, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
+import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, PageHeader, Pagination } from "../ui";
 
 type Audit = { id: string; action: string; entityType: string; entityId?: string; summary: string; changes?: unknown; ipAddress?: string; createdAt: string; userName?: string; username?: string; departmentName?: string };
@@ -64,13 +64,22 @@ export function SystemUpdateView() {
 }
 
 type WecomSheetStatus = {
-  enabled: boolean;
+  configured: boolean;
   updatedAt?: string | null;
-  productCount: number;
-  endpointPath: string;
+  activeProductCount: number;
+  totalProductCount: number;
+  mappedProductCount: number;
+  intervalMinutes: number;
   fields: string[];
-  url?: string;
-  importFormula?: string;
+  syncStatus: "idle" | "pending" | "running" | "failed";
+  syncRequestedAt?: string | null;
+  syncStartedAt?: string | null;
+  syncedAt?: string | null;
+  syncError?: string | null;
+  totalCount: number;
+  progressCount: number;
+  addedCount: number;
+  updatedCount: number;
 };
 
 export function WecomSheetSyncView() {
@@ -78,36 +87,51 @@ export function WecomSheetSyncView() {
   const toast = useToast();
   const { data, loading, error, reload, setData } = useRemote<WecomSheetStatus>("/api/system/wecom-sheet");
   const [saving, setSaving] = useState(false);
-  const [copied, setCopied] = useState<"url" | "formula" | "">("");
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ webhookUrl: "", exampleData: "" });
+
+  const syncing = data?.syncStatus === "pending" || data?.syncStatus === "running";
+  useEffect(() => {
+    if (!syncing) return;
+    let cancelled = false;
+    let timer: number;
+    const poll = async () => { await reload(); if (!cancelled) timer = window.setTimeout(poll, 2500); };
+    timer = window.setTimeout(poll, 2500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [syncing, reload]);
 
   if (!user.isSuperAdmin) return <ErrorState message="仅超级管理员可以配置表格同步" />;
   if (loading && !data) return <LoadingState />;
   if (error && !data) return <ErrorState message={error} retry={reload} />;
-  const status = data || { enabled: false, productCount: 0, endpointPath: "", fields: [] };
+  const status = data || { configured: false, activeProductCount: 0, totalProductCount: 0, mappedProductCount: 0, intervalMinutes: 30, fields: [], syncStatus: "idle" as const, totalCount: 0, progressCount: 0, addedCount: 0, updatedCount: 0 };
+  const active = status.syncStatus === "pending" || status.syncStatus === "running";
+  const stateTitle = status.syncStatus === "pending" ? "等待同步" : status.syncStatus === "running" ? "正在同步" : status.syncStatus === "failed" ? "同步失败" : status.syncedAt ? "同步正常" : status.configured ? "等待首次同步" : "尚未配置";
+  const stateDescription = status.syncStatus === "pending" ? "后台服务即将开始处理商品数据" : status.syncStatus === "running" ? `已处理 ${status.progressCount} / ${status.totalCount} 件商品` : status.syncStatus === "failed" ? "连接或数据格式出现问题，请查看右侧提示" : status.syncedAt ? `每 ${status.intervalMinutes} 分钟自动检查商品变化` : status.configured ? "连接已保存，正在等待后台服务" : "连接后才会向智能表格推送商品档案";
 
-  async function generate() {
-    if (status.enabled && !confirm("生成新密钥后，之前复制到表格中的同步网址会立即失效。确定继续吗？")) return;
+  async function configure(event: FormEvent) {
+    event.preventDefault();
     setSaving(true);
     try {
-      const next = await apiFetch<WecomSheetStatus>("/api/system/wecom-sheet", { method: "POST" });
+      const next = await apiFetch<WecomSheetStatus>("/api/system/wecom-sheet", { method: "PUT", body: JSON.stringify(form) });
       setData(next);
-      setCopied("");
-      toast(status.enabled ? "同步密钥已重置，请重新复制公式" : "同步接口已启用");
+      setForm({ webhookUrl: "", exampleData: "" });
+      setEditing(false);
+      toast("连接已保存，首次商品同步已排队");
     } catch (reason) {
-      toast(reason instanceof Error ? reason.message : "生成同步密钥失败", "error");
+      toast(reason instanceof Error ? reason.message : "保存连接失败", "error");
     } finally {
       setSaving(false);
     }
   }
 
   async function disable() {
-    if (!confirm("停用后，已经粘贴到企业微信表格中的同步公式将无法再读取商品库。确定停用吗？")) return;
+    if (!confirm("停用后网站不会再更新智能表格，表格中已经同步的行会保留。确定停用吗？")) return;
     setSaving(true);
     try {
       const next = await apiFetch<WecomSheetStatus>("/api/system/wecom-sheet", { method: "DELETE" });
       setData(next);
-      setCopied("");
-      toast("表格同步接口已停用");
+      setEditing(false);
+      toast("智能表格同步已停用");
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : "停用失败", "error");
     } finally {
@@ -115,32 +139,41 @@ export function WecomSheetSyncView() {
     }
   }
 
-  async function copy(value: string, kind: "url" | "formula") {
-    if (!(await copyToClipboard(value))) return toast("复制失败，请手动选择文字复制", "error");
-    setCopied(kind);
-    toast(kind === "formula" ? "测试公式已复制" : "商品库网址已复制");
-    window.setTimeout(() => setCopied((current) => current === kind ? "" : current), 1800);
+  async function syncNow() {
+    setSaving(true);
+    try {
+      const next = await apiFetch<WecomSheetStatus>("/api/system/wecom-sheet", { method: "POST" });
+      setData(next);
+      toast(active ? "已追加一次同步任务" : "商品同步已排队");
+    } catch (reason) {
+      toast(reason instanceof Error ? reason.message : "同步请求失败", "error");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  return <><PageHeader eyebrow="企业微信普通在线表格" title="商品库表格同步" description="生成只读商品库网址，测试企业微信在线表格能否从狐掌柜自动读取商品档案。" />
+  return <><PageHeader eyebrow="企业微信智能表格" title="商品库自动同步" description="通过“接收外部数据”Webhook 推送商品档案，每 30 分钟自动检查一次变化。" />
     <div className="sheet-sync-layout">
       <section className="panel sheet-sync-card">
-        <div className={`sheet-sync-state ${status.enabled ? "enabled" : "disabled"}`}><span><FileSpreadsheet size={27} /></span><div><p className="eyebrow">同步接口</p><h2>{status.enabled ? "已启用" : "尚未启用"}</h2><p>{status.enabled ? `当前可同步 ${status.productCount} 个未归档商品` : "生成密钥后才会开放只读商品库"}</p></div></div>
-        <dl className="sheet-sync-details"><div><dt>商品范围</dt><dd>仅未归档商品</dd></div><div><dt>商品数量</dt><dd>{status.productCount}</dd></div><div><dt>最近配置</dt><dd>{formatDate(status.updatedAt, true)}</dd></div><div><dt>接口权限</dt><dd>只读，不能修改数据</dd></div></dl>
-        <div className="update-actions"><button className="button button-primary" onClick={generate} disabled={saving}><KeyRound size={17} />{saving ? "正在处理…" : status.enabled ? "重置并获取新网址" : "生成同步密钥"}</button>{status.enabled && <button className="button button-secondary" onClick={disable} disabled={saving}>停用接口</button>}</div>
-        <p className="update-safety"><ShieldCheck size={18} /><span><b>密钥只展示一次</b> 网站只保存不可还原的校验值。若关闭页面前没有保存网址，请重置密钥获取新网址。</span></p>
+        <div className={`sheet-sync-state ${status.configured && status.syncStatus !== "failed" ? "enabled" : "disabled"}`}><span>{status.syncStatus === "failed" ? <CircleAlert size={27} /> : <FileSpreadsheet size={27} />}</span><div><p className="eyebrow">同步状态</p><h2>{stateTitle}</h2><p>{stateDescription}</p></div>{status.syncStatus === "running" && <RefreshCw className="spin" size={22} />}</div>
+        {status.syncStatus === "running" && <div className="sheet-sync-progress"><i style={{ width: `${status.totalCount ? Math.min(100, status.progressCount / status.totalCount * 100) : 8}%` }} /></div>}
+        <dl className="sheet-sync-details"><div><dt>在用商品</dt><dd>{status.activeProductCount}</dd></div><div><dt>已建立同步</dt><dd>{status.mappedProductCount}</dd></div><div><dt>最近同步</dt><dd>{formatDate(status.syncedAt, true)}</dd></div><div><dt>自动频率</dt><dd>每 {status.intervalMinutes} 分钟</dd></div><div><dt>上次新增</dt><dd>{status.addedCount}</dd></div><div><dt>上次更新</dt><dd>{status.updatedCount}</dd></div></dl>
+        {status.syncError && <p className="sheet-sync-error"><CircleAlert size={18} /><span><b>同步没有完成</b>{status.syncError}</span></p>}
+        {status.configured && <div className="update-actions"><button className="button button-primary" onClick={syncNow} disabled={saving}><Send size={17} />{saving ? "正在提交…" : active ? "再同步一次" : "立即同步"}</button><button className="button button-secondary" onClick={() => setEditing(true)} disabled={active || saving}>更换连接</button><button className="button button-secondary" onClick={disable} disabled={active || saving}>停用</button></div>}
+        <p className="update-safety"><ShieldCheck size={18} /><span><b>不会碰手工行</b> 网站只更新自己创建的商品行；归档商品保留原行并标记“已归档”。</span></p>
       </section>
 
       <section className="panel sheet-sync-guide">
-        <header><div><p className="eyebrow">第一阶段测试</p><h2>在空白在线表格中尝试导入</h2></div></header>
-        {!status.enabled ? <div className="sheet-sync-empty"><KeyRound size={25} /><p>先在左侧生成同步密钥，随后这里会显示测试公式。</p></div> : status.importFormula && status.url ? <div className="sheet-sync-generated">
-          <div><b>1. 先检查商品库网址</b><p>打开网址后，应看到以“货号、商品名称、价格”开头的 CSV 内容。</p><div className="sheet-sync-code"><code>{status.url}</code><button className="icon-button" onClick={() => copy(status.url!, "url")} title="复制网址">{copied === "url" ? <ClipboardCheck size={18} /> : <Clipboard size={18} />}</button></div></div>
-          <div><b>2. 再测试 IMPORTDATA 公式</b><p>新建空白工作表并命名为“商品数据源”，在 A1 粘贴下面的公式。</p><div className="sheet-sync-code"><code>{status.importFormula}</code><button className="icon-button" onClick={() => copy(status.importFormula!, "formula")} title="复制公式">{copied === "formula" ? <ClipboardCheck size={18} /> : <Clipboard size={18} />}</button></div></div>
-          <p className="sheet-sync-notice"><TriangleAlert size={18} />企业微信是否支持该外部取数公式需要以实际表格结果为准。若提示函数不存在，请把完整提示发给我，我们再切换同步方式。</p>
-        </div> : <div className="sheet-sync-empty"><KeyRound size={25} /><p>密钥已启用，但出于安全原因不能再次显示。请点击左侧“重置并获取新网址”。</p></div>}
+        <header><div><p className="eyebrow">安全连接</p><h2>{status.configured && !editing ? "智能表格已连接" : "粘贴 Webhook 和示例数据"}</h2></div></header>
+        {status.configured && !editing ? <div className="sheet-sync-connected"><span><Link2 size={25} /></span><h3>连接信息已加密保存</h3><p>首次同步会新增全部在用商品，之后只推送发生变化的商品。主图第一版以网址文本写入。</p><ol><li>商品新增或修改后，最迟约 {status.intervalMinutes} 分钟进入表格。</li><li>也可以点击左侧“立即同步”马上检查。</li><li>若在企业微信里重建字段，请点击“更换连接”并重新粘贴。</li></ol></div> : <form className="sheet-sync-form" onSubmit={configure}>
+          <label><span>Webhook 地址</span><small>在“接收外部数据”页面点击复制；不要发到聊天或公开网页。</small><input type="password" autoComplete="off" placeholder="https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet/webhook?key=…" value={form.webhookUrl} onChange={(event) => setForm({ ...form, webhookUrl: event.target.value })} required /></label>
+          <label><span>示例数据</span><small>复制页面中的完整 JSON，用于识别每一列的字段编号。</small><textarea rows={12} spellCheck={false} placeholder={'{\n  "schema": { … },\n  "add_records": [ … ]\n}'} value={form.exampleData} onChange={(event) => setForm({ ...form, exampleData: event.target.value })} required /></label>
+          <p className="sheet-sync-notice"><TriangleAlert size={18} />保存后会立即用真实商品做首次同步，不会生成额外的测试行。</p>
+          <div className="update-actions"><button className="button button-primary" disabled={saving}><Link2 size={17} />{saving ? "正在保存…" : "保存并开始同步"}</button>{status.configured && <button type="button" className="button button-secondary" onClick={() => { setEditing(false); setForm({ webhookUrl: "", exampleData: "" }); }} disabled={saving}>取消</button>}</div>
+        </form>}
       </section>
     </div>
-    <section className="panel sheet-sync-fields"><div><p className="eyebrow">商品库列</p><h2>同步字段</h2><p>主图链接取商品档案中的第一张图片；商品资料更新后，下次重新计算外部导入公式时会读取新值。</p></div><ol>{status.fields.map((field, index) => <li key={field}><i>{String.fromCharCode(65 + index)}</i><span>{field}</span></li>)}</ol></section>
+    <section className="panel sheet-sync-fields"><div><p className="eyebrow">固定字段结构</p><h2>同步字段</h2><p>主图链接取商品档案中的第一张图片；“档案状态”用于保留并识别已经归档的商品。</p></div><ol>{status.fields.map((field, index) => <li key={field}><i>{String.fromCharCode(65 + index)}</i><span>{field}</span></li>)}</ol></section>
   </>;
 }
 

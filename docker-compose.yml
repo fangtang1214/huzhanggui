@@ -88,6 +88,20 @@ services:
     networks:
       - internal
 
+  wecom-sync:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["node", "scripts/wecom-smartsheet-sync.mjs"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SESSION_SECRET: ${SESSION_SECRET}
+      TZ: Asia/Shanghai
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - internal
+
   app:
     build: .
     restart: unless-stopped

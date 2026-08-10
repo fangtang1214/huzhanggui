@@ -770,12 +770,14 @@ select { cursor: pointer; }
 .update-safety b { display: block; color: var(--ink); }
 .sheet-sync-layout { max-width: 1120px; display: grid; grid-template-columns: minmax(340px, .8fr) minmax(440px, 1.2fr); gap: 15px; }
 .sheet-sync-card, .sheet-sync-guide { padding: 25px; }
-.sheet-sync-state { display: grid; grid-template-columns: 52px 1fr; align-items: center; gap: 14px; }
+.sheet-sync-state { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 14px; }
 .sheet-sync-state > span { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 14px; }
 .sheet-sync-state.enabled > span { color: var(--green); background: var(--green-pale); }
 .sheet-sync-state.disabled > span { color: var(--muted); background: #f0f1ed; }
 .sheet-sync-state h2 { margin: 2px 0; font-size: 23px; }
 .sheet-sync-state p { margin: 0; color: var(--muted); }
+.sheet-sync-progress { height: 6px; margin: 17px 0 -5px; overflow: hidden; border-radius: 999px; background: #e5e9e6; }
+.sheet-sync-progress i { display: block; height: 100%; border-radius: inherit; background: var(--green); transition: width .25s ease; }
 .sheet-sync-details { margin: 22px 0; display: grid; grid-template-columns: repeat(2, 1fr); border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
 .sheet-sync-details > div { padding: 12px 14px; border-bottom: 1px solid var(--line-soft); }
 .sheet-sync-details > div:nth-child(odd) { border-right: 1px solid var(--line-soft); }
@@ -794,6 +796,21 @@ select { cursor: pointer; }
 .sheet-sync-code .icon-button { flex: 0 0 auto; background: #fff; }
 .sheet-sync-notice { margin: 0 !important; padding: 11px 12px; display: flex; align-items: flex-start; gap: 8px; border-radius: 9px; color: #80551f !important; background: var(--orange-pale); }
 .sheet-sync-notice svg { flex: 0 0 auto; }
+.sheet-sync-error { margin: 0 0 16px; padding: 11px 12px; display: flex; align-items: flex-start; gap: 8px; border-radius: 9px; color: #8b342e; background: #fff0ed; }
+.sheet-sync-error svg { flex: 0 0 auto; }
+.sheet-sync-error b { display: block; margin-bottom: 2px; }
+.sheet-sync-connected { min-height: 320px; display: grid; place-items: center; align-content: center; text-align: center; }
+.sheet-sync-connected > span { width: 54px; height: 54px; display: grid; place-items: center; margin-bottom: 9px; border-radius: 15px; color: var(--green); background: var(--green-pale); }
+.sheet-sync-connected h3 { margin: 0; font-size: 18px; }
+.sheet-sync-connected > p { max-width: 480px; margin: 7px 0 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.sheet-sync-connected ol { margin: 0; padding: 14px 18px 14px 35px; border: 1px solid var(--line); border-radius: 10px; background: #fbfbf8; text-align: left; font-size: 12px; line-height: 1.9; }
+.sheet-sync-form { display: grid; gap: 17px; }
+.sheet-sync-form label { display: grid; gap: 6px; }
+.sheet-sync-form label > span { font-weight: 750; }
+.sheet-sync-form label > small { color: var(--muted); line-height: 1.5; }
+.sheet-sync-form input, .sheet-sync-form textarea { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: #fff; font: inherit; outline: 0; }
+.sheet-sync-form textarea { resize: vertical; min-height: 210px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.55; }
+.sheet-sync-form input:focus, .sheet-sync-form textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(31, 125, 91, .1); }
 .sheet-sync-fields { max-width: 1120px; margin-top: 15px; padding: 20px 23px; display: flex; align-items: center; justify-content: space-between; gap: 25px; }
 .sheet-sync-fields > div > p:last-child { max-width: 510px; margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .sheet-sync-fields ol { margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; list-style: none; }

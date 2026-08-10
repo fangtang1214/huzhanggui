@@ -35,7 +35,7 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   const updateScript = await readFile(new URL("../update.sh", import.meta.url), "utf8");
   assert.match(updateScript, /ADMIN_PASSWORD=.*BOOTSTRAP_PLACEHOLDER/);
   assert.match(updateScript, /8800 8000 8080 8008/);
-  assert.match(updateScript, /model-init vision indexer league-sync app backup/);
+  assert.match(updateScript, /model-init vision indexer league-sync wecom-sync app backup/);
   assert.match(updateScript, /ALTER DATABASE siyuan RENAME TO huzhanggui/);
   assert.match(updateScript, /ALTER ROLE siyuan RENAME TO huzhanggui/);
   assert.match(updateScript, /copy_volume .*huzhanggui_database_data/);
@@ -54,6 +54,8 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   assert.match(compose, /VISION_DTYPE: q8/);
   assert.match(compose, /SYSTEM_UPDATE_ENABLED: "true"/);
   assert.match(compose, /\/var\/lib\/huzhanggui-updater:\/updates/);
+  assert.match(compose, /wecom-sync:/);
+  assert.match(compose, /scripts\/wecom-smartsheet-sync\.mjs/);
   const manifest = await readFile(new URL("../app/manifest.ts", import.meta.url), "utf8");
   assert.match(manifest, /short_name: "狐掌柜"/);
   await readFile(new URL("../public/brand/huzhanggui-logo.png", import.meta.url));
@@ -504,6 +506,10 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(restoreColumn.rows[0].data_type, "boolean");
     const historyTable = await database.query("SELECT to_regclass('product_link_history') AS name");
     assert.equal(historyTable.rows[0].name, "product_link_history");
+    const wecomRecordsTable = await database.query("SELECT to_regclass('wecom_smartsheet_product_records') AS name");
+    assert.equal(wecomRecordsTable.rows[0].name, "wecom_smartsheet_product_records");
+    const wecomState = await database.query("SELECT sync_status FROM wecom_smartsheet_sync_state WHERE singleton=true");
+    assert.equal(wecomState.rows[0].sync_status, "idle");
     const existingHistory = await database.query("SELECT count(*)::int AS count FROM product_link_history");
     assert.equal(existingHistory.rows[0].count, 0);
     const exactImageMatch = await database.query(`
@@ -751,7 +757,7 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(compose, /league-sync:/);
   assert.match(compose, /scripts\/league-directory-sync\.mjs/);
   const updateScript = await readFile(new URL("../update.sh", import.meta.url), "utf8");
-  assert.match(updateScript, /model-init vision indexer league-sync app backup/);
+  assert.match(updateScript, /model-init vision indexer league-sync wecom-sync app backup/);
 
   const accountRoute = await readFile(new URL("../app/api/league-accounts/route.ts", import.meta.url), "utf8");
   assert.match(accountRoute, /directory_item_count/);
