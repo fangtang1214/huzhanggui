@@ -683,6 +683,10 @@ function isInstitutionAssignedLink(candidate: Pick<LeaguePromotionCandidate, "pr
   return candidate.linkType === "institution_assigned" || candidate.promotionLink.startsWith("weixinstoresubhs/");
 }
 
+export function needsInstitutionPromotionRefresh(candidates: Array<Pick<LeaguePromotionCandidate, "promotionLink"> & { linkType?: LeaguePromotionLinkType | null }>) {
+  return !candidates.some(isInstitutionAssignedLink);
+}
+
 export function preferredLeaguePromotionCandidates(candidates: LeaguePromotionCandidate[]) {
   const linked = candidates.filter((candidate) => Boolean(candidate.promotionLink));
   if (!linked.length) return [];
@@ -751,7 +755,7 @@ async function lookupLeagueAccountProductCandidates(account: LeagueAccountRow, p
   let scanLimited = false;
   let refreshError: string | null = null;
   let resolved = await resolveLeagueLookupMatches(account, productId, matches);
-  if (allowTargetedScan && !matches.length) {
+  if (allowTargetedScan && needsInstitutionPromotionRefresh(resolved.candidates)) {
     try {
       const scan = await fetchLeagueCooperativeProductMatches(account, productId);
       if (scan.limited) {
@@ -797,7 +801,7 @@ export async function lookupLeagueProductCandidates(productId: string): Promise<
       scanLimited: primaryResult.scanLimited,
     };
   }
-  const otherResults = await Promise.all(others.map((account) => lookupLeagueAccountProductCandidates(account, productId, false)));
+  const otherResults = await Promise.all(others.map((account) => lookupLeagueAccountProductCandidates(account, productId, true)));
   const results = [...(primaryResult ? [primaryResult] : []), ...otherResults];
   return {
     candidates: results.flatMap((result) => result.candidates),
@@ -805,7 +809,7 @@ export async function lookupLeagueProductCandidates(productId: string): Promise<
     accountCount: accounts.length,
     cacheHits: results.filter((result) => result.cacheHit).length,
     refreshedAccounts: results.filter((result) => result.refreshed).length,
-    scanLimited: Boolean(primaryResult?.scanLimited),
+    scanLimited: results.some((result) => result.scanLimited),
   };
 }
 

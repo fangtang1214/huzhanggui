@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { effectiveWindowProductId, parseLeagueProductDetail, parseLeagueProductQuality, preferredLeaguePromotionCandidates, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
+import { effectiveWindowProductId, needsInstitutionPromotionRefresh, parseLeagueProductDetail, parseLeagueProductQuality, preferredLeaguePromotionCandidates, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
 
 function candidate(overrides = {}) {
   return {
@@ -46,6 +46,15 @@ test("机构分配达人佣金链接优先于主账号的商家指定链接", ()
   assert.equal(selection.selected?.accountId, "secondary");
   assert.equal(selection.selected?.promotionLink, "weixinstoresubhs/6000000016843667");
   assert.equal(selection.requiresChoice, false);
+});
+
+test("只有旧商家指定链接缓存时需要重新扫描机构分配目录", () => {
+  assert.equal(needsInstitutionPromotionRefresh([
+    candidate({ promotionLink: "weixinstorehs/28759597470513", linkType: "merchant_assigned" }),
+  ]), true);
+  assert.equal(needsInstitutionPromotionRefresh([
+    candidate({ promotionLink: "weixinstoresubhs/6000000016843667", linkType: "institution_assigned" }),
+  ]), false);
 });
 
 test("多个机构分配链接先选主账号再比较服务费率", () => {

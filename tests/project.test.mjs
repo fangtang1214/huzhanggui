@@ -709,8 +709,8 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   assert.match(league, /interval '5 minutes'/);
   assert.match(league, /attempt_count < 3/);
   assert.match(league, /lookupLeagueAccountProductCandidates\(primary, productId, true\)/);
-  assert.match(league, /lookupLeagueAccountProductCandidates\(account, productId, false\)/);
-  assert.match(league, /if \(allowTargetedScan && !matches\.length\)/);
+  assert.match(league, /lookupLeagueAccountProductCandidates\(account, productId, true\)/);
+  assert.match(league, /if \(allowTargetedScan && needsInstitutionPromotionRefresh\(resolved\.candidates\)\)/);
   assert.match(league, /fetchLeagueItemPromotion\(account, match\.promotionDetailLink\)/);
   assert.match(league, /fetchLeagueProductDetail\(account, preliminary\.shopAppid, productId\)/);
   assert.doesNotMatch(league, /cached\.image_urls/);
@@ -731,6 +731,9 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   const institutionLinkMigration = await readFile(new URL("../migrations/033_institution_assigned_promotion_links.sql", import.meta.url), "utf8");
   assert.match(institutionLinkMigration, /promotion_detail_link/);
   assert.match(institutionLinkMigration, /institution_assigned/);
+  const institutionCacheRefreshMigration = await readFile(new URL("../migrations/034_refresh_institution_promotion_cache.sql", import.meta.url), "utf8");
+  assert.match(institutionCacheRefreshMigration, /sync_status = 'pending'/);
+  assert.match(institutionCacheRefreshMigration, /DELETE FROM league_product_lookup_throttles/);
 
   const directoryWorker = await readFile(new URL("../scripts/league-directory-sync.mjs", import.meta.url), "utf8");
   assert.match(directoryWorker, /primaryIntervalMinutes = 30/);
