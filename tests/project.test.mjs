@@ -595,6 +595,12 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(form, /draftCandidate/);
   assert.match(form, /仅更新商品信息/);
   assert.match(form, /value="update_only"/);
+  assert.match(form, /imageSearchMode === "url"/);
+  assert.match(form, /setImageSearchMode\("upload"\)/);
+  assert.match(form, /imagePasteRef\.current\?\.focus\(\)/);
+  assert.match(form, /剪贴板中没有图片，请先复制一张图片/);
+  assert.match(form, /onDrop=\{handleImageDrop\}/);
+  assert.match(form, /选择、粘贴或拖放要搜索的图片/);
   assert.match(form, /!result\.updatedOnly && result\.codes\.length === 1/);
   assert.match(form, /router\.push\(`\/samples\/\$\{result\.codes\[0\]\}`\)/);
   assert.match(form, /router\.push\(`\/products\/\$\{result\.id\}`\)/);

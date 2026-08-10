@@ -92,6 +92,7 @@ export function ProductsView() {
   const [copySettingsOpen, setCopySettingsOpen] = useState(false); const [savingCopyConfig, setSavingCopyConfig] = useState(false); const [copyingId, setCopyingId] = useState(""); const [draggingField, setDraggingField] = useState<ProductCopyFieldKey | null>(null);
   const [importOpen, setImportOpen] = useState(false); const [importing, setImporting] = useState(false); const [importResult, setImportResult] = useState<{ imported: number; total: number; failures: Array<{ row: number; message: string }> } | null>(null); const [importFile, setImportFile] = useState<File | null>(null);
   const [imageSearchOpen, setImageSearchOpen] = useState(false);
+  const [imageSearchMode, setImageSearchMode] = useState<"url" | "upload">("url");
   const [imageSearchUrl, setImageSearchUrl] = useState("");
   const [imageSearchBase64, setImageSearchBase64] = useState("");
   const [imageSearchPreview, setImageSearchPreview] = useState("");
@@ -100,6 +101,11 @@ export function ProductsView() {
   const imagePasteRef = useRef<HTMLDivElement>(null);
   const [imageResults, setImageResults] = useState<Array<{id:string;sku:string;name:string;imageUrls:string[];price:string;storeName?:string;productUrl?:string;sampleCount:number;similarity:number}> | null>(null);
   useEffect(() => { setArchiveView(new URLSearchParams(window.location.search).get("view") === "archived"); }, []);
+  useEffect(() => {
+    if (!imageSearchOpen || imageSearchMode !== "upload") return;
+    const frame = window.requestAnimationFrame(() => imagePasteRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [imageSearchOpen, imageSearchMode]);
   const queryParams = new URLSearchParams({ search, departmentId, categoryId, page: String(page), view: archiveView ? "archived" : "active" });
   prices.forEach((price) => queryParams.append("price", price));
   if (priceOrder) queryParams.set("priceOrder", priceOrder);
@@ -149,6 +155,7 @@ export function ProductsView() {
   }
   function openImageSearch() {
     setImageSearchOpen(!imageSearchOpen);
+    setImageSearchMode("url");
     setImageResults(null);
     setImageSearchUrl("");
     setImageSearchBase64("");
@@ -161,10 +168,9 @@ export function ProductsView() {
     setImageResults(null);
     if (imageFileRef.current) imageFileRef.current.value = "";
   }
-  function handleImageFile(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  function loadImageSearchFile(file: File) {
     if (!file.type.startsWith("image/")) { toast("请选择图片文件", "error"); return; }
+    setImageSearchMode("upload");
     const reader = new FileReader();
     reader.onload = () => {
       const base64 = reader.result as string;
@@ -175,26 +181,28 @@ export function ProductsView() {
     reader.onerror = () => { toast("图片读取失败", "error"); };
     reader.readAsDataURL(file);
   }
+  function handleImageFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) loadImageSearchFile(file);
+  }
   function handleImagePaste(event: React.ClipboardEvent) {
     const items = event.clipboardData?.items;
-    if (!items) return;
+    if (!items) { toast("剪贴板中没有可读取的图片", "error"); return; }
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.startsWith("image/")) {
         event.preventDefault();
         const file = items[i].getAsFile();
         if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const base64 = reader.result as string;
-          setImageSearchBase64(base64);
-          setImageSearchPreview(base64);
-          setImageSearchUrl("");
-        };
-        reader.onerror = () => { toast("图片读取失败", "error"); };
-        reader.readAsDataURL(file);
+        loadImageSearchFile(file);
         return;
       }
     }
+    toast("剪贴板中没有图片，请先复制一张图片", "error");
+  }
+  function handleImageDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const file = event.dataTransfer.files?.[0];
+    if (file) loadImageSearchFile(file);
   }
   async function searchByImage(event: FormEvent) {
     event.preventDefault();
@@ -322,27 +330,26 @@ export function ProductsView() {
   </div>}
   <form onSubmit={searchByImage}>
     <div className="image-search-tabs" style={{display:"flex",gap:"4px",marginBottom:"10px"}}>
-      <button type="button" className={`button button-compact ${!imageSearchBase64 ? "button-primary" : "button-ghost"}`} onClick={() => { setImageSearchBase64(""); setImageSearchPreview(""); if (imageFileRef.current) imageFileRef.current.value = ""; }}>图片网址</button>
-      <button type="button" className={`button button-compact ${imageSearchBase64 || imageSearchPreview ? "button-primary" : "button-ghost"}`} onClick={() => setImageSearchUrl("")}>上传 / 粘贴</button>
+      <button type="button" className={`button button-compact ${imageSearchMode === "url" ? "button-primary" : "button-ghost"}`} onClick={() => { setImageSearchMode("url"); setImageSearchBase64(""); setImageSearchPreview(""); if (imageFileRef.current) imageFileRef.current.value = ""; }}>图片网址</button>
+      <button type="button" className={`button button-compact ${imageSearchMode === "upload" ? "button-primary" : "button-ghost"}`} onClick={() => { setImageSearchMode("upload"); setImageSearchUrl(""); }}>上传 / 粘贴</button>
     </div>
-    {!imageSearchBase64 ? (
+    {imageSearchMode === "url" ? (
       <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
         <div className="search-box" style={{flex:1}}><Search size={18} /><input value={imageSearchUrl} onChange={(e) => setImageSearchUrl(e.target.value)} placeholder="粘贴商品图片的公开URL…" /></div>
       </div>
     ) : (
-      <div ref={imagePasteRef} onPaste={handleImagePaste} className="image-search-upload-zone" tabIndex={0} style={{border:"2px dashed var(--line-soft)",borderRadius:"10px",padding:"16px",textAlign:"center",color:"var(--muted)",fontSize:"13px",cursor:"pointer",outline:"none",marginBottom:"10px"}} onClick={() => imageFileRef.current?.click()}>
+      <><div ref={imagePasteRef} onPaste={handleImagePaste} onDragOver={(event) => event.preventDefault()} onDrop={handleImageDrop} className="image-search-upload-zone" role="button" aria-label="选择、粘贴或拖放要搜索的图片" tabIndex={0} style={{border:"2px dashed var(--line-soft)",borderRadius:"10px",padding:"16px",textAlign:"center",color:"var(--muted)",fontSize:"13px",cursor:"pointer",outline:"none",marginBottom:"10px"}} onClick={() => imageFileRef.current?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); imageFileRef.current?.click(); } }}>
         {imageSearchPreview ? (
           <img src={imageSearchPreview} alt="预览" style={{maxWidth:"100%",maxHeight:"160px",borderRadius:"6px",objectFit:"contain",marginBottom:"8px"}} />
         ) : (
           <>
             <Upload size={24} style={{marginBottom:"8px",display:"block",margin:"0 auto 8px"}} />
-            <p>点击选择图片，或在此处粘贴剪贴板中的图片</p>
+            <p>点击选择、拖放图片，或按 Ctrl+V 粘贴剪贴板中的图片</p>
           </>
         )}
-        <input ref={imageFileRef} type="file" accept="image/*" onChange={handleImageFile} style={{display:"none"}} />
-      </div>
+      </div><input ref={imageFileRef} type="file" accept="image/*" onChange={handleImageFile} style={{display:"none"}} /></>
     )}
-    <div style={{display:"flex",gap:"8px",alignItems:"center",marginTop: imageSearchBase64 ? 0 : "8px"}}>
+    <div style={{display:"flex",gap:"8px",alignItems:"center",marginTop: imageSearchMode === "upload" ? 0 : "8px"}}>
       <button className="button button-primary" type="submit" disabled={imageSearching || (!imageSearchUrl.trim() && !imageSearchBase64)}>{imageSearching ? "搜索中…" : "搜索"}</button>
     </div>
   </form>
