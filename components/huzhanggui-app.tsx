@@ -12,13 +12,13 @@ import { SampleDetailView, ScannerView } from "./views/samples-view";
 import { MovementsView } from "./views/movements-view";
 import { OrganizationView } from "./views/organization-view";
 import { UsersView } from "./views/access-view";
-import { AuditsView, BackupsView, ProfileView, SystemUpdateView } from "./views/system-view";
+import { AuditsView, BackupsView, ProfileView, SystemUpdateView, WecomSheetSyncView } from "./views/system-view";
 import { TalentAccountsView } from "./views/talent-accounts-view";
 import { LeagueAccountsView } from "./views/league-accounts-view";
 import { WindowProductsView } from "./views/window-products-view";
 import { RecognitionView } from "./views/recognition-view";
 import { LinkIssuesView } from "./views/link-issues-view";
-import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FolderKanban, History, LayoutGrid, Link2, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, ShoppingBag, Store, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
+import { Boxes, BrainCircuit, ChevronDown, CircleAlert, CircleGauge, ClipboardList, FileSpreadsheet, FolderKanban, History, LayoutGrid, Link2, LogOut, MapPin, Menu, PackagePlus, RefreshCw, ScanLine, Settings2, ShieldCheck, ShoppingBag, Store, Tags, UserCog, UsersRound, Warehouse, X } from "lucide-react";
 
 const primaryNav = [
   { href: "/", key: "dashboard", label: "工作台", permission: "dashboard:view", icon: CircleGauge },
@@ -34,6 +34,7 @@ const manageNav = [
   { href: "/recognition", key: "recognition", label: "图片识别", permission: "image_matching:manage|products:correct_merge", icon: BrainCircuit },
   { href: "/audits", key: "audits", label: "操作日志", permission: "audits:view", icon: ClipboardList },
   { href: "/backups", key: "backups", label: "数据备份", permission: "backups:view", icon: Warehouse },
+  { href: "/sheet-sync", key: "sheet-sync", label: "表格同步", permission: "*", icon: FileSpreadsheet },
   { href: "/system-update", key: "system-update", label: "系统更新", permission: "*", icon: RefreshCw },
 ];
 const wechatShopNav = [
@@ -75,6 +76,7 @@ function ViewRouter({ path }: { path: string[] }) {
   if (view === "window-products") return <WindowProductsView />;
   if (view === "talent-accounts") return <TalentAccountsView />;
   if (view === "league-accounts") return <LeagueAccountsView />;
+  if (view === "sheet-sync") return <WecomSheetSyncView />;
   if (view === "system-update") return <SystemUpdateView />;
   if (view === "profile") return <ProfileView />;
   return <DashboardView />;

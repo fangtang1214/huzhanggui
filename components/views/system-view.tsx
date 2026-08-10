@@ -1,8 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { CheckCircle2, CircleAlert, ClipboardList, Database, Download, HardDrive, KeyRound, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
-import { apiFetch, formatDate, useAppData, useRemote, useToast } from "../client-utils";
+import { CheckCircle2, CircleAlert, Clipboard, ClipboardCheck, ClipboardList, Database, Download, FileSpreadsheet, HardDrive, KeyRound, Plus, RefreshCw, ServerCog, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
+import { apiFetch, copyToClipboard, formatDate, useAppData, useRemote, useToast } from "../client-utils";
 import { EmptyState, ErrorState, Field, LoadingState, PageHeader, Pagination } from "../ui";
 
 type Audit = { id: string; action: string; entityType: string; entityId?: string; summary: string; changes?: unknown; ipAddress?: string; createdAt: string; userName?: string; username?: string; departmentName?: string };
@@ -61,6 +61,87 @@ export function SystemUpdateView() {
       <div className="update-actions"><button className="button button-primary" onClick={update} disabled={!status.available || active || submitting}><RefreshCw size={17} />{submitting ? "正在提交…" : active ? "更新进行中…" : "立即更新"}</button>{status.state === "succeeded" && <button className="button button-secondary" onClick={() => window.location.reload()}>刷新页面</button>}</div>
       <p className="update-safety"><ShieldCheck size={18} /><span><b>安全更新</b> 更新请求只能由超级管理员提交；执行更新的宿主机服务不会向网站开放 Docker 或系统命令权限。</span></p>
     </section></>;
+}
+
+type WecomSheetStatus = {
+  enabled: boolean;
+  updatedAt?: string | null;
+  productCount: number;
+  endpointPath: string;
+  fields: string[];
+  url?: string;
+  importFormula?: string;
+};
+
+export function WecomSheetSyncView() {
+  const { user } = useAppData();
+  const toast = useToast();
+  const { data, loading, error, reload, setData } = useRemote<WecomSheetStatus>("/api/system/wecom-sheet");
+  const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState<"url" | "formula" | "">("");
+
+  if (!user.isSuperAdmin) return <ErrorState message="仅超级管理员可以配置表格同步" />;
+  if (loading && !data) return <LoadingState />;
+  if (error && !data) return <ErrorState message={error} retry={reload} />;
+  const status = data || { enabled: false, productCount: 0, endpointPath: "", fields: [] };
+
+  async function generate() {
+    if (status.enabled && !confirm("生成新密钥后，之前复制到表格中的同步网址会立即失效。确定继续吗？")) return;
+    setSaving(true);
+    try {
+      const next = await apiFetch<WecomSheetStatus>("/api/system/wecom-sheet", { method: "POST" });
+      setData(next);
+      setCopied("");
+      toast(status.enabled ? "同步密钥已重置，请重新复制公式" : "同步接口已启用");
+    } catch (reason) {
+      toast(reason instanceof Error ? reason.message : "生成同步密钥失败", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function disable() {
+    if (!confirm("停用后，已经粘贴到企业微信表格中的同步公式将无法再读取商品库。确定停用吗？")) return;
+    setSaving(true);
+    try {
+      const next = await apiFetch<WecomSheetStatus>("/api/system/wecom-sheet", { method: "DELETE" });
+      setData(next);
+      setCopied("");
+      toast("表格同步接口已停用");
+    } catch (reason) {
+      toast(reason instanceof Error ? reason.message : "停用失败", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function copy(value: string, kind: "url" | "formula") {
+    if (!(await copyToClipboard(value))) return toast("复制失败，请手动选择文字复制", "error");
+    setCopied(kind);
+    toast(kind === "formula" ? "测试公式已复制" : "商品库网址已复制");
+    window.setTimeout(() => setCopied((current) => current === kind ? "" : current), 1800);
+  }
+
+  return <><PageHeader eyebrow="企业微信普通在线表格" title="商品库表格同步" description="生成只读商品库网址，测试企业微信在线表格能否从狐掌柜自动读取商品档案。" />
+    <div className="sheet-sync-layout">
+      <section className="panel sheet-sync-card">
+        <div className={`sheet-sync-state ${status.enabled ? "enabled" : "disabled"}`}><span><FileSpreadsheet size={27} /></span><div><p className="eyebrow">同步接口</p><h2>{status.enabled ? "已启用" : "尚未启用"}</h2><p>{status.enabled ? `当前可同步 ${status.productCount} 个未归档商品` : "生成密钥后才会开放只读商品库"}</p></div></div>
+        <dl className="sheet-sync-details"><div><dt>商品范围</dt><dd>仅未归档商品</dd></div><div><dt>商品数量</dt><dd>{status.productCount}</dd></div><div><dt>最近配置</dt><dd>{formatDate(status.updatedAt, true)}</dd></div><div><dt>接口权限</dt><dd>只读，不能修改数据</dd></div></dl>
+        <div className="update-actions"><button className="button button-primary" onClick={generate} disabled={saving}><KeyRound size={17} />{saving ? "正在处理…" : status.enabled ? "重置并获取新网址" : "生成同步密钥"}</button>{status.enabled && <button className="button button-secondary" onClick={disable} disabled={saving}>停用接口</button>}</div>
+        <p className="update-safety"><ShieldCheck size={18} /><span><b>密钥只展示一次</b> 网站只保存不可还原的校验值。若关闭页面前没有保存网址，请重置密钥获取新网址。</span></p>
+      </section>
+
+      <section className="panel sheet-sync-guide">
+        <header><div><p className="eyebrow">第一阶段测试</p><h2>在空白在线表格中尝试导入</h2></div></header>
+        {!status.enabled ? <div className="sheet-sync-empty"><KeyRound size={25} /><p>先在左侧生成同步密钥，随后这里会显示测试公式。</p></div> : status.importFormula && status.url ? <div className="sheet-sync-generated">
+          <div><b>1. 先检查商品库网址</b><p>打开网址后，应看到以“货号、商品名称、价格”开头的 CSV 内容。</p><div className="sheet-sync-code"><code>{status.url}</code><button className="icon-button" onClick={() => copy(status.url!, "url")} title="复制网址">{copied === "url" ? <ClipboardCheck size={18} /> : <Clipboard size={18} />}</button></div></div>
+          <div><b>2. 再测试 IMPORTDATA 公式</b><p>新建空白工作表并命名为“商品数据源”，在 A1 粘贴下面的公式。</p><div className="sheet-sync-code"><code>{status.importFormula}</code><button className="icon-button" onClick={() => copy(status.importFormula!, "formula")} title="复制公式">{copied === "formula" ? <ClipboardCheck size={18} /> : <Clipboard size={18} />}</button></div></div>
+          <p className="sheet-sync-notice"><TriangleAlert size={18} />企业微信是否支持该外部取数公式需要以实际表格结果为准。若提示函数不存在，请把完整提示发给我，我们再切换同步方式。</p>
+        </div> : <div className="sheet-sync-empty"><KeyRound size={25} /><p>密钥已启用，但出于安全原因不能再次显示。请点击左侧“重置并获取新网址”。</p></div>}
+      </section>
+    </div>
+    <section className="panel sheet-sync-fields"><div><p className="eyebrow">商品库列</p><h2>同步字段</h2><p>主图链接取商品档案中的第一张图片；商品资料更新后，下次重新计算外部导入公式时会读取新值。</p></div><ol>{status.fields.map((field, index) => <li key={field}><i>{String.fromCharCode(65 + index)}</i><span>{field}</span></li>)}</ol></section>
+  </>;
 }
 
 export function ProfileView() {
