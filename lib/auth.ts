@@ -133,6 +133,21 @@ export async function validateCsrf(request: Request) {
   }
 }
 
+export async function ensureCsrfCookie() {
+  const cookieStore = await cookies();
+  const existing = cookieStore.get(CSRF_COOKIE_NAME)?.value;
+  if (existing) return existing;
+  const token = randomBytes(32).toString("base64url");
+  cookieStore.set(CSRF_COOKIE_NAME, token, {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: SESSION_DAYS * 24 * 60 * 60,
+  });
+  return token;
+}
+
 export async function requireUser(permission?: string) {
   const user = await getCurrentUser();
   if (!user) throw new AuthError("请先登录", 401);

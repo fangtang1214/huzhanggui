@@ -1,5 +1,5 @@
 import { apiError, ok, requestIp } from "@/lib/api";
-import { requireSuperAdmin, validateCsrf } from "@/lib/auth";
+import { ensureCsrfCookie, requireSuperAdmin, validateCsrf } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import {
@@ -37,6 +37,7 @@ async function status() {
 export async function GET() {
   try {
     await requireSuperAdmin();
+    await ensureCsrfCookie();
     return ok(await status());
   } catch (error) {
     return apiError(error);
