@@ -242,19 +242,26 @@ test("图片识别使用预热的 Q8 模型与前后台优先队列", async () =
   assert.match(route, /subject_embedding_vector <=>/);
 });
 
-test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", async () => {
+test("同商品 ID 或主图链接直接关联，主体相似候选仍需人工确认", async () => {
   const route = await readFile(new URL("../app/api/image-matching/route.ts", import.meta.url), "utf8");
   assert.ok(route.indexOf("exactIdMatch(input.apiProductId)") < route.indexOf("getGlmRuntime()"));
+  assert.ok(route.indexOf("exactImageMatches([primary], input.excludeProductIds)") < route.indexOf("getGlmRuntime()"));
+  assert.match(route, /status: "exact_match"/);
   assert.match(route, /subject_embedding_vector <=>/);
   assert.match(route, /slice\(0, 5\)/);
   assert.match(route, /matchedImageCount/);
-  assert.match(route, /groupsOf\(uncached, SUBJECT_BATCH_SIZE\), 2/);
+  assert.match(route, /primaryUncached \? \[\[primaryUncached\]\] : \[\]/);
+  assert.match(route, /groupsOf\(remainingUncached, SUBJECT_BATCH_SIZE\)/);
+  assert.match(route, /primaryProcessed: vectors\.some/);
+  assert.ok(route.indexOf("if (candidates.length)") < route.indexOf("if (!collected.primaryProcessed)"));
+  assert.match(route, /主图未能完成主体定位与本地比对/);
   assert.match(route, /REALTIME_TOTAL_TIMEOUT_MS = 10_000/);
   assert.match(route, /REALTIME_WORK_TIMEOUT_MS = REALTIME_TOTAL_TIMEOUT_MS - 1_000/);
   assert.match(route, /REALTIME_IMAGE_LIMIT = 8/);
   assert.match(route, /collectSubjectVectors/);
   assert.match(route, /Promise\.all\(embeddingTasks\)/);
   assert.match(route, /failedImageCount/);
+  assert.match(route, /failureReasons, timings/);
   assert.doesNotMatch(route, /reviewCandidates/);
   assert.doesNotMatch(route, /1-\(embedding_vector <=>/);
   assert.match(route, /manual: z\.boolean/);
@@ -277,6 +284,13 @@ test("同商品 ID 跳过 GLM，图片候选经主体索引和人工确认", asy
   const recognitionView = await readFile(new URL("../components/views/recognition-view.tsx", import.meta.url), "utf8");
   assert.match(recognitionView, /服务器当前已生效/);
   assert.match(recognitionView, /保存并立即生效/);
+  const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(productsView, /正在优先识别主图并进行本地比对/);
+  assert.match(productsView, /相同主图链接/);
+  assert.match(productsView, /result\.status === "id_match" \|\| result\.status === "exact_match"/);
+  assert.match(productsView, /主图链接完全一致，已直接关联/);
+  assert.match(productsView, /商品 ID 或主图链接相同会直接关联/);
+  assert.match(productsView, /phase === "ready"[\s\S]*recognition\.failureReasons\.length > 0/);
   const resultRoute = await readFile(new URL("../app/api/recognition/subject-index/route.ts", import.meta.url), "utf8");
   assert.match(resultRoute, /subject_box/);
   assert.match(resultRoute, /subject_model/);
@@ -483,6 +497,20 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(historyTable.rows[0].name, "product_link_history");
     const existingHistory = await database.query("SELECT count(*)::int AS count FROM product_link_history");
     assert.equal(existingHistory.rows[0].count, 0);
+    const exactImageMatch = await database.query(`
+      WITH incoming(image_url, image_order) AS (
+        SELECT trim(value), ordinality::int
+        FROM unnest($1::text[]) WITH ORDINALITY AS input(value, ordinality)
+      )
+      SELECT p.id AS product_id
+      FROM incoming
+      JOIN products p ON EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(p.image_urls) AS stored(image_url)
+        WHERE trim(stored.image_url) = incoming.image_url
+      )
+      WHERE NOT(p.id=ANY($2::uuid[]))
+    `, [["https://example.com/old.jpg"], []]);
+    assert.equal(exactImageMatch.rows[0].product_id, repairedProduct.rows[0].id);
     const directoryCacheColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_item_cache' ORDER BY column_name");
     assert.deepEqual(directoryCacheColumns.rows.map((row) => row.column_name), ["head_supplier_item_link", "league_account_id", "product_id", "synced_at"]);
     const directoryStateColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='league_cooperative_cache_state' AND column_name IN ('sync_status','sync_requested_at','sync_started_at','sync_error') ORDER BY column_name");

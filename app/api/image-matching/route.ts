@@ -47,6 +47,49 @@ async function exactIdMatch(apiProductId?: string | null) {
   return (await productsByIds([String(rows[0].id)]))[0] || null;
 }
 
+async function exactImageMatches(imageUrls: string[], excluded: string[]): Promise<Array<Record<string, unknown>>> {
+  const uniqueUrls = [...new Set(imageUrls.map((imageUrl) => imageUrl.trim()).filter(Boolean))];
+  if (!uniqueUrls.length) return [];
+  const sql = getDb();
+  const rows = await sql`
+    WITH incoming(image_url, image_order) AS (
+      SELECT trim(value), ordinality::int
+      FROM unnest(${uniqueUrls}::text[]) WITH ORDINALITY AS input(value, ordinality)
+    )
+    SELECT p.id AS product_id, incoming.image_url, incoming.image_order
+    FROM incoming
+    JOIN products p ON EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements_text(p.image_urls) AS stored(image_url)
+      WHERE trim(stored.image_url) = incoming.image_url
+    )
+    WHERE NOT(p.id=ANY(${excluded}::uuid[]))
+    ORDER BY incoming.image_order, p.archived, p.updated_at DESC
+  `;
+  const matches = new Map<string, { imageUrl: string; imageOrder: number; matchedImageCount: number }>();
+  for (const row of rows) {
+    const productId = String(row.productId);
+    const current = matches.get(productId);
+    if (current) current.matchedImageCount += 1;
+    else matches.set(productId, { imageUrl: String(row.imageUrl), imageOrder: Number(row.imageOrder), matchedImageCount: 1 });
+  }
+  const ranked = [...matches.entries()].sort((left, right) => left[1].imageOrder - right[1].imageOrder).slice(0, 5);
+  const products = await productsByIds(ranked.map(([productId]) => productId));
+  const byId = new Map(products.map((product) => [String(product.id), product]));
+  return ranked.flatMap(([productId, match]) => {
+    const product = byId.get(productId);
+    return product ? [{
+      ...product,
+      similarity: 1,
+      localSimilarity: 1,
+      matchedImageCount: match.matchedImageCount,
+      matchedImageUrl: match.imageUrl,
+      newMatchedImageUrl: match.imageUrl,
+      matchType: "exact_image",
+    }] : [];
+  });
+}
+
 async function cachedSubjects(imageUrls: string[], glmModel: GlmModel) {
   const sql = getDb();
   const hashes = imageUrls.map(urlHash);
@@ -113,6 +156,7 @@ function groupsOf<T>(items: T[], size: number) {
 
 async function collectSubjectVectors(imageUrls: string[], model: string, apiKey: string, glmModel: GlmModel, signal: AbortSignal, productName?: string) {
   const uniqueUrls = [...new Set(imageUrls)].slice(0, REALTIME_IMAGE_LIMIT);
+  const primaryImageUrl = uniqueUrls[0];
   const skippedImageCount = Math.max(0, new Set(imageUrls).size - uniqueUrls.length);
   const cached = await cachedSubjects(uniqueUrls, glmModel);
   const vectors: SubjectVectorResult[] = []; const failures: SubjectVectorFailure[] = [];
@@ -136,8 +180,14 @@ async function collectSubjectVectors(imageUrls: string[], model: string, apiKey:
     } else uncached.push(imageUrl);
   }
 
+  const primaryUncached = uncached.includes(primaryImageUrl) ? primaryImageUrl : null;
+  const remainingUncached = primaryUncached ? uncached.filter((imageUrl) => imageUrl !== primaryUncached) : uncached;
+  const recognitionGroups = [
+    ...(primaryUncached ? [[primaryUncached]] : []),
+    ...groupsOf(remainingUncached, SUBJECT_BATCH_SIZE),
+  ];
   const glmSignal = AbortSignal.any([signal, AbortSignal.timeout(SUBJECT_STAGE_TIMEOUT_MS)]);
-  await mapWithConcurrency(groupsOf(uncached, SUBJECT_BATCH_SIZE), 2, async (group) => {
+  await mapWithConcurrency(recognitionGroups, 2, async (group) => {
     if (glmSignal.aborted) {
       failures.push(...group.map((imageUrl) => ({ imageUrl, message: "商品主体定位超过 7 秒" })));
       return;
@@ -156,7 +206,13 @@ async function collectSubjectVectors(imageUrls: string[], model: string, apiKey:
     }
   });
   await Promise.all(embeddingTasks);
-  return { vectors, failures, skippedImageCount, requestedImageCount: new Set(imageUrls).size };
+  return {
+    vectors,
+    failures,
+    skippedImageCount,
+    requestedImageCount: new Set(imageUrls).size,
+    primaryProcessed: vectors.some((vector) => vector.imageUrl === primaryImageUrl),
+  };
 }
 
 async function findCandidates(vectors: SubjectVectorResult[], threshold: number, excluded: string[]) {
@@ -226,6 +282,15 @@ export async function POST(request: Request) {
       await writeAudit(user, "image.id_match", "image_match", runId, `商品 ID 已直接匹配货号 ${exact.sku}`, { apiProductId: input.apiProductId }, requestIp(request));
       return ok({ runId, status: "id_match", candidates: [{ ...exact, similarity: 1, localSimilarity: 1, matchType: "product_id" }], timings });
     }
+    const exactImages = await exactImageMatches([primary], input.excludeProductIds);
+    if (exactImages.length) {
+      const exactImage = exactImages[0];
+      const message = `主图链接完全一致，已直接判定与 ${String(exactImage.sku)} 为同款`;
+      const timings = { totalMs: Math.round(performance.now() - startedAt), cacheHit: true, processedImageCount: 0, failedImageCount: 0, exactImageMatch: true };
+      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", [exactImage], message, timings);
+      await writeAudit(user, "image.exact_match", "image_match", runId, message, { productId: String(exactImage.id) }, requestIp(request));
+      return ok({ runId, status: "exact_match", candidates: [exactImage], message, failureReasons: [], timings });
+    }
     // Reserve the final second for local vector lookup, ranking, audit recording and the HTTP response.
     const timeout = new AbortController(); const timer = setTimeout(() => timeout.abort(), REALTIME_WORK_TIMEOUT_MS);
     try {
@@ -233,10 +298,10 @@ export async function POST(request: Request) {
       const collected = await collectSubjectVectors(input.imageUrls, settings.model, apiKey, glmModel, timeout.signal, input.productName);
       const unprocessedCount = collected.failures.length + collected.skippedImageCount;
       const coverageMessage = unprocessedCount ? `已使用 ${collected.vectors.length} 张图片完成比对，另 ${unprocessedCount} 张因超时、失败或超过实时上限未参与` : undefined;
-      const timingBase = { cacheHit: collected.vectors.length > 0 && collected.vectors.every((item) => item.cacheHit), processedImageCount: collected.vectors.length, failedImageCount: unprocessedCount, requestedImageCount: collected.requestedImageCount, fallbackCount: collected.vectors.filter((item) => item.fallbackUsed).length };
+      const failureReasons = groupImageMatchFailures(input.imageUrls, collected.failures, REALTIME_IMAGE_LIMIT);
+      const timingBase = { cacheHit: collected.vectors.length > 0 && collected.vectors.every((item) => item.cacheHit), processedImageCount: collected.vectors.length, failedImageCount: unprocessedCount, requestedImageCount: collected.requestedImageCount, fallbackCount: collected.vectors.filter((item) => item.fallbackUsed).length, primaryProcessed: collected.primaryProcessed };
       if (!collected.vectors.length) {
         const message = "所有参与识别的图片均处理失败，请查看下方具体原因";
-        const failureReasons = groupImageMatchFailures(input.imageUrls, collected.failures, REALTIME_IMAGE_LIMIT);
         const timings = { ...timingBase, totalMs: Math.round(performance.now() - startedAt) };
         const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message, timings);
         await writeAudit(user, "image.match_failed", "image_match", runId, message, { failures: collected.failures.slice(0, 8) }, requestIp(request));
@@ -244,14 +309,20 @@ export async function POST(request: Request) {
       }
       const candidates = await findCandidates(collected.vectors, settings.threshold, input.excludeProductIds);
       const timings = { ...timingBase, totalMs: Math.round(performance.now() - startedAt) };
-      if (!candidates.length) {
-        const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "no_match", [], coverageMessage, timings);
-        await writeAudit(user, "image.match", "image_match", runId, "本地主体特征未发现疑似同款", { candidateCount: 0, imageCount: collected.vectors.length, unprocessedCount, fallbackCount: timingBase.fallbackCount }, requestIp(request));
-        return ok({ runId, status: "no_match", candidates: [], message: coverageMessage, timings });
+      if (candidates.length) {
+        const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", candidates, coverageMessage, timings);
+        await writeAudit(user, "image.match", "image_match", runId, `本地主体特征发现 ${candidates.length} 个疑似同款`, { candidateCount: candidates.length, imageCount: collected.vectors.length, unprocessedCount, fallbackCount: timingBase.fallbackCount, primaryProcessed: collected.primaryProcessed }, requestIp(request));
+        return ok({ runId, status: "matched", candidates, message: coverageMessage, failureReasons, timings });
       }
-      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "matched", candidates, coverageMessage, timings);
-      await writeAudit(user, "image.match", "image_match", runId, `本地主体特征发现 ${candidates.length} 个疑似同款`, { candidateCount: candidates.length, imageCount: collected.vectors.length, unprocessedCount, fallbackCount: timingBase.fallbackCount }, requestIp(request));
-      return ok({ runId, status: "matched", candidates, message: coverageMessage, timings });
+      if (!collected.primaryProcessed) {
+        const message = "主图未能完成主体定位与本地比对，暂时无法可靠判断是否存在同款，请重试";
+        const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "failed", [], message, timings);
+        await writeAudit(user, "image.match_failed", "image_match", runId, message, { imageCount: collected.vectors.length, unprocessedCount, failures: collected.failures.slice(0, 8) }, requestIp(request));
+        return ok({ runId, status: "failed", candidates: [], message, failureReasons, timings });
+      }
+      const runId = await createRun(user.id, primary, settings.mode, settings.threshold, "no_match", [], coverageMessage, timings);
+      await writeAudit(user, "image.match", "image_match", runId, "本地主体特征未发现疑似同款", { candidateCount: 0, imageCount: collected.vectors.length, unprocessedCount, fallbackCount: timingBase.fallbackCount, primaryProcessed: true }, requestIp(request));
+      return ok({ runId, status: "no_match", candidates: [], message: coverageMessage, failureReasons, timings });
     } catch (reason) {
       const message = reason instanceof Error && reason.name === "AbortError" ? "图片识别超过 10 秒，请重试或确认后继续" : reason instanceof Error ? reason.message : "GLM 图片识别失败";
       const affectedImages = [...new Set(input.imageUrls)].slice(0, REALTIME_IMAGE_LIMIT).map((imageUrl) => ({ imageUrl, message }));
