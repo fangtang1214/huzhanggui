@@ -1,6 +1,7 @@
 export const WECOM_SMART_SHEET_SETTING_KEY: string;
 export const WECOM_SMART_SHEET_INTERVAL_MINUTES: number;
 export const WECOM_SMART_SHEET_BATCH_SIZE: number;
+export const WECOM_SMART_SHEET_IMAGE_BATCH_SIZE: number;
 export const WECOM_SMART_SHEET_FIELDS: Array<{ key: string; title: string; type: string }>;
 
 export class WecomSmartSheetError extends Error {
@@ -9,12 +10,13 @@ export class WecomSmartSheetError extends Error {
   constructor(message: string, code?: string, errcode?: number | null);
 }
 
-export type WecomSmartSheetFields = Record<"sku" | "name" | "price" | "productUrl" | "imageUrl" | "updatedAt" | "archiveStatus", string>;
+export type WecomSmartSheetFields = Record<"sku" | "mainImage" | "name" | "price" | "productUrl" | "imageUrl" | "updatedAt" | "archiveStatus", string>;
 
 export function encryptWecomWebhook(value: string): string;
 export function decryptWecomWebhook(value: string): string;
 export function validateWecomWebhookUrl(value: unknown): string;
 export function parseWecomSmartSheetExample(value: unknown): WecomSmartSheetFields;
+export function primaryProductImageUrl(imageUrls: unknown): string;
 export function productToWecomSmartSheetValues(fields: WecomSmartSheetFields, product: {
   sku: unknown;
   name: unknown;

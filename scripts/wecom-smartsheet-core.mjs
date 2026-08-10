@@ -3,9 +3,11 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 export const WECOM_SMART_SHEET_SETTING_KEY = "wecom_smartsheet_sync";
 export const WECOM_SMART_SHEET_INTERVAL_MINUTES = 30;
 export const WECOM_SMART_SHEET_BATCH_SIZE = 100;
+export const WECOM_SMART_SHEET_IMAGE_BATCH_SIZE = 5;
 
 export const WECOM_SMART_SHEET_FIELDS = [
   { key: "sku", title: "货号", type: "text" },
+  { key: "mainImage", title: "主图", type: "image" },
   { key: "name", title: "商品名称", type: "text" },
   { key: "price", title: "价格", type: "number" },
   { key: "productUrl", title: "商品链接", type: "text" },
@@ -91,7 +93,7 @@ export function parseWecomSmartSheetExample(value) {
     const [fieldId, definition] = matches[0];
     if (!/^f[A-Za-z0-9_-]+$/.test(fieldId)) throw new WecomSmartSheetError(`“${expected.title}”的字段编号格式不正确`);
     if (typeof definition !== "object" || definition.type !== expected.type) {
-      const typeLabel = expected.type === "number" ? "数字" : expected.type === "date_time" ? "日期" : "文本";
+      const typeLabel = expected.type === "number" ? "数字" : expected.type === "date_time" ? "日期" : expected.type === "image" ? "图片" : "文本";
       throw new WecomSmartSheetError(`“${expected.title}”字段类型应为“${typeLabel}”`);
     }
     fields[expected.key] = fieldId;
@@ -99,7 +101,7 @@ export function parseWecomSmartSheetExample(value) {
   return fields;
 }
 
-function firstImage(imageUrls) {
+export function primaryProductImageUrl(imageUrls) {
   if (!Array.isArray(imageUrls)) return "";
   const image = imageUrls.find((value) => typeof value === "string" && value.trim());
   return image ? image.trim() : "";
@@ -115,7 +117,7 @@ export function productToWecomSmartSheetValues(fields, product) {
     [fields.sku]: product.sku === null || product.sku === undefined ? "" : String(product.sku),
     [fields.name]: product.name === null || product.name === undefined ? "" : String(product.name),
     [fields.productUrl]: product.productUrl === null || product.productUrl === undefined ? "" : String(product.productUrl),
-    [fields.imageUrl]: firstImage(product.imageUrls),
+    [fields.imageUrl]: primaryProductImageUrl(product.imageUrls),
     [fields.updatedAt]: timestampMilliseconds(product.updatedAt),
     [fields.archiveStatus]: product.archived ? "已归档" : "在用",
   };

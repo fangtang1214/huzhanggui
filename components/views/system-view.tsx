@@ -80,6 +80,8 @@ type WecomSheetStatus = {
   progressCount: number;
   addedCount: number;
   updatedCount: number;
+  imageFailedCount: number;
+  imageError?: string | null;
 };
 
 export function WecomSheetSyncView() {
@@ -103,10 +105,10 @@ export function WecomSheetSyncView() {
   if (!user.isSuperAdmin) return <ErrorState message="仅超级管理员可以配置表格同步" />;
   if (loading && !data) return <LoadingState />;
   if (error && !data) return <ErrorState message={error} retry={reload} />;
-  const status = data || { configured: false, activeProductCount: 0, totalProductCount: 0, mappedProductCount: 0, intervalMinutes: 30, fields: [], syncStatus: "idle" as const, totalCount: 0, progressCount: 0, addedCount: 0, updatedCount: 0 };
+  const status = data || { configured: false, activeProductCount: 0, totalProductCount: 0, mappedProductCount: 0, intervalMinutes: 30, fields: [], syncStatus: "idle" as const, totalCount: 0, progressCount: 0, addedCount: 0, updatedCount: 0, imageFailedCount: 0 };
   const active = status.syncStatus === "pending" || status.syncStatus === "running";
   const stateTitle = status.syncStatus === "pending" ? "等待同步" : status.syncStatus === "running" ? "正在同步" : status.syncStatus === "failed" ? "同步失败" : status.syncedAt ? "同步正常" : status.configured ? "等待首次同步" : "尚未配置";
-  const stateDescription = status.syncStatus === "pending" ? "后台服务即将开始处理商品数据" : status.syncStatus === "running" ? `已处理 ${status.progressCount} / ${status.totalCount} 件商品` : status.syncStatus === "failed" ? "连接或数据格式出现问题，请查看右侧提示" : status.syncedAt ? `每 ${status.intervalMinutes} 分钟自动检查商品变化` : status.configured ? "连接已保存，正在等待后台服务" : "连接后才会向智能表格推送商品档案";
+  const stateDescription = status.syncStatus === "pending" ? "后台服务即将开始处理商品数据" : status.syncStatus === "running" ? `已处理 ${status.progressCount} / ${status.totalCount} 件商品` : status.syncStatus === "failed" ? "连接或数据格式出现问题，请查看右侧提示" : status.syncedAt ? status.imageFailedCount ? `${status.imageFailedCount} 张主图暂未显示，下次会自动重试` : `每 ${status.intervalMinutes} 分钟自动检查商品变化` : status.configured ? "连接已保存，正在等待后台服务" : "连接后才会向智能表格推送商品档案";
 
   async function configure(event: FormEvent) {
     event.preventDefault();
@@ -157,15 +159,16 @@ export function WecomSheetSyncView() {
       <section className="panel sheet-sync-card">
         <div className={`sheet-sync-state ${status.configured && status.syncStatus !== "failed" ? "enabled" : "disabled"}`}><span>{status.syncStatus === "failed" ? <CircleAlert size={27} /> : <FileSpreadsheet size={27} />}</span><div><p className="eyebrow">同步状态</p><h2>{stateTitle}</h2><p>{stateDescription}</p></div>{status.syncStatus === "running" && <RefreshCw className="spin" size={22} />}</div>
         {status.syncStatus === "running" && <div className="sheet-sync-progress"><i style={{ width: `${status.totalCount ? Math.min(100, status.progressCount / status.totalCount * 100) : 8}%` }} /></div>}
-        <dl className="sheet-sync-details"><div><dt>在用商品</dt><dd>{status.activeProductCount}</dd></div><div><dt>已建立同步</dt><dd>{status.mappedProductCount}</dd></div><div><dt>最近同步</dt><dd>{formatDate(status.syncedAt, true)}</dd></div><div><dt>自动频率</dt><dd>每 {status.intervalMinutes} 分钟</dd></div><div><dt>上次新增</dt><dd>{status.addedCount}</dd></div><div><dt>上次更新</dt><dd>{status.updatedCount}</dd></div></dl>
+        <dl className="sheet-sync-details"><div><dt>在用商品</dt><dd>{status.activeProductCount}</dd></div><div><dt>已建立同步</dt><dd>{status.mappedProductCount}</dd></div><div><dt>最近同步</dt><dd>{formatDate(status.syncedAt, true)}</dd></div><div><dt>自动频率</dt><dd>每 {status.intervalMinutes} 分钟</dd></div><div><dt>上次新增</dt><dd>{status.addedCount}</dd></div><div><dt>上次更新</dt><dd>{status.updatedCount}</dd></div><div><dt>图片失败</dt><dd>{status.imageFailedCount}</dd></div><div><dt>图片处理</dt><dd>自动压缩</dd></div></dl>
         {status.syncError && <p className="sheet-sync-error"><CircleAlert size={18} /><span><b>同步没有完成</b>{status.syncError}</span></p>}
+        {!status.syncError && status.imageFailedCount > 0 && <p className="sheet-sync-notice"><TriangleAlert size={18} /><span><b>部分图片暂未同步</b>{status.imageError || `${status.imageFailedCount} 张主图下载或转换失败，下次同步会自动重试。`}</span></p>}
         {status.configured && <div className="update-actions"><button className="button button-primary" onClick={syncNow} disabled={saving}><Send size={17} />{saving ? "正在提交…" : active ? "再同步一次" : "立即同步"}</button><button className="button button-secondary" onClick={() => setEditing(true)} disabled={active || saving}>更换连接</button><button className="button button-secondary" onClick={disable} disabled={active || saving}>停用</button></div>}
         <p className="update-safety"><ShieldCheck size={18} /><span><b>不会碰手工行</b> 网站只更新自己创建的商品行；归档商品保留原行并标记“已归档”。</span></p>
       </section>
 
       <section className="panel sheet-sync-guide">
         <header><div><p className="eyebrow">安全连接</p><h2>{status.configured && !editing ? "智能表格已连接" : "粘贴 Webhook 和示例数据"}</h2></div></header>
-        {status.configured && !editing ? <div className="sheet-sync-connected"><span><Link2 size={25} /></span><h3>连接信息已加密保存</h3><p>首次同步会新增全部在用商品，之后只推送发生变化的商品。主图第一版以网址文本写入。</p><ol><li>商品新增或修改后，最迟约 {status.intervalMinutes} 分钟进入表格。</li><li>也可以点击左侧“立即同步”马上检查。</li><li>若在企业微信里重建字段，请点击“更换连接”并重新粘贴。</li></ol></div> : <form className="sheet-sync-form" onSubmit={configure}>
+        {status.configured && !editing ? <div className="sheet-sync-connected"><span><Link2 size={25} /></span><h3>连接信息已加密保存</h3><p>首次同步会新增全部在用商品，之后只推送发生变化的商品；主图会自动压缩并显示，同时保留原始链接。</p><ol><li>商品新增或修改后，最迟约 {status.intervalMinutes} 分钟进入表格。</li><li>也可以点击左侧“立即同步”马上检查。</li><li>若在企业微信里重建字段，请点击“更换连接”并重新粘贴。</li></ol></div> : <form className="sheet-sync-form" onSubmit={configure}>
           <label><span>Webhook 地址</span><small>在“接收外部数据”页面点击复制；不要发到聊天或公开网页。</small><input type="password" autoComplete="off" placeholder="https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet/webhook?key=…" value={form.webhookUrl} onChange={(event) => setForm({ ...form, webhookUrl: event.target.value })} required /></label>
           <label><span>示例数据</span><small>复制页面中的完整 JSON，用于识别每一列的字段编号。</small><textarea rows={12} spellCheck={false} placeholder={'{\n  "schema": { … },\n  "add_records": [ … ]\n}'} value={form.exampleData} onChange={(event) => setForm({ ...form, exampleData: event.target.value })} required /></label>
           <p className="sheet-sync-notice"><TriangleAlert size={18} />保存后会立即用真实商品做首次同步，不会生成额外的测试行。</p>
@@ -173,7 +176,7 @@ export function WecomSheetSyncView() {
         </form>}
       </section>
     </div>
-    <section className="panel sheet-sync-fields"><div><p className="eyebrow">固定字段结构</p><h2>同步字段</h2><p>主图链接取商品档案中的第一张图片；“档案状态”用于保留并识别已经归档的商品。</p></div><ol>{status.fields.map((field, index) => <li key={field}><i>{String.fromCharCode(65 + index)}</i><span>{field}</span></li>)}</ol></section>
+    <section className="panel sheet-sync-fields"><div><p className="eyebrow">固定字段结构</p><h2>同步字段</h2><p>“主图”自动显示商品档案第一张图片，“主图链接”保留原始地址；归档商品会保留并标记状态。</p></div><ol>{status.fields.map((field, index) => <li key={field}><i>{String.fromCharCode(65 + index)}</i><span>{field}</span></li>)}</ol></section>
   </>;
 }
 

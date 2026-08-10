@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import sharp from "sharp";
 import {
   csvCell,
   hashWecomSheetToken,
@@ -17,10 +19,12 @@ import {
   validateWecomWebhookUrl,
   wecomSmartSheetPayloadHash,
 } from "../scripts/wecom-smartsheet-core.mjs";
+import { imageUrlToWecomValue } from "../scripts/wecom-smartsheet-image.mjs";
 
 const smartSheetExample = {
   schema: {
     f04Gwj: { title: "货号", type: "text" },
+    fYnqzw: { title: "主图", type: "image" },
     ftQMc5: { title: "商品名称", type: "text" },
     ftk5Tx: { title: "价格", type: "number" },
     ffFwIh: { title: "商品链接", type: "text" },
@@ -78,6 +82,7 @@ test("智能表格示例数据按标题提取固定字段编号", () => {
   const fields = parseWecomSmartSheetExample(JSON.stringify(smartSheetExample));
   assert.deepEqual(fields, {
     sku: "f04Gwj",
+    mainImage: "fYnqzw",
     name: "ftQMc5",
     price: "ftk5Tx",
     productUrl: "ffFwIh",
@@ -85,7 +90,7 @@ test("智能表格示例数据按标题提取固定字段编号", () => {
     updatedAt: "fR1sug",
     archiveStatus: "fQao3A",
   });
-  assert.deepEqual(WECOM_SMART_SHEET_FIELDS.map((field) => field.title), ["货号", "商品名称", "价格", "商品链接", "主图链接", "更新时间", "档案状态"]);
+  assert.deepEqual(WECOM_SMART_SHEET_FIELDS.map((field) => field.title), ["货号", "主图", "商品名称", "价格", "商品链接", "主图链接", "更新时间", "档案状态"]);
   assert.throws(() => parseWecomSmartSheetExample({ schema: { ...smartSheetExample.schema, ftk5Tx: { title: "价格", type: "text" } } }), /价格.*数字/);
 });
 
@@ -134,4 +139,32 @@ test("智能表格 Webhook 在数据库中加密保存", () => {
     if (previous === undefined) delete process.env.SESSION_SECRET;
     else process.env.SESSION_SECRET = previous;
   }
+});
+
+test("智能表格主图会压缩为不含 data 前缀的 JPEG Base64", async () => {
+  const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: "#d46b45" } }).png().toBuffer();
+  const value = await imageUrlToWecomValue("https://example.com/image.png", "26080001", {
+    lookupImpl: async () => [{ address: "8.8.8.8", family: 4 }],
+    fetchImpl: async () => new Response(png, { headers: { "content-type": "image/png", "content-length": String(png.length) } }),
+  });
+  assert.equal(value.title, "26080001.jpg");
+  assert.doesNotMatch(value.image_base64, /^data:/);
+  assert.equal(Buffer.from(value.image_base64, "base64").subarray(0, 3).toString("hex"), "ffd8ff");
+});
+
+test("智能表格主图下载拒绝服务器内网地址", async () => {
+  await assert.rejects(imageUrlToWecomValue("http://internal.example/image.jpg", "26080001", {
+    lookupImpl: async () => [{ address: "127.0.0.1", family: 4 }],
+    fetchImpl: async () => { throw new Error("不应发起请求"); },
+  }), /不能指向服务器内网/);
+});
+
+test("同一智能表格新增图片字段时保留已有商品记录映射", async () => {
+  const route = await readFile(new URL("../app/api/system/wecom-sheet/route.ts", import.meta.url), "utf8");
+  assert.match(route, /sameWebhook/);
+  assert.match(route, /sameFields \|\| sameWebhook/);
+  assert.match(route, /if \(!sameSheet\) await tx`DELETE FROM wecom_smartsheet_product_records`/);
+  const worker = await readFile(new URL("../scripts/wecom-smartsheet-sync.mjs", import.meta.url), "utf8");
+  assert.match(worker, /config\.fields\.mainImage/);
+  assert.match(worker, /imageUrlToWecomValue/);
 });

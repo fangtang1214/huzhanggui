@@ -9,6 +9,7 @@ import {
   WECOM_SMART_SHEET_INTERVAL_MINUTES,
   WECOM_SMART_SHEET_SETTING_KEY,
   WecomSmartSheetError,
+  decryptWecomWebhook,
   encryptWecomWebhook,
   parseWecomSmartSheetExample,
   validateWecomWebhookUrl,
@@ -43,7 +44,8 @@ async function status() {
   `;
   const [state] = await sql`
     SELECT config_id,sync_status,sync_requested_at,sync_started_at,sync_heartbeat_at,
-           synced_at,sync_error,total_count,progress_count,added_count,updated_count
+           synced_at,sync_error,total_count,progress_count,added_count,updated_count,
+           image_failed_count,image_error
     FROM wecom_smartsheet_sync_state
     WHERE singleton=true
   `;
@@ -71,6 +73,8 @@ async function status() {
     progressCount: Number(matchingState?.progressCount || 0),
     addedCount: Number(matchingState?.addedCount || 0),
     updatedCount: Number(matchingState?.updatedCount || 0),
+    imageFailedCount: Number(matchingState?.imageFailedCount || 0),
+    imageError: matchingState?.imageError || null,
   };
 }
 
@@ -102,8 +106,14 @@ export async function PUT(request: Request) {
         FOR UPDATE
       `;
       const sameFields = Boolean(current?.value?.configId && JSON.stringify(current.value.fields) === JSON.stringify(fields));
-      const configId = sameFields ? String(current.value.configId) : randomUUID();
-      if (!sameFields) await tx`DELETE FROM wecom_smartsheet_product_records`;
+      let sameWebhook = false;
+      try {
+        sameWebhook = Boolean(current?.value?.configId && current.value.webhookEncrypted
+          && validateWecomWebhookUrl(decryptWecomWebhook(current.value.webhookEncrypted)) === webhookUrl);
+      } catch { sameWebhook = false; }
+      const sameSheet = Boolean(current?.value?.configId && (sameFields || sameWebhook));
+      const configId = sameSheet ? String(current.value.configId) : randomUUID();
+      if (!sameSheet) await tx`DELETE FROM wecom_smartsheet_product_records`;
       await tx`
         INSERT INTO app_settings(key,value,updated_at)
         VALUES(${WECOM_SMART_SHEET_SETTING_KEY},${tx.json({
@@ -120,8 +130,9 @@ export async function PUT(request: Request) {
         VALUES(true,${configId}::uuid,'pending',now(),now())
         ON CONFLICT(singleton) DO UPDATE
         SET config_id=EXCLUDED.config_id,sync_status='pending',sync_requested_at=now(),
-            sync_started_at=null,sync_heartbeat_at=null,synced_at=CASE WHEN ${sameFields} THEN wecom_smartsheet_sync_state.synced_at ELSE null END,
-            sync_error=null,total_count=0,progress_count=0,added_count=0,updated_count=0,updated_at=now()
+            sync_started_at=null,sync_heartbeat_at=null,synced_at=CASE WHEN ${sameSheet} THEN wecom_smartsheet_sync_state.synced_at ELSE null END,
+            sync_error=null,total_count=0,progress_count=0,added_count=0,updated_count=0,
+            image_failed_count=0,image_error=null,updated_at=now()
       `;
       return { conflict: false, configId };
     });
@@ -173,7 +184,8 @@ export async function DELETE(request: Request) {
         UPDATE wecom_smartsheet_sync_state
         SET config_id=null,sync_status='idle',sync_requested_at=null,sync_started_at=null,
             sync_heartbeat_at=null,synced_at=null,sync_error=null,total_count=0,
-            progress_count=0,added_count=0,updated_count=0,updated_at=now()
+            progress_count=0,added_count=0,updated_count=0,
+            image_failed_count=0,image_error=null,updated_at=now()
         WHERE singleton=true
       `;
       return true;

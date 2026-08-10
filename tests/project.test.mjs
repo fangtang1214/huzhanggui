@@ -510,6 +510,8 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     assert.equal(wecomRecordsTable.rows[0].name, "wecom_smartsheet_product_records");
     const wecomState = await database.query("SELECT sync_status FROM wecom_smartsheet_sync_state WHERE singleton=true");
     assert.equal(wecomState.rows[0].sync_status, "idle");
+    const wecomImageColumns = await database.query("SELECT column_name FROM information_schema.columns WHERE table_name='wecom_smartsheet_sync_state' AND column_name IN ('image_failed_count','image_error') ORDER BY column_name");
+    assert.deepEqual(wecomImageColumns.rows.map((row) => row.column_name), ["image_error", "image_failed_count"]);
     const existingHistory = await database.query("SELECT count(*)::int AS count FROM product_link_history");
     assert.equal(existingHistory.rows[0].count, 0);
     const exactImageMatch = await database.query(`
