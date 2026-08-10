@@ -20,6 +20,10 @@ if [ ! -f "$REQUEST_PATH" ]; then
   exit 0
 fi
 
+touch "$LOG_PATH"
+chown 1001:1001 "$LOG_PATH"
+chmod 0640 "$LOG_PATH"
+
 mv -f "$REQUEST_PATH" "$PROCESSING_PATH"
 REQUESTED_AT="$(sed -n 's/.*"requestedAt":"\([^"]*\)".*/\1/p' "$PROCESSING_PATH" | head -n 1)"
 REQUESTED_AT="${REQUESTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
@@ -50,7 +54,7 @@ if [ "$RESULT" -eq 0 ]; then
   write_status "{\"state\":\"succeeded\",\"requestedAt\":\"$REQUESTED_AT\",\"startedAt\":\"$STARTED_AT\",\"finishedAt\":\"$FINISHED_AT\",\"versionBefore\":\"$VERSION_BEFORE\",\"versionAfter\":\"$VERSION_AFTER\"}"
   printf '===== %s web update succeeded (%s) =====\n' "$FINISHED_AT" "$VERSION_AFTER" >> "$LOG_PATH"
 else
-  write_status "{\"state\":\"failed\",\"requestedAt\":\"$REQUESTED_AT\",\"startedAt\":\"$STARTED_AT\",\"finishedAt\":\"$FINISHED_AT\",\"versionBefore\":\"$VERSION_BEFORE\",\"versionAfter\":\"$VERSION_AFTER\"}"
+  write_status "{\"state\":\"failed\",\"requestedAt\":\"$REQUESTED_AT\",\"startedAt\":\"$STARTED_AT\",\"finishedAt\":\"$FINISHED_AT\",\"versionBefore\":\"$VERSION_BEFORE\",\"versionAfter\":\"$VERSION_AFTER\",\"exitCode\":$RESULT}"
   printf '===== %s web update failed (exit %s) =====\n' "$FINISHED_AT" "$RESULT" >> "$LOG_PATH"
 fi
 rm -f "$PROCESSING_PATH"

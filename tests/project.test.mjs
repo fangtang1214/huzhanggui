@@ -29,6 +29,7 @@ test("系统使用中文名称并提供一键部署文件", async () => {
   assert.match(layout, /狐掌柜-直播样品管理系统/);
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(packageJson.name, "huzhanggui-sample-management");
+  assert.equal(packageJson.dependencies.sharp, packageJson.overrides.sharp);
   const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /production-dependencies/);
   assert.match(dockerfile, /node_modules/);
@@ -66,11 +67,14 @@ test("网页更新仅允许超级管理员并由宿主机受控执行", async ()
   const route = await readFile(new URL("../app/api/system/update/route.ts", import.meta.url), "utf8");
   assert.match(route, /requireSuperAdmin/);
   assert.match(route, /system\.update_requested/);
+  assert.match(route, /readFailureReason/);
   const installer = await readFile(new URL("../scripts/install-web-updater.sh", import.meta.url), "utf8");
   assert.match(installer, /PathExists=\/var\/lib\/huzhanggui-updater\/request/);
   const worker = await readFile(new URL("../scripts/web-update-worker.sh", import.meta.url), "utf8");
   assert.match(worker, /flock -n/);
   assert.match(worker, /bash "\$INSTALL_DIR\/update\.sh"/);
+  assert.match(worker, /exitCode.*\$RESULT/);
+  assert.match(worker, /chown 1001:1001 "\$LOG_PATH"/);
 });
 
 test("商品与样品导出逐行包含当前信息", async () => {

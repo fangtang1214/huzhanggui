@@ -29,13 +29,13 @@ export function BackupsView() {
   </>;
 }
 
-type UpdateStatus = { available: boolean; state: "idle" | "queued" | "running" | "succeeded" | "failed"; requestedAt?: string; startedAt?: string; finishedAt?: string; versionBefore?: string; versionAfter?: string };
+type UpdateStatus = { available: boolean; state: "idle" | "queued" | "running" | "succeeded" | "failed"; requestedAt?: string; startedAt?: string; finishedAt?: string; versionBefore?: string; versionAfter?: string; exitCode?: number; failureReason?: string };
 const UPDATE_COPY: Record<UpdateStatus["state"], { label: string; description: string }> = {
   idle: { label: "可以更新", description: "系统已准备好接收更新请求。" },
   queued: { label: "等待执行", description: "更新请求已提交，服务器即将开始处理。" },
   running: { label: "正在更新", description: "服务器正在备份数据、下载代码并重新构建网站，期间可能短暂无法访问。" },
   succeeded: { label: "更新完成", description: "网站已经更新并恢复运行，可以刷新页面使用新版本。" },
-  failed: { label: "更新失败", description: "服务器未能完成更新，原有数据不会因此删除，请登录服务器查看更新日志。" },
+  failed: { label: "更新失败", description: "服务器未能完成更新，原有数据不会因此删除；具体原因会显示在下方。" },
 };
 
 export function SystemUpdateView() {
@@ -56,6 +56,7 @@ export function SystemUpdateView() {
   return <><PageHeader eyebrow="仅超级管理员" title="系统更新" description="从 GitHub 获取最新版本，自动备份数据库并重新部署网站。" />
     <section className="panel system-update-card"><div className={`update-state state-${status.state}`}><span>{status.state === "succeeded" ? <CheckCircle2 size={27} /> : status.state === "failed" ? <CircleAlert size={27} /> : <ServerCog size={27} />}</span><div><p className="eyebrow">当前状态</p><h2>{copy.label}</h2><p>{copy.description}</p></div>{active && <RefreshCw className="spin" size={24} />}</div>
       <dl className="update-details"><div><dt>更新前版本</dt><dd>{status.versionBefore || "—"}</dd></div><div><dt>更新后版本</dt><dd>{status.versionAfter || "—"}</dd></div><div><dt>请求时间</dt><dd>{formatDate(status.requestedAt, true)}</dd></div><div><dt>完成时间</dt><dd>{formatDate(status.finishedAt, true)}</dd></div></dl>
+      {status.state === "failed" && status.failureReason && <div className="update-failure"><b>失败原因{status.exitCode !== undefined ? `（代码 ${status.exitCode}）` : ""}</b><pre>{status.failureReason}</pre></div>}
       {error && data && <p className="update-reconnecting">网站正在重启，暂时无法读取进度，系统会自动重试连接。</p>}
       {!status.available && <p className="update-unavailable"><TriangleAlert size={18} />网页更新服务尚未安装，请在服务器手动运行一次更新脚本后再使用。</p>}
       <div className="update-actions"><button className="button button-primary" onClick={update} disabled={!status.available || active || submitting}><RefreshCw size={17} />{submitting ? "正在提交…" : active ? "更新进行中…" : "立即更新"}</button>{status.state === "succeeded" && <button className="button button-secondary" onClick={() => window.location.reload()}>刷新页面</button>}</div>

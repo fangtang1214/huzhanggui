@@ -765,6 +765,9 @@ select { cursor: pointer; }
 .update-details dd { margin: 3px 0 0; font-family: monospace; font-weight: 700; }
 .update-actions { display: flex; gap: 9px; }
 .update-unavailable, .update-reconnecting { margin: 0 0 16px; padding: 11px 13px; display: flex; align-items: center; gap: 8px; border-radius: 9px; color: #80551f; background: var(--orange-pale); }
+.update-failure { margin: -8px 0 18px; padding: 13px 15px; border: 1px solid #e7bbb4; border-radius: 9px; color: var(--danger); background: #fff7f5; }
+.update-failure b { display: block; margin-bottom: 7px; }
+.update-failure pre { max-height: 220px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); font: 12px/1.55 monospace; }
 .update-safety { margin: 22px 0 0; padding-top: 18px; display: flex; gap: 10px; border-top: 1px solid var(--line); color: var(--muted); }
 .update-safety svg { flex: 0 0 auto; color: var(--green); }
 .update-safety b { display: block; color: var(--ink); }
