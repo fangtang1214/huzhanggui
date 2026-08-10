@@ -101,7 +101,7 @@ export async function PUT(request: Request) {
         WHERE key=${WECOM_SMART_SHEET_SETTING_KEY}
         FOR UPDATE
       `;
-      const sameFields = current?.value?.configId && JSON.stringify(current.value.fields) === JSON.stringify(fields);
+      const sameFields = Boolean(current?.value?.configId && JSON.stringify(current.value.fields) === JSON.stringify(fields));
       const configId = sameFields ? String(current.value.configId) : randomUUID();
       if (!sameFields) await tx`DELETE FROM wecom_smartsheet_product_records`;
       await tx`
