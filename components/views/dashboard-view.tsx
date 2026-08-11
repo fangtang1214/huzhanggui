@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Boxes, CircleAlert, CornerDownLeft, MapPin, PackageCheck, PackagePlus, ScanLine } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, Boxes, CircleAlert, CornerDownLeft, PackageCheck, PackagePlus, ScanLine } from "lucide-react";
 import { statusLabel } from "@/lib/constants";
 import { formatDate, useAppData, useRemote } from "../client-utils";
 import { EmptyState, ErrorState, LoadingState, PageHeader, ProductImage, StatusBadge } from "../ui";
@@ -10,15 +11,19 @@ type DashboardData = {
   summary: { totalSamples: number; activeSamples: number; returnedSamples: number; exceptionSamples: number; totalProducts: number };
   locations: Array<{ id: string; name: string; count: number }>;
   recent: Array<{ id: string; createdAt: string; toStatus: string; remark?: string; code: string; productName: string; sku: string; operatorName?: string; fromDepartmentName?: string; toDepartmentName?: string; toLocationName?: string }>;
-  newProducts: Array<{ id: string; sku: string; name: string; imageUrls: string[]; createdAt: string; sampleCount: number; selectedDepartments?: string }>;
+  newSampleProducts: Array<{ id: string; sku: string; name: string; imageUrls: string[]; sampleCount24h: number; sampleCount7d: number; latestSampleCreatedAt: string; selectedDepartments?: string }>;
 };
 
 export function DashboardView() {
   const { user, can } = useAppData();
+  const [sampleRange, setSampleRange] = useState<"24h" | "7d">("24h");
   const { data, loading, error, reload } = useRemote<DashboardData>(can("dashboard:view") ? "/api/dashboard" : null);
   if (loading) return <LoadingState label="正在整理今日样品…" />;
   if (error || !data) return <ErrorState message={error || "工作台暂时无法显示"} retry={reload} />;
   const maxLocation = Math.max(1, ...data.locations.map((item) => item.count));
+  const sampleCountKey = sampleRange === "24h" ? "sampleCount24h" : "sampleCount7d";
+  const newSampleProducts = data.newSampleProducts.filter((product) => product[sampleCountKey] > 0);
+  const rangeLabel = sampleRange === "24h" ? "最近24小时" : "最近7天";
   return <>
     <PageHeader eyebrow={`你好，${user.name}`} title="今天的样品，一眼看清" description="实时查看公司内每件样品的所在位置与最近流转。" actions={<>{can("products:create") && <Link href="/products/new" className="button button-primary"><PackagePlus size={18} />登记新到样</Link>}<Link href="/scan" className="button button-secondary"><ScanLine size={18} />手机扫码</Link></>} />
     <section className="summary-grid">
@@ -35,8 +40,8 @@ export function DashboardView() {
         {data.recent.length === 0 ? <EmptyState title="暂无流转记录" description="样品位置变化后会自动记录。" /> : <div className="activity-list">{data.recent.map((item) => <Link href={`/samples/${item.code}`} className="activity-item" key={item.id}><span className="activity-dot" /><div><div className="activity-title"><b>{item.productName}</b><StatusBadge status={item.toStatus} /></div><p>{item.code} · {item.toStatus === "active" ? [item.toDepartmentName, item.toLocationName].filter(Boolean).join(" · ") : statusLabel(item.toStatus)}</p><small>{item.operatorName || "系统"} · {formatDate(item.createdAt, true)}</small></div></Link>)}</div>}
       </article>
     </section>
-    <section className="panel new-products-panel"><header className="panel-header"><div><p className="eyebrow">刚刚到样</p><h2>最近登记的商品</h2></div><Link href="/products">商品档案 <ArrowRight size={15} /></Link></header>
-      {data.newProducts.length === 0 ? <EmptyState title="还没有商品档案" action={can("products:create") ? <Link href="/products/new" className="button button-primary">登记第一款商品</Link> : undefined} /> : <div className="product-strip">{data.newProducts.map((product) => <Link href={`/products/${product.id}`} className="product-mini-card" key={product.id}><ProductImage urls={product.imageUrls} alt={product.name} size="medium" /><div><span className="sku-chip">{product.sku}</span><h3>{product.name}</h3><p><MapPin size={14} />{product.selectedDepartments || "未指定直播间"}</p><small>{product.sampleCount} 件样品 · {formatDate(product.createdAt)}</small></div></Link>)}</div>}
+    <section className="panel new-products-panel new-samples-panel"><header className="panel-header"><div><p className="eyebrow">近期到样</p><h2>{rangeLabel}新登记的样品</h2></div><div className="dashboard-sample-header-actions"><div className="dashboard-range-switch" role="tablist" aria-label="新登记样品时间范围"><button type="button" role="tab" aria-selected={sampleRange === "24h"} className={sampleRange === "24h" ? "active" : ""} onClick={() => setSampleRange("24h")}>最近24小时</button><button type="button" role="tab" aria-selected={sampleRange === "7d"} className={sampleRange === "7d" ? "active" : ""} onClick={() => setSampleRange("7d")}>最近7天</button></div><Link href="/samples">查看全部样品 <ArrowRight size={15} /></Link></div></header>
+      {newSampleProducts.length === 0 ? <EmptyState title={`${rangeLabel}没有新登记样品`} description="切换时间范围可以查看更早登记的样品。" action={can("products:create") ? <Link href="/products/new" className="button button-primary">登记新到样</Link> : undefined} /> : <div className="product-strip">{newSampleProducts.map((product) => <Link href={`/products/${product.id}`} className="product-mini-card" key={product.id}><ProductImage urls={product.imageUrls} alt={product.name} size="medium" /><div><span className="sku-chip">{product.sku}</span><h3>{product.name}</h3><p><Boxes size={14} />本时段新增 {product[sampleCountKey]} 件</p><small>{product.selectedDepartments || "未指定选品部门"} · 最近登记 {formatDate(product.latestSampleCreatedAt, true)}</small></div></Link>)}</div>}
     </section>
   </>;
 }

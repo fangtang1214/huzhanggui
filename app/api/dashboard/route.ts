@@ -42,18 +42,30 @@ export async function GET() {
       LEFT JOIN locations tl ON tl.id = m.to_location_id
       ORDER BY m.created_at DESC LIMIT 8
     `;
-    const newProducts = await sql`
-      SELECT p.id, p.sku, p.name, p.image_urls, p.created_at,
-             count(s.id)::int AS sample_count,
-             string_agg(DISTINCT d.name, '、') AS selected_departments
-      FROM products p
-      LEFT JOIN samples s ON s.product_id = p.id AND s.archived = false
-      LEFT JOIN product_departments pd ON pd.product_id = p.id
-      LEFT JOIN departments d ON d.id = pd.department_id
+    const newSampleProducts = await sql`
+      WITH recent_samples AS (
+        SELECT s.product_id,
+               count(*) FILTER (WHERE s.created_at >= now() - interval '24 hours')::int AS sample_count_24h,
+               count(*)::int AS sample_count_7d,
+               max(s.created_at) AS latest_sample_created_at
+        FROM samples s
+        WHERE s.archived = false
+          AND s.created_at >= now() - interval '7 days'
+        GROUP BY s.product_id
+      )
+      SELECT p.id, p.sku, p.name, p.image_urls,
+             recent.sample_count_24h, recent.sample_count_7d, recent.latest_sample_created_at,
+             (SELECT string_agg(DISTINCT d.name, '、')
+              FROM product_departments pd
+              JOIN departments d ON d.id = pd.department_id
+              WHERE pd.product_id = p.id) AS selected_departments
+      FROM recent_samples recent
+      JOIN products p ON p.id = recent.product_id
       WHERE p.archived = false
-      GROUP BY p.id ORDER BY p.created_at DESC LIMIT 6
+      ORDER BY recent.latest_sample_created_at DESC
+      LIMIT 12
     `;
-    const data = { summary, locations, recent, newProducts };
+    const data = { summary, locations, recent, newSampleProducts };
     cacheEntry = { data, timestamp: Date.now() };
     return ok(data);
   } catch (error) {

@@ -14,7 +14,7 @@ export function PageHeader({ eyebrow, title, description, actions }: { eyebrow?:
 }
 
 export function LoadingState({ label = "正在加载…" }: { label?: string }) { return <div className="state-panel"><LoaderCircle className="spin" size={28} /><p>{label}</p></div>; }
-export function ErrorState({ message, retry }: { message: string; retry?: () => void }) { return <div className="state-panel state-error"><CircleAlert size={30} /><b>{message}</b>{retry && <button className="button button-secondary" onClick={retry}>重新加载</button>}</div>; }
+export function ErrorState({ message, retry }: { message: string; retry?: () => void }) { return <div className="state-panel state-error"><CircleAlert size={30} /><b>{message}</b>{retry && <button type="button" className="button button-secondary" onClick={retry}>重新加载</button>}</div>; }
 export function EmptyState({ title = "暂无数据", description, action }: { title?: string; description?: string; action?: ReactNode }) { return <div className="empty-state"><Inbox size={34} /><h3>{title}</h3>{description && <p>{description}</p>}{action}</div>; }
 
 export function StatusBadge({ status }: { status: string }) {

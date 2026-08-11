@@ -182,6 +182,24 @@ test("账号直接授权并限制普通管理员扩大权限", async () => {
   }
 });
 
+test("工作台按商品汇总最近24小时或7天新登记的样品", async () => {
+  const route = await readFile(new URL("../app/api/dashboard/route.ts", import.meta.url), "utf8");
+  assert.match(route, /s\.created_at >= now\(\) - interval '24 hours'/);
+  assert.match(route, /s\.created_at >= now\(\) - interval '7 days'/);
+  assert.match(route, /sample_count_24h/);
+  assert.match(route, /sample_count_7d/);
+  assert.match(route, /GROUP BY s\.product_id/);
+  assert.match(route, /LIMIT 12/);
+
+  const view = await readFile(new URL("../components/views/dashboard-view.tsx", import.meta.url), "utf8");
+  assert.match(view, /useState<"24h" \| "7d">\("24h"\)/);
+  assert.match(view, /最近24小时/);
+  assert.match(view, /最近7天/);
+  assert.match(view, /本时段新增/);
+  assert.match(view, /href="\/samples"/);
+  assert.doesNotMatch(view, /最近登记的商品/);
+});
+
 test("自动货号使用年月加流水编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
   assert.equal(productSkuPrefix("2026-08-02"), "2608");
@@ -364,6 +382,22 @@ test("同商品 ID 或主图链接直接关联，主体相似候选仍需人工�
   assert.match(glmVision, /analyzeSubjectsWithFallback/);
   assert.match(glmVision, /SUBJECT_HEDGE_DELAY_MS = 3_000/);
   assert.match(glmVision, /SUBJECT_STAGE_TIMEOUT_MS = 7_000/);
+});
+
+test("登记关联同款后展示已有实物编码和当前位置", async () => {
+  const route = await readFile(new URL("../app/api/products/[id]/intake-samples/route.ts", import.meta.url), "utf8");
+  assert.match(route, /requireUser\("products:create"\)/);
+  assert.match(route, /s\.code/);
+  assert.match(route, /d\.name AS department_name/);
+  assert.match(route, /l\.name AS location_name/);
+  assert.match(route, /s\.archived = false OR/);
+
+  const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(form, /function MatchedProductSamples/);
+  assert.match(form, /recognition\.decision === "matched" && recognition\.matchedProductId/);
+  assert.match(form, /该款实物样品/);
+  assert.match(form, /实物编码/);
+  assert.match(form, /activeLocationLabel/);
 });
 
 test("问题处理、商品复制、流转图片和状态精简按新流程实现", async () => {
