@@ -77,15 +77,19 @@ export async function nextProductSku(tx: Queryable, date = beijingDate()) {
 }
 
 export async function suggestNextProductSku(tx: Queryable, date = beijingDate()) {
-  const sequenceDate = `${date.slice(0, 4)}-${date.slice(5, 7)}-01`;
-  const [row] = await tx`SELECT last_value FROM product_sku_sequences WHERE sku_date = ${sequenceDate}`;
-  const firstSequence = row ? validSequence(row.lastValue, "商品货号") + 1 : 1;
-  for (let sequence = firstSequence; sequence <= 9999; sequence += 1) {
-    const sku = formatProductSku(date, sequence);
-    const existing = await tx`SELECT 1 FROM products WHERE lower(sku)=lower(${sku}) LIMIT 1`;
-    if (!existing.length) return sku;
-  }
-  throw new SkuGenerationError("本月商品数量已达到 9999 件");
+  const prefix = productSkuPrefix(date);
+  const [row] = await tx`
+    SELECT candidate AS sequence
+    FROM generate_series(1, 9999) AS series(candidate)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM products
+      WHERE lower(sku) = lower(${prefix} || lpad(candidate::text, 4, '0'))
+    )
+    ORDER BY candidate
+    LIMIT 1
+  `;
+  if (!row) throw new SkuGenerationError("本月商品数量已达到 9999 件");
+  return formatProductSku(date, validSequence(row.sequence, "商品货号"));
 }
 
 export async function nextProductSampleCode(tx: Queryable, productId: string, productSku: string) {

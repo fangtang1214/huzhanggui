@@ -223,13 +223,12 @@ test("自动货号使用年月加流水编号", async () => {
   assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "26080001"), "26080001-002");
   await assert.rejects(async () => { const badTx = async () => [{ lastValue: 1 }]; await nextProductSku(badTx, "2026-08-04"); }, SkuGenerationError);
 
-  const suggestTx = async (strings, ...values) => {
+  const suggestTx = async (strings) => {
     const query = strings.join("?");
-    if (query.includes("SELECT last_value FROM product_sku_sequences")) return [{ lastValue: 1 }];
-    if (query.includes("SELECT 1 FROM products")) return values[0] === "26080002" ? [{ exists: 1 }] : [];
+    if (query.includes("generate_series(1, 9999)")) return [{ sequence: 2 }];
     return [];
   };
-  assert.equal(await suggestNextProductSku(suggestTx, "2026-08-04"), "26080003");
+  assert.equal(await suggestNextProductSku(suggestTx, "2026-08-04"), "26080002");
 });
 
 test("新商品货号允许修改后四位并进行前后端查重", async () => {
@@ -244,6 +243,10 @@ test("新商品货号允许修改后四位并进行前后端查重", async () =>
   assert.match(availabilityRoute, /suggestNextProductSku/);
   assert.match(availabilityRoute, /SELECT id, archived FROM products/);
   assert.doesNotMatch(availabilityRoute, /archived = false/);
+  const skuLibrary = await readFile(new URL("../lib/sku.ts", import.meta.url), "utf8");
+  assert.match(skuLibrary, /generate_series\(1, 9999\)/);
+  assert.match(skuLibrary, /ORDER BY candidate/);
+  assert.doesNotMatch(skuLibrary, /const firstSequence = row/);
 
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /skuPrefix/);
@@ -265,6 +268,15 @@ test("样品列表空筛选可安全加载，商品档案提供价格多选和�
   for (const step of ["01", "02", "03", "04"]) assert.match(productsView, new RegExp(`section-number">${step}`));
   assert.match(productsView, /className="arrival-submit"/);
   assert.match(productsView, /已选 \$\{prices\.length\} 个价格/);
+});
+
+test("商品档案可通过当前及历史商品 ID 搜索", async () => {
+  const searchLibrary = await readFile(new URL("../lib/search.ts", import.meta.url), "utf8");
+  assert.match(searchLibrary, /FROM product_api_ids pai WHERE pai\.product_id=p\.id AND pai\.value ILIKE/);
+  assert.doesNotMatch(searchLibrary, /product_api_ids pai[^\n]*is_current/);
+
+  const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.equal((productsView.match(/搜索(?:已归档商品的)?货号、商品 ID/g) || []).length, 2);
 });
 
 test("图片特征使用余弦相似度比较", () => {
@@ -473,6 +485,13 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     await database.query("INSERT INTO products(sku,name,archived) VALUES('26089999','归档货号占用测试',true)");
     await assert.rejects(database.query("INSERT INTO products(sku,name) VALUES('26089999','重复货号测试')"), /duplicate key|unique constraint/i);
     await database.query("DELETE FROM products WHERE sku='26089999'");
+    await database.query("INSERT INTO products(sku,name) VALUES('26080001','最小货号测试一'),('26080003','最小货号测试三')");
+    const pgliteTag = async (strings, ...values) => {
+      const query = strings.reduce((source, part, index) => source + (index ? `$${index}` : "") + part, "");
+      return (await database.query(query, values)).rows;
+    };
+    assert.equal(await suggestNextProductSku(pgliteTag, "2026-08-04"), "26080002");
+    await database.query("DELETE FROM products WHERE sku IN ('26080001','26080003')");
     const settings = await database.query("SELECT value->>'mode' AS mode FROM app_settings WHERE key = 'image_matching'");
     assert.equal(settings.rows[0].mode, "standard");
     const model = await database.query("SELECT value->>'model' AS model FROM app_settings WHERE key = 'image_matching'");
