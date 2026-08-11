@@ -5,15 +5,25 @@ import { writeAudit } from "@/lib/audit";
 import { getDb } from "@/lib/db";
 import {
   lookupLeagueProductCandidates,
+  lookupLeagueProductCandidatesByPromotionLink,
   mergeLeagueProductSnapshots,
+  normalizeLeaguePromotionLink,
   preferredLeaguePromotionCandidates,
   type LeagueProductLookupCandidate,
   type LeagueProductSnapshot,
 } from "@/lib/league-product";
 
+const lookupValueSchema = z.string().trim().min(1, "请填写商品 ID 或推广链接").max(200, "查询内容过长").refine(
+  (value) => Boolean(normalizeLeaguePromotionLink(value)) || !/^(?:https?:\/\/|v\d+=|weixinstore)|\//i.test(value),
+  "推广链接仅支持 weixinstorehs/... 或 weixinstoresubhs/... 格式",
+);
+
 const schema = z.object({
-  outProductId: z.string().trim().min(1, "请填写商品 ID").max(100, "商品 ID 过长"),
-});
+  query: lookupValueSchema.optional(),
+  outProductId: lookupValueSchema.optional(),
+}).refine((input) => Boolean(input.query || input.outProductId), {
+  message: "请填写商品 ID 或推广链接",
+}).transform((input) => ({ query: (input.query || input.outProductId || "").trim() }));
 
 async function loadExistingProduct(value: string) {
   const sql = getDb();
@@ -79,14 +89,46 @@ export async function POST(request: Request) {
     const user = await requireUser("products:create");
     const input = schema.parse(await readJson(request));
     const lookupStartedAt = Date.now();
-    const [existingProduct, windowFallback, lookup] = await Promise.all([
-      loadExistingProduct(input.outProductId),
-      loadWindowFallback(input.outProductId),
-      lookupLeagueProductCandidates(input.outProductId),
-    ]);
+    const promotionLink = normalizeLeaguePromotionLink(input.query);
+    let outProductId = input.query;
+    let lookup;
+    let existingProduct;
+    let windowFallback;
+
+    if (promotionLink) {
+      lookup = await lookupLeagueProductCandidatesByPromotionLink(promotionLink);
+      if (lookup.duplicate) {
+        await writeAudit(user, "promotion_link.lookup_duplicate", "promotion_link", promotionLink, `推广链接 ${promotionLink} 对应多条机构目录记录`, {
+          durationMs: Date.now() - lookupStartedAt,
+          errors: lookup.errors,
+        }, requestIp(request));
+        return Response.json({ ok: false, message: lookup.errors[0] }, { status: 409 });
+      }
+      if (!lookup.outProductId) {
+        const message = lookup.accountCount === 0
+          ? "尚未配置已启用的联盟机构账号"
+          : "未在已同步的联盟机构商品目录中找到该推广链接，请先同步机构目录后重试";
+        await writeAudit(user, "promotion_link.lookup_not_found", "promotion_link", promotionLink, `快捷登记未找到推广链接 ${promotionLink}`, {
+          cacheHits: lookup.cacheHits,
+          durationMs: Date.now() - lookupStartedAt,
+        }, requestIp(request));
+        return Response.json({ ok: false, message }, { status: 404 });
+      }
+      outProductId = lookup.outProductId;
+      [existingProduct, windowFallback] = await Promise.all([
+        loadExistingProduct(outProductId),
+        loadWindowFallback(outProductId),
+      ]);
+    } else {
+      [existingProduct, windowFallback, lookup] = await Promise.all([
+        loadExistingProduct(outProductId),
+        loadWindowFallback(outProductId),
+        lookupLeagueProductCandidates(outProductId),
+      ]);
+    }
     const fallback = existingSnapshot(existingProduct as Record<string, unknown> | null);
     const candidates = lookup.candidates.map((candidate) => enrichCandidate(candidate, windowFallback, fallback));
-    const preferred = preferredLeaguePromotionCandidates(candidates) as Array<ReturnType<typeof enrichCandidate>>;
+    const preferred = (promotionLink ? candidates : preferredLeaguePromotionCandidates(candidates)) as Array<ReturnType<typeof enrichCandidate>>;
 
     if (!preferred.length && !existingProduct) {
       const message = lookup.accountCount === 0
@@ -94,7 +136,7 @@ export async function POST(request: Request) {
         : lookup.errors.length
           ? `联盟机构未能返回该商品：${lookup.errors[0]}`
           : "该商品未与任何已启用机构合作";
-      await writeAudit(user, "product_id.lookup_not_found", "product_api_id", input.outProductId, `快捷登记未找到商品 ID ${input.outProductId}`, {
+      await writeAudit(user, promotionLink ? "promotion_link.lookup_failed" : "product_id.lookup_not_found", promotionLink ? "promotion_link" : "product_api_id", promotionLink || outProductId, promotionLink ? `推广链接 ${promotionLink} 未能取得商品资料` : `快捷登记未找到商品 ID ${outProductId}`, {
         cacheHits: lookup.cacheHits,
         refreshedAccounts: lookup.refreshedAccounts,
         primaryScanLimited: lookup.scanLimited,
@@ -109,7 +151,7 @@ export async function POST(request: Request) {
       : "联盟接口资料刷新失败或未找到合作商品，本次显示现有商品档案";
     const choices = preferred.length > 1 ? preferred : [];
     const selected = preferred.length === 1 ? preferred[0] : preferred.length === 0 && existingProduct
-      ? { ...fallback, key: "existing", accountId: null, accountName: null, accountIsPrimary: false, promotionLink: existingProduct.productUrl || null, headSupplierItemLink: existingProduct.productUrl || null, commissionRatio: null, normalCommissionRatio: null, serviceRatio: null, commissionType: null, planType: null, error: apiWarning }
+      ? { ...fallback, key: "existing", accountId: null, accountName: null, accountIsPrimary: false, promotionLink: promotionLink || existingProduct.productUrl || null, headSupplierItemLink: promotionLink || existingProduct.productUrl || null, commissionRatio: null, normalCommissionRatio: null, serviceRatio: null, commissionType: null, planType: null, error: apiWarning }
       : null;
 
     const usable = selected || choices[0];
@@ -119,10 +161,10 @@ export async function POST(request: Request) {
 
     await writeAudit(
       user,
-      "product_id.lookup",
-      "product_api_id",
-      input.outProductId,
-      `快捷登记查询商品 ID ${input.outProductId}${existingProduct ? "，已关联现有商品" : ""}`,
+      promotionLink ? "promotion_link.lookup" : "product_id.lookup",
+      promotionLink ? "promotion_link" : "product_api_id",
+      promotionLink || outProductId,
+      promotionLink ? `快捷登记通过推广链接查询商品 ID ${outProductId}${existingProduct ? "，已关联现有商品" : ""}` : `快捷登记查询商品 ID ${outProductId}${existingProduct ? "，已关联现有商品" : ""}`,
       {
         candidateCount: candidates.length,
         requiresChoice: choices.length > 1,
@@ -135,7 +177,9 @@ export async function POST(request: Request) {
       requestIp(request),
     );
     return ok({
-      outProductId: input.outProductId,
+      outProductId,
+      lookupType: promotionLink ? "promotion-link" : "product-id",
+      promotionLink,
       existingProduct,
       selected,
       choices,

@@ -60,6 +60,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--green); }
 .danger-link { padding: 8px 0; }
 
 .readonly-input { background: #f1f2ee; color: var(--ink-soft); cursor: not-allowed; }
+.sku-editor { display: flex; align-items: stretch; border: 1px solid #d4d8d3; border-radius: 9px; background: #fff; overflow: hidden; transition: border-color .18s, box-shadow .18s; }
+.sku-editor:focus-within { border-color: #6d9287; box-shadow: 0 0 0 3px rgba(49,94,82,.1); }
+.sku-editor > span { display: flex; align-items: center; padding: 0 12px; background: #f1f2ee; border-right: 1px solid #d4d8d3; color: var(--ink-soft); font-family: var(--font-mono), monospace; font-weight: 800; letter-spacing: .08em; }
+.sku-editor input { border: 0; border-radius: 0; box-shadow: none; font-family: var(--font-mono), monospace; font-weight: 800; letter-spacing: .12em; }
+.sku-editor input:focus { box-shadow: none; }
+.sku-editor.sku-available { border-color: #79a897; }
+.sku-editor.sku-taken, .sku-editor.sku-invalid, .sku-editor.sku-error { border-color: #cf7d70; }
+.form-field .sku-status { font-weight: 700; }
+.form-field .sku-status.sku-available { color: var(--green); }
+.form-field .sku-status.sku-taken, .form-field .sku-status.sku-invalid, .form-field .sku-status.sku-error { color: var(--red); }
 .image-first-card { margin-bottom: 18px; border: 1px solid #c8d9d2; box-shadow: 0 10px 28px rgba(49,94,82,.08); }
 .recognition-status { margin-top: 16px; min-height: 54px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; display: flex; align-items: center; gap: 10px; color: var(--ink-soft); background: #f8f8f5; }
 .recognition-status.phase-checking { color: var(--green); background: var(--green-pale); border-color: #c5d8d1; }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { effectiveWindowProductId, needsInstitutionPromotionRefresh, parseLeagueProductDetail, parseLeagueProductQuality, preferredLeaguePromotionCandidates, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
+import { effectiveWindowProductId, needsInstitutionPromotionRefresh, normalizeLeaguePromotionLink, parseLeagueProductDetail, parseLeagueProductQuality, preferredLeaguePromotionCandidates, selectLeaguePromotionCandidate } from "../lib/league-product.ts";
 
 function candidate(overrides = {}) {
   return {
@@ -19,6 +19,14 @@ function candidate(overrides = {}) {
     ...overrides,
   };
 }
+
+test("仅识别两种原始联盟推广链接并规范前缀", () => {
+  assert.equal(normalizeLeaguePromotionLink(" weixinstorehs/28684289399598 "), "weixinstorehs/28684289399598");
+  assert.equal(normalizeLeaguePromotionLink("WEIXINSTORESUBHS/6000000016843667"), "weixinstoresubhs/6000000016843667");
+  assert.equal(normalizeLeaguePromotionLink("https://example.com/product"), null);
+  assert.equal(normalizeLeaguePromotionLink("v1=promotion-token"), null);
+  assert.equal(normalizeLeaguePromotionLink("28684289399598"), null);
+});
 
 test("主账号成功时优先使用主账号机构推广链接", () => {
   const selection = selectLeaguePromotionCandidate([

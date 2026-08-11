@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, Fragment, useEffect, useRef, useState } from "react";
-import { Archive, ArrowDownUp, ArrowLeft, ArrowRight, Boxes, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Clipboard, Download, ExternalLink, FilePenLine, FileSpreadsheet, Filter, GripVertical, Hash, History, Image, ImagePlus, Link2, LoaderCircle, MapPin, PackagePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Store, Trash2, TriangleAlert, Upload, UserRound, X } from "lucide-react";
+import { Archive, ArrowDownUp, ArrowLeft, ArrowRight, Boxes, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Clipboard, Download, ExternalLink, FilePenLine, FileSpreadsheet, Filter, GripVertical, History, Image, ImagePlus, Link2, LoaderCircle, MapPin, PackagePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Store, Trash2, TriangleAlert, Upload, UserRound, X } from "lucide-react";
 import { activeLocationLabel } from "@/lib/constants";
 import { COMMISSION_INPUT_PATTERN, formatCommission, normalizeCommission } from "@/lib/commission";
 import { isWebProductLink } from "@/lib/product-link";
@@ -42,11 +42,15 @@ type ProductIdLookupSource = {
 };
 type ProductIdLookupResult = {
   outProductId: string;
+  lookupType: "product-id" | "promotion-link";
+  promotionLink?: string | null;
   existingProduct: ProductIdLookupProduct | null;
   selected: ProductIdLookupSource | null;
   choices: ProductIdLookupSource[];
   warning?: string | null;
 };
+type SkuLookupResult = { prefix: string; suggestedSku?: string; sku?: string; valid?: boolean; available?: boolean; message?: string };
+type SkuAvailability = { status: "idle" | "checking" | "available" | "taken" | "invalid" | "error"; message: string };
 
 const recognitionTiming = (timings?: MatchTimings) => timings?.totalMs === undefined ? "" : `${timings.cacheHit ? "已复用图片特征 · " : ""}用时 ${timings.totalMs >= 1000 ? `${(timings.totalMs / 1000).toFixed(1)} 秒` : `${Math.round(timings.totalMs)} 毫秒`}`;
 const failureImageLabel = (reason: MatchFailureReason) => reason.imageIndexes.length ? `图片 ${reason.imageIndexes.slice(0, 8).join("、")}${reason.imageIndexes.length > 8 ? " 等" : ""}（${reason.count} 张）` : `${reason.count} 张图片`;
@@ -381,7 +385,7 @@ type ProductFormSpecRow = { spec: string; quantity: string };
 type ProductFormState = { sku: string; name: string; departmentIds: string[]; businessContactId: string; storeName: string; price: string; productUrl: string; windowProductId?: string; apiProductId?: string; commission: string; storeRating: string; supplyChain: string; cooperationMechanism: string; categoryId: string; tagIds: string[]; imageUrls: string; notes: string; specs: ProductFormSpecRow[]; arrivedAt: string; initialDepartmentId: string; initialLocationId: string };
 const today = () => { const date = new Date(); date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 10); };
 const currentSkuExample = () => { const date = today(); return `${date.slice(2, 4)}${date.slice(5, 7)}0001`; };
-const blankForm = (): ProductFormState => ({ sku: "", name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", apiProductId: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" });
+const blankForm = (): ProductFormState => ({ sku: currentSkuExample(), name: "", departmentIds: [], businessContactId: "", storeName: "", price: "", productUrl: "", apiProductId: "", commission: "", storeRating: "", supplyChain: "", cooperationMechanism: "", categoryId: "", tagIds: [], imageUrls: "", notes: "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" });
 type ProductDraft = { version: 1; form: ProductFormState & { quantity?: string; spec?: string }; savedAt: number; autoRestore?: boolean };
 type RegistrationMode = "loading" | "manual" | "product-id" | "window" | null;
 const PRODUCT_DRAFT_LIFETIME = 7 * 24 * 60 * 60 * 1000;
@@ -392,6 +396,9 @@ export function ProductFormView({ id }: { id?: string }) {
   const [productIdInput, setProductIdInput] = useState(""); const [productIdLooking, setProductIdLooking] = useState(false);
   const [productIdChoices, setProductIdChoices] = useState<ProductIdLookupSource[]>([]); const [productIdLookup, setProductIdLookup] = useState<ProductIdLookupResult | null>(null);
   const [productIdReady, setProductIdReady] = useState(false); const [productIdNotice, setProductIdNotice] = useState("");
+  const [skuPrefix, setSkuPrefix] = useState(() => currentSkuExample().slice(0, 4));
+  const [skuSuggestionLoaded, setSkuSuggestionLoaded] = useState(Boolean(id));
+  const [skuAvailability, setSkuAvailability] = useState<SkuAvailability>({ status: "idle", message: "" });
   const draftKey = `huzhanggui:product-draft:${user.id}`; const [draftReady, setDraftReady] = useState(Boolean(id)); const [draftCandidate, setDraftCandidate] = useState<ProductDraft | null>(null); const [draftTouched, setDraftTouched] = useState(false); const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const [checkedUrls, setCheckedUrls] = useState<string[]>([]); const [excludedProducts, setExcludedProducts] = useState<string[]>([]);
   const [recognition, setRecognition] = useState<{ phase: "waiting" | "checking" | "ready" | "failed"; runId: string; runUrl: string; decision: "" | "matched" | "new" | "failed_continue"; matchedProductId: string; message: string; timingText: string; failureReasons: MatchFailureReason[] }>({ phase: id ? "ready" : "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "", failureReasons: [] });
@@ -437,6 +444,24 @@ export function ProductFormView({ id }: { id?: string }) {
     }
   }, [draftKey, id]);
   useEffect(() => {
+    if (id || !draftReady || skuSuggestionLoaded) return;
+    let cancelled = false;
+    const initialExample = currentSkuExample();
+    setSkuSuggestionLoaded(true);
+    void apiFetch<SkuLookupResult>("/api/products/sku").then((result) => {
+      if (cancelled) return;
+      setSkuPrefix(result.prefix);
+      setForm((current) => {
+        const currentSuffix = current.sku.startsWith(result.prefix) ? current.sku.slice(4) : "";
+        const keepCurrent = current.sku !== initialExample && /^\d{4}$/.test(currentSuffix) && currentSuffix !== "0000";
+        return { ...current, sku: keepCurrent ? current.sku : result.suggestedSku || initialExample };
+      });
+    }).catch(() => {
+      if (!cancelled) setSkuAvailability({ status: "error", message: "自动货号获取失败，请稍后重试" });
+    });
+    return () => { cancelled = true; };
+  }, [draftReady, id, skuSuggestionLoaded]);
+  useEffect(() => {
     if (id || !draftReady || !draftTouched) return;
     const savedAt = Date.now();
     localStorage.setItem(draftKey, JSON.stringify({ version: 1, form, savedAt } satisfies ProductDraft));
@@ -463,6 +488,31 @@ export function ProductFormView({ id }: { id?: string }) {
   }, [id, draftReady, user.id]);
   useEffect(() => { if (id && detail.data) { const p = detail.data.product; setForm({ sku: p.sku, name: p.name, departmentIds: p.departments.map((item) => item.id), businessContactId: p.businessContactId || "", storeName: p.storeName || "", price: p.price || "", productUrl: p.productUrl || "", commission: p.commission || "", storeRating: p.storeRating || "", supplyChain: p.supplyChain || "", cooperationMechanism: p.cooperationMechanism || "", categoryId: p.categoryId || "", tagIds: p.tags.map((item) => item.id), imageUrls: (p.imageUrls || []).join("\n"), notes: p.notes || "", specs: [{ spec: "", quantity: "1" }], arrivedAt: today(), initialDepartmentId: "", initialLocationId: "" }); } }, [id, detail.data]);
   const set = (key: keyof ProductFormState, value: string | string[]) => { setDraftTouched(true); setForm((current) => ({ ...current, [key]: value })); };
+  const skuSuffix = form.sku.startsWith(skuPrefix) ? form.sku.slice(4) : "";
+  const skuFormatValid = /^\d{4}$/.test(skuSuffix) && skuSuffix !== "0000";
+  useEffect(() => {
+    if (id || !draftReady || !skuSuggestionLoaded || recognition.decision === "matched") {
+      setSkuAvailability({ status: "idle", message: "" });
+      return;
+    }
+    if (!skuFormatValid) {
+      setSkuAvailability({ status: "invalid", message: "后四位请输入 0001–9999" });
+      return;
+    }
+    let cancelled = false;
+    setSkuAvailability({ status: "checking", message: "正在检查货号…" });
+    const timer = window.setTimeout(() => {
+      void apiFetch<SkuLookupResult>(`/api/products/sku?sku=${encodeURIComponent(`${skuPrefix}${skuSuffix}`)}`).then((result) => {
+        if (cancelled) return;
+        setSkuAvailability(result.available
+          ? { status: "available", message: result.message || "该商品货号可以使用" }
+          : { status: result.valid === false ? "invalid" : "taken", message: result.message || "该商品货号已存在" });
+      }).catch((reason) => {
+        if (!cancelled) setSkuAvailability({ status: "error", message: reason instanceof Error ? reason.message : "货号检查失败" });
+      });
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [draftReady, form.sku, id, recognition.decision, skuFormatValid, skuPrefix, skuSuffix, skuSuggestionLoaded]);
   const imageUrls = form.imageUrls.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
   const primaryImageUrl = imageUrls.find((url) => { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; } }) || "";
   const recognitionKey = JSON.stringify({ imageUrls, apiProductId: form.apiProductId || "" });
@@ -496,6 +546,7 @@ export function ProductFormView({ id }: { id?: string }) {
     if (draftTouched && !confirm("更换登记方式会清空当前填写内容，是否继续？")) return;
     localStorage.removeItem(draftKey);
     setForm(blankForm()); setDraftTouched(false); setDraftSavedAt(null); setDraftCandidate(null); setDraftReady(true);
+    setSkuSuggestionLoaded(false); setSkuAvailability({ status: "idle", message: "" });
     setProductIdInput(""); setProductIdLookup(null); setProductIdChoices([]); setProductIdReady(false); setProductIdNotice(""); setError("");
     setCheckedUrls([]); setExcludedProducts([]); setConfirmedMatch(null); setCandidates([]); setRecognizingUrl("");
     setRecognition({ phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "", timingText: "", failureReasons: [] });
@@ -509,7 +560,7 @@ export function ProductFormView({ id }: { id?: string }) {
     setDraftTouched(true); setDraftReady(true); setDraftCandidate(null);
     setForm((current) => ({
       ...current,
-      sku: existing?.sku || "",
+      sku: existing?.sku || current.sku,
       name: source.title || existing?.name || "",
       departmentIds: existing?.departments?.map((item) => item.id) || current.departmentIds,
       businessContactId: existing?.businessContactId || current.businessContactId,
@@ -531,6 +582,7 @@ export function ProductFormView({ id }: { id?: string }) {
     setRecognition({ phase: "waiting", runId: "", runUrl: "", decision: "", matchedProductId: "", message: "商品资料已获取，正在核验商品 ID 和疑似同款", timingText: "", failureReasons: [] });
     setProductIdChoices([]); setProductIdReady(true);
     setProductIdNotice([
+      result.lookupType === "promotion-link" ? `已通过推广链接识别商品 ID：${result.outProductId}` : null,
       source.accountName ? `已使用${source.accountIsPrimary ? "主" : ""}机构“${source.accountName}”的最新资料` : "已使用现有商品档案",
       result.warning,
       existing?.archived ? "该商品已归档，保存后将自动恢复" : null,
@@ -538,11 +590,11 @@ export function ProductFormView({ id }: { id?: string }) {
   }
   async function lookupProductId(event: FormEvent) {
     event.preventDefault();
-    const outProductId = productIdInput.trim();
-    if (!outProductId) return;
+    const query = productIdInput.trim();
+    if (!query) return;
     setProductIdLooking(true); setError(""); setProductIdNotice("");
     try {
-      const result = await apiFetch<ProductIdLookupResult>("/api/product-id-lookup", { method: "POST", body: JSON.stringify({ outProductId }) });
+      const result = await apiFetch<ProductIdLookupResult>("/api/product-id-lookup", { method: "POST", body: JSON.stringify({ query }) });
       setProductIdLookup(result);
       if (result.choices.length > 1) setProductIdChoices(result.choices);
       else if (result.selected) applyProductIdSource(result, result.selected);
@@ -556,7 +608,7 @@ export function ProductFormView({ id }: { id?: string }) {
     setProductIdInput(draftCandidate.form.apiProductId || "");
     continueDraft();
     setProductIdReady(true);
-    setProductIdNotice("已恢复上次通过商品 ID 获取的登记资料，正在重新核验疑似同款");
+    setProductIdNotice("已恢复上次快捷登记资料，正在重新核验疑似同款");
   }
   useEffect(() => {
     if (id || !recognition.runUrl || checkedUrls.includes(recognitionKey) || recognition.phase === "checking") return;
@@ -621,7 +673,7 @@ export function ProductFormView({ id }: { id?: string }) {
     setRecognition((value) => ({ ...value, runId: resultRunId, phase: "ready", decision: "matched", matchedProductId: candidate.id, message: exactMatchType === "product_id" ? `商品 ID 完全一致，已直接关联 ${candidate.sku}` : exactMatchType === "exact_image" ? `主图链接完全一致，已直接关联 ${candidate.sku}` : form.windowProductId ? `已确认与 ${candidate.sku} 为同款；将沿用货号并更新橱窗店铺与合作信息` : preferFetchedProduct ? `已确认与 ${candidate.sku} 为同款；将沿用货号并更新联盟接口资料` : `已确认与 ${candidate.sku} 为同款，本次将沿用该货号` }));
     void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: resultRunId, decision: "matched", selectedProductId: candidate.id, manual }) }).catch(() => undefined);
   }
-  function rejectCandidates() { setExcludedProducts((value) => [...new Set([...value, ...candidates.map((item) => item.id)])]); setCandidates([]); setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `新增图片的候选均已排除，仍沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "new", matchedProductId: "", message: "已确认都不是同款，将自动生成新货号" })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "new" }) }).catch(() => undefined); }
+  function rejectCandidates() { setExcludedProducts((value) => [...new Set([...value, ...candidates.map((item) => item.id)])]); setCandidates([]); setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `新增图片的候选均已排除，仍沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "new", matchedProductId: "", message: `已确认都不是同款，将使用货号 ${form.sku}` })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "new" }) }).catch(() => undefined); }
   async function searchExistingCandidate(event: FormEvent) {
     event.preventDefault(); if (!candidateSearch.trim()) return;
     setCandidateSearching(true);
@@ -654,7 +706,8 @@ export function ProductFormView({ id }: { id?: string }) {
         if (submissionMode === "add_samples" && !totalQuantity) throw new Error("请至少添加到样数量");
         if (!recognition.runId || !recognition.decision) throw new Error("请先完成图片识别");
         if (submissionMode === "update_only" && recognition.decision !== "matched") throw new Error("仅更新信息前必须先确认同款商品");
-        const result = await apiFetch<{ id: string; matched?: boolean; updatedOnly?: boolean; sku: string; codes: string[] }>("/api/products", { method: "POST", body: JSON.stringify({ ...payload, submissionMode, matchRunId: recognition.runId, matchDecision: recognition.decision, matchedProductId: recognition.matchedProductId || null }) });
+        if (recognition.decision !== "matched" && (!skuFormatValid || skuAvailability.status !== "available")) throw new Error(skuAvailability.message || "请填写可用的商品货号");
+        const result = await apiFetch<{ id: string; matched?: boolean; updatedOnly?: boolean; sku: string; codes: string[] }>("/api/products", { method: "POST", body: JSON.stringify({ ...payload, requestedSku: recognition.decision === "matched" ? null : form.sku, submissionMode, matchRunId: recognition.runId, matchDecision: recognition.decision, matchedProductId: recognition.matchedProductId || null }) });
         localStorage.removeItem(draftKey); setDraftReady(false);
         toast(result.updatedOnly ? `商品 ${result.sku} 信息已更新，本次未新增样品` : result.matched ? form.windowProductId ? `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品，并更新店铺、机构链接和服务费率` : `已按同款 ${result.sku} 追加 ${totalQuantity} 件样品` : `新商品 ${result.sku} 登记成功`);
         try { localStorage.setItem(`huzhanggui:product-form-defaults:${user.id}`, JSON.stringify({ departmentIds: form.departmentIds, initialDepartmentId: form.initialDepartmentId })); } catch { /* ignore */ }
@@ -667,7 +720,7 @@ export function ProductFormView({ id }: { id?: string }) {
   if (id && detail.loading) return <LoadingState />;
   if (!id && registrationMode === "loading") return <LoadingState label="正在准备登记页面…" />;
   if (!id && registrationMode === null) return <>
-    <PageHeader eyebrow="到样登记" title="选择登记方式" description="你可以手动填写全部资料，也可以输入货源商品 ID，由联盟机构接口自动获取商品资料。" actions={<button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>} />
+    <PageHeader eyebrow="到样登记" title="选择登记方式" description="你可以手动填写全部资料，也可以输入货源商品 ID 或推广链接，由联盟机构接口自动获取商品资料。" actions={<button type="button" className="button button-ghost" onClick={() => router.back()}><ArrowLeft size={17} />返回</button>} />
     <section className="registration-choice-grid">
       <button type="button" className="panel registration-choice-card" onClick={() => selectRegistrationMode("manual")}>
         <span className="registration-choice-icon"><FilePenLine size={29} /></span>
@@ -675,20 +728,20 @@ export function ProductFormView({ id }: { id?: string }) {
         <ArrowRight size={22} />
       </button>
       <button type="button" className="panel registration-choice-card featured" onClick={() => selectRegistrationMode("product-id")}>
-        <span className="registration-choice-icon"><Hash size={29} /></span>
-        <div><small>方式二 · 快捷</small><h2>填写商品 ID 获取资料</h2><p>输入 out_product_id，先匹配机构合作目录，再通过接口获取该商品的最新资料。</p></div>
+        <span className="registration-choice-icon"><Link2 size={29} /></span>
+        <div><small>方式二 · 快捷</small><h2>填写商品 ID 或推广链接获取资料</h2><p>输入 out_product_id 或机构推广链接，系统自动识别并获取该商品的最新资料。</p></div>
         <ArrowRight size={22} />
       </button>
     </section>
   </>;
   if (!id && registrationMode === "product-id" && !productIdReady) return <>
-    <PageHeader eyebrow="商品 ID 快捷登记" title="填写商品 ID 获取资料" description="系统先匹配机构合作目录，再只查询该商品的最新接口资料；取得图片后仍会执行疑似同款判断。" actions={<button type="button" className="button button-ghost" onClick={changeRegistrationMode}><ArrowLeft size={17} />更换登记方式</button>} />
+    <PageHeader eyebrow="联盟商品快捷登记" title="填写商品 ID 或推广链接获取资料" description="系统自动识别输入内容并匹配机构合作目录；取得图片后仍会执行疑似同款判断。" actions={<button type="button" className="button button-ghost" onClick={changeRegistrationMode}><ArrowLeft size={17} />更换登记方式</button>} />
     {error && <div className="form-error page-form-error">{error}</div>}
     <form className="panel product-id-lookup-card" onSubmit={lookupProductId}>
-      <span className="product-id-lookup-icon"><Hash size={30} /></span>
-      <div className="product-id-lookup-copy"><h2>货源商品 ID</h2><p>填写微信接口中的 out_product_id，不要求商品已经在达人橱窗中。主机构目录未命中时会即时分页查找，找到后立即返回。</p></div>
-      <div className="product-id-lookup-row"><input autoFocus value={productIdInput} onChange={(event) => setProductIdInput(event.target.value)} placeholder="请输入 out_product_id" autoCapitalize="none" spellCheck={false} /><button className="button button-primary" disabled={productIdLooking || !productIdInput.trim()}>{productIdLooking ? <><LoaderCircle className="spin" size={17} />正在查询机构商品…</> : <><Search size={17} />获取商品资料</>}</button></div>
-      {draftCandidate?.form.apiProductId && <div className="product-id-draft-resume"><div><b>发现上次未完成的商品 ID 登记</b><small>{draftCandidate.form.apiProductId} · 保存于 {formatDate(new Date(draftCandidate.savedAt), true)}</small></div><button type="button" className="button button-secondary button-compact" onClick={continueProductIdDraft}>继续上次登记</button></div>}
+      <span className="product-id-lookup-icon"><Link2 size={30} /></span>
+      <div className="product-id-lookup-copy"><h2>商品 ID 或机构推广链接</h2><p>支持 out_product_id、weixinstorehs/... 和 weixinstoresubhs/...。推广链接只查询已同步的机构商品目录，未命中时请先同步目录。</p></div>
+      <div className="product-id-lookup-row"><input autoFocus value={productIdInput} onChange={(event) => setProductIdInput(event.target.value)} placeholder="输入商品 ID 或机构推广链接" autoCapitalize="none" spellCheck={false} /><button className="button button-primary" disabled={productIdLooking || !productIdInput.trim()}>{productIdLooking ? <><LoaderCircle className="spin" size={17} />正在查询机构商品…</> : <><Search size={17} />获取商品资料</>}</button></div>
+      {draftCandidate?.form.apiProductId && <div className="product-id-draft-resume"><div><b>发现上次未完成的快捷登记</b><small>商品 ID：{draftCandidate.form.apiProductId} · 保存于 {formatDate(new Date(draftCandidate.savedAt), true)}</small></div><button type="button" className="button button-secondary button-compact" onClick={continueProductIdDraft}>继续上次登记</button></div>}
       {error && <div className="product-id-lookup-actions"><button type="button" className="button button-secondary" onClick={() => selectRegistrationMode("manual")}><FilePenLine size={16} />改为手动填写资料</button></div>}
     </form>
     {productIdChoices.length > 1 && productIdLookup && <Modal title="请选择联盟机构资料" onClose={() => setProductIdChoices([])} wide><div className="league-source-choice-intro"><b>多个同优先级推广链接的机构服务费率相同</b><p>请选择本次登记采用的机构推广链接和商品资料。</p></div><div className="league-source-choice-list">{productIdChoices.map((source) => <article key={source.key}><ProductImage urls={source.imageUrls} alt={source.title || "联盟商品"} size="medium" /><div><span>{source.accountIsPrimary ? "主机构" : "联盟机构"}</span><h3>{source.title || `商品 ${productIdLookup.outProductId}`}</h3><p>{source.accountName || "未命名机构"} · 服务费率 {formatWindowServiceRatio(source.serviceRatio) || "接口未返回"}</p><code>{source.promotionLink || "暂无推广链接"}</code></div><button type="button" className="button button-primary button-compact" onClick={() => applyProductIdSource(productIdLookup, source)}>选择此机构</button></article>)}</div></Modal>}
@@ -701,7 +754,9 @@ export function ProductFormView({ id }: { id?: string }) {
     <section className="panel form-section image-first-card"><header><span className="section-number">01</span><div><h2>先填写商品图片</h2><p>每行一个外部图片网址，GLM 只定位商品主体，本地服务负责召回疑似同款；系统不保存原图。</p></div></header><div className="image-url-layout"><Field label="图片网址" required hint="支持多张；新增图片会重新识别，删除已识别图片不会重复识别。确认同款后会保留旧图片并合并新图片。"><textarea rows={5} value={form.imageUrls} onChange={(event) => set("imageUrls", event.target.value)} placeholder={"https://example.com/image-1.jpg\nhttps://example.com/image-2.jpg"} /></Field><div className="image-preview-grid">{imageUrls.length ? imageUrls.map((url, index) => <div className="image-preview" key={`${url}-${index}`}><img src={url} alt={`预览 ${index + 1}`} loading="lazy" decoding="async" referrerPolicy="no-referrer" /><button type="button" className="image-preview-delete" disabled={imageUrls.length <= 1} onClick={() => removeProductImage(index)} aria-label={`删除图片 ${index + 1}`} title={imageUrls.length <= 1 ? "至少保留一张商品图片" : `删除图片 ${index + 1}`}><Trash2 size={15} /></button></div>) : <div className="image-preview-empty"><ImagePlus size={26} /><span>请先粘贴图片网址</span></div>}</div></div>{!id && <div className={`recognition-status phase-${recognition.phase}`}>{recognition.phase === "waiting" && <><Sparkles size={19} /><span>填写图片网址后会自动检查商品 ID 和疑似同款</span></>}{recognition.phase === "checking" && <><LoaderCircle className="spin" size={19} /><span>正在优先识别主图并进行本地比对，目标在 10 秒内完成</span></>}{recognition.phase === "ready" && recognition.message && <><CheckCircle2 size={19} /><div><span>{recognition.message}</span>{recognition.failureReasons.length > 0 && <ul className="recognition-failure-reasons">{recognition.failureReasons.map((reason) => <li key={`${reason.message}-${reason.imageIndexes.join("-")}`}><b>{failureImageLabel(reason)}</b><span>{reason.message}</span></li>)}</ul>}{recognition.timingText && <small>{recognition.timingText}</small>}</div></>}{recognition.phase === "failed" && <><TriangleAlert size={19} /><div><b>识别过程出错</b><span>{recognition.message}</span>{recognition.failureReasons.length > 0 && <ul className="recognition-failure-reasons">{recognition.failureReasons.map((reason) => <li key={`${reason.message}-${reason.imageIndexes.join("-")}`}><b>{failureImageLabel(reason)}</b><span>{reason.message}</span></li>)}</ul>}{recognition.timingText && <small>{recognition.timingText}</small>}</div><button type="button" className="button button-secondary button-compact" onClick={() => { setCheckedUrls((value) => value.filter((key) => key !== recognitionKey)); setRecognition((value) => ({ ...value, phase: "waiting", message: "", timingText: "", failureReasons: [] })); }}><RefreshCw size={15} />重试</button><button type="button" className="button button-ghost button-compact" onClick={() => { if (!confirm("主体定位或本地比对未能完成，继续后可能漏掉同款商品。是否仍要继续？")) return; if (!confirm("请再次确认：本次将跳过图片疑似同款检查，并按当前判断继续。")) return; setRecognition((value) => confirmedMatch ? ({ ...value, phase: "ready", runId: confirmedMatch.runId, runUrl: confirmedMatch.runUrl, decision: "matched", matchedProductId: confirmedMatch.productId, message: `识别失败，已选择继续沿用 ${confirmedMatch.sku}` }) : ({ ...value, phase: "ready", decision: "failed_continue", matchedProductId: "", message: "识别失败，经两次确认后按新款继续" })); void apiFetch("/api/image-matching", { method: "PATCH", body: JSON.stringify({ runId: recognition.runId, decision: "failed_continue" }) }).catch(() => undefined); }}>确认后继续</button></>}</div>}</section>
     {(id || imageUrls.length > 0) && <div className="form-layout"><div className="form-main">
       <section className="panel form-section"><header><span className="section-number">02</span><div><h2>商品基本信息</h2><p>基础货号对应唯一款式，不同颜色或规格请使用新货号。</p></div></header><div className="form-grid">
-        <Field label="商品基础货号"><input value={id || recognition.decision === "matched" ? form.sku : `保存后自动生成，例如 ${currentSkuExample()}`} readOnly className="readonly-input" /></Field><Field label="商品名称" required><input value={form.name} onChange={(event) => set("name", event.target.value)} placeholder="输入便于查找的商品名称" /></Field>
+        <Field label="商品基础货号" required>{id || recognition.decision === "matched"
+          ? <><input value={form.sku} readOnly className="readonly-input" /><small>已有商品继续沿用原货号</small></>
+          : <><div className={`sku-editor sku-${skuAvailability.status}`}><span>{skuPrefix}</span><input value={skuSuffix} inputMode="numeric" pattern="\d{4}" maxLength={4} aria-label="商品货号后四位" onChange={(event) => set("sku", `${skuPrefix}${event.target.value.replace(/\D/g, "").slice(0, 4)}`)} /></div><small className={`sku-status sku-${skuAvailability.status}`}>{skuAvailability.message || "系统已预填下一可用序号，可修改后四位"}</small></>}</Field><Field label="商品名称" required><input value={form.name} onChange={(event) => set("name", event.target.value)} placeholder="输入便于查找的商品名称" /></Field>
         <Field label="商品分类"><select value={form.categoryId} onChange={(event) => set("categoryId", event.target.value)}><option value="">暂不分类</option>{lookups?.categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field><Field label="商务对接人"><select value={form.businessContactId} onChange={(event) => set("businessContactId", event.target.value)}><option value="">暂不指定</option>{lookups?.users.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.departmentName}</option>)}</select></Field>
         <Field label="选品部门" required className="field-full"><div className="check-grid">{lookups?.departments.map((item) => <label className={`check-card ${form.departmentIds.includes(item.id) ? "checked" : ""}`} key={item.id}><input type="checkbox" checked={form.departmentIds.includes(item.id)} onChange={() => set("departmentIds", form.departmentIds.includes(item.id) ? form.departmentIds.filter((value) => value !== item.id) : [...form.departmentIds, item.id])} /><span>{item.name}</span></label>)}</div></Field>
         <Field label="商品标签" className="field-full"><div className="tag-picker">{lookups?.tags.map((item) => <label key={item.id} style={{ "--tag-color": item.color } as React.CSSProperties} className={form.tagIds.includes(item.id) ? "selected" : ""}><input type="checkbox" checked={form.tagIds.includes(item.id)} onChange={() => set("tagIds", form.tagIds.includes(item.id) ? form.tagIds.filter((value) => value !== item.id) : [...form.tagIds, item.id])} />{item.name}</label>)}</div></Field>
@@ -727,7 +782,7 @@ export function ProductFormView({ id }: { id?: string }) {
         </div>)}
         <button type="button" className="button button-secondary button-compact" onClick={() => setForm({ ...form, specs: [...form.specs, { spec: "", quantity: "1" }] })} disabled={form.specs.length >= 100}><Plus size={15} />添加规格</button>
       </div>
-      {(() => { const total = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); return <div className="arrival-result"><Boxes size={20} /><div><b>将创建 {total} 个独立编号</b><span>例如 {currentSkuExample()}-001</span></div></div>; })()}<div className="arrival-submit">{recognition.decision === "matched" && <button className="button button-secondary" name="submissionMode" value="update_only" disabled={saving || candidates.length > 0}>{saving ? "正在保存…" : "仅更新商品信息"}</button>}<button className="button button-primary" name="submissionMode" value="add_samples" disabled={saving || recognition.phase !== "ready" || !recognition.decision || candidates.length > 0}>{saving ? "正在保存…" : recognition.decision === "matched" ? "按同款追加到样" : "完成登记"}</button><small>{recognition.phase === "checking" ? "图片识别完成后即可提交" : recognition.decision === "matched" ? "可仅更新档案，也可同时追加本次到样" : "确认以上信息后完成本次到样登记"}</small></div></section>}
+      {(() => { const total = form.specs.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0); return <div className="arrival-result"><Boxes size={20} /><div><b>将创建 {total} 个独立编号</b><span>例如 {(form.sku || currentSkuExample())}-001</span></div></div>; })()}<div className="arrival-submit">{recognition.decision === "matched" && <button className="button button-secondary" name="submissionMode" value="update_only" disabled={saving || candidates.length > 0}>{saving ? "正在保存…" : "仅更新商品信息"}</button>}<button className="button button-primary" name="submissionMode" value="add_samples" disabled={saving || recognition.phase !== "ready" || !recognition.decision || candidates.length > 0 || (recognition.decision !== "matched" && skuAvailability.status !== "available")}>{saving ? "正在保存…" : recognition.decision === "matched" ? "按同款追加到样" : "完成登记"}</button><small>{recognition.phase === "checking" ? "图片识别完成后即可提交" : recognition.decision === "matched" ? "可仅更新档案，也可同时追加本次到样" : skuAvailability.status !== "available" ? "请先填写可用的商品货号" : "确认以上信息后完成本次到样登记"}</small></div></section>}
       <section className="panel form-section"><header><div><h2>备注</h2><p>可记录选品或合作补充信息。</p></div></header><Field label="内部备注"><textarea rows={6} value={form.notes} onChange={(event) => set("notes", event.target.value)} /></Field></section>
     </aside></div>}
     {candidates.length > 0 && <Modal title="发现疑似同款，请人工确认" onClose={rejectCandidates} wide><div className="match-intro"><img src={recognizingUrl || imageUrls[0]} alt="本次新图片" referrerPolicy="no-referrer" /><div><b>本次填写的商品图片</b><p>候选由相同主图链接或本地主体特征生成；结果只代表疑似，最终请人工确认。{recognition.message ? ` ${recognition.message}。` : ""}</p>{recognition.failureReasons.length > 0 && <ul className="recognition-failure-reasons">{recognition.failureReasons.map((reason) => <li key={`${reason.message}-${reason.imageIndexes.join("-")}`}><b>{failureImageLabel(reason)}</b><span>{reason.message}</span></li>)}</ul>}</div></div><div className="match-candidate-list">{candidates.map((candidate) => <article className="match-candidate" key={candidate.id}><div className="match-images"><img src={candidate.newMatchedImageUrl || recognizingUrl || imageUrls[0]} alt="实际参与最高分匹配的新图片" referrerPolicy="no-referrer" /><img src={candidate.matchedImageUrl || candidate.imageUrls?.[0]} alt={candidate.name} referrerPolicy="no-referrer" /></div><div className="match-candidate-copy"><div className="candidate-score-line"><span className="similarity-chip">{candidate.matchType === "exact_image" ? "相同主图 100%" : `主体相似度 ${Math.round(candidate.similarity * 100)}%`}</span><span className="soft-badge">{candidate.matchType === "exact_image" ? "相同主图链接" : "本地主体候选"}</span></div><b>{candidate.name}</b><p>{candidate.sku} · {candidate.storeName || "未填店铺"}{candidate.archived ? " · 已归档（确认后恢复）" : ""}</p>{candidate.matchedImageCount && candidate.matchedImageCount > 1 ? <div className="candidate-reasons"><b>多图一致</b><span>{candidate.matchedImageCount} 张新图都召回了这个商品</span></div> : null}<button type="button" className="button button-primary button-compact" onClick={() => chooseCandidate(candidate)}>人工确认是同款</button></div></article>)}</div><form className="candidate-manual-search" onSubmit={searchExistingCandidate}><div><b>没有看到目标商品？</b><span>可按货号或商品名称搜索全部档案（含已归档）。</span></div><div className="candidate-search-row"><input value={candidateSearch} onChange={(event) => setCandidateSearch(event.target.value)} placeholder="输入货号或商品名称" /><button className="button button-secondary button-compact" disabled={candidateSearching || !candidateSearch.trim()}><Search size={15} />{candidateSearching ? "搜索中" : "搜索"}</button></div>{candidateSearchRows.length > 0 && <div className="candidate-search-results">{candidateSearchRows.map((candidate) => <button type="button" key={candidate.id} onClick={() => chooseCandidate(candidate, true)}><ProductImage urls={candidate.imageUrls} alt={candidate.name} size="small" /><span><b>{candidate.sku}</b><small>{candidate.name}{candidate.archived ? " · 已归档" : ""}</small></span><em>选择</em></button>)}</div>}</form><div className="modal-actions"><button type="button" className="button button-secondary" onClick={rejectCandidates}>都不是同款，创建新款</button></div></Modal>}

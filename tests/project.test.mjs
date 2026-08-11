@@ -6,7 +6,7 @@ import { createXlsx } from "../lib/xlsx.ts";
 import { isSupportedProductLink, isWebProductLink, productLinkSchema } from "../lib/product-link.ts";
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
-import { beijingDate, formatProductSku, formatSampleCode, nextProductSampleCode, nextProductSku, SkuGenerationError } from "../lib/sku.ts";
+import { beijingDate, formatProductSku, formatSampleCode, isProductSkuForDate, nextProductSampleCode, nextProductSku, productSkuPrefix, SkuGenerationError, suggestNextProductSku } from "../lib/sku.ts";
 import { cosineSimilarity } from "../lib/cosine.ts";
 import { extractSampleCode } from "../lib/scan-code.ts";
 import { formatCommission, normalizeCommission } from "../lib/commission.ts";
@@ -184,6 +184,11 @@ test("账号直接授权并限制普通管理员扩大权限", async () => {
 
 test("自动货号使用年月加流水编号", async () => {
   assert.equal(beijingDate(new Date("2026-08-01T16:30:00.000Z")), "2026-08-02");
+  assert.equal(productSkuPrefix("2026-08-02"), "2608");
+  assert.equal(isProductSkuForDate("26080001", "2026-08-02"), true);
+  assert.equal(isProductSkuForDate("26080000", "2026-08-02"), false);
+  assert.equal(isProductSkuForDate("26070001", "2026-08-02"), false);
+  assert.equal(isProductSkuForDate("2608A001", "2026-08-02"), false);
   assert.equal(formatProductSku("2026-08-02", 7), "26080007");
   assert.equal(formatProductSku("2026-12-31", 9999), "26129999");
   assert.throws(() => formatProductSku("2026-12-31", 10000), /9999/);
@@ -217,6 +222,35 @@ test("自动货号使用年月加流水编号", async () => {
   assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "26080001"), "26080001-001");
   assert.equal(await nextProductSampleCode(tx, "00000000-0000-0000-0000-000000000001", "26080001"), "26080001-002");
   await assert.rejects(async () => { const badTx = async () => [{ lastValue: 1 }]; await nextProductSku(badTx, "2026-08-04"); }, SkuGenerationError);
+
+  const suggestTx = async (strings, ...values) => {
+    const query = strings.join("?");
+    if (query.includes("SELECT last_value FROM product_sku_sequences")) return [{ lastValue: 1 }];
+    if (query.includes("SELECT 1 FROM products")) return values[0] === "26080002" ? [{ exists: 1 }] : [];
+    return [];
+  };
+  assert.equal(await suggestNextProductSku(suggestTx, "2026-08-04"), "26080003");
+});
+
+test("新商品货号允许修改后四位并进行前后端查重", async () => {
+  const productsRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
+  assert.match(productsRoute, /requestedSku/);
+  assert.match(productsRoute, /isProductSkuForDate\(requestedSku/);
+  assert.match(productsRoute, /SELECT 1 FROM products WHERE lower\(sku\) = lower\(\$\{requestedSku\}\)/);
+  assert.match(productsRoute, /ProductSkuConflictError/);
+
+  const availabilityRoute = await readFile(new URL("../app/api/products/sku/route.ts", import.meta.url), "utf8");
+  assert.match(availabilityRoute, /requireUser\("products:create"\)/);
+  assert.match(availabilityRoute, /suggestNextProductSku/);
+  assert.match(availabilityRoute, /SELECT id, archived FROM products/);
+  assert.doesNotMatch(availabilityRoute, /archived = false/);
+
+  const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
+  assert.match(form, /skuPrefix/);
+  assert.match(form, /商品货号后四位/);
+  assert.match(form, /后四位请输入 0001–9999/);
+  assert.match(form, /skuAvailability\.status !== "available"/);
+  assert.match(form, /requestedSku: recognition\.decision === "matched" \? null : form\.sku/);
 });
 
 test("样品列表空筛选可安全加载，商品档案提供价格多选和排序", async () => {
@@ -436,6 +470,9 @@ test("数据库迁移可在 PostgreSQL 引擎中完整执行", async () => {
     `);
     const result = await database.query("SELECT count(*)::int AS count FROM departments WHERE name = '商务部'");
     assert.equal(result.rows[0].count, 1);
+    await database.query("INSERT INTO products(sku,name,archived) VALUES('26089999','归档货号占用测试',true)");
+    await assert.rejects(database.query("INSERT INTO products(sku,name) VALUES('26089999','重复货号测试')"), /duplicate key|unique constraint/i);
+    await database.query("DELETE FROM products WHERE sku='26089999'");
     const settings = await database.query("SELECT value->>'mode' AS mode FROM app_settings WHERE key = 'image_matching'");
     assert.equal(settings.rows[0].mode, "standard");
     const model = await database.query("SELECT value->>'model' AS model FROM app_settings WHERE key = 'image_matching'");
@@ -695,10 +732,14 @@ test("橱窗选品登记需要带货账号配置与官方接口同步", async ()
   assert.match(leagueMigration, /shop_score/);
 });
 
-test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似同款判断", async () => {
+test("登记到样支持通过 out_product_id 或推广链接查询联盟资料并继续疑似同款判断", async () => {
   const route = await readFile(new URL("../app/api/product-id-lookup/route.ts", import.meta.url), "utf8");
   assert.match(route, /requireUser\("products:create"\)/);
-  assert.match(route, /lookupLeagueProductCandidates\(input\.outProductId\)/);
+  assert.match(route, /lookupLeagueProductCandidates\(outProductId\)/);
+  assert.match(route, /lookupLeagueProductCandidatesByPromotionLink\(promotionLink\)/);
+  assert.match(route, /normalizeLeaguePromotionLink\(input\.query\)/);
+  assert.match(route, /未在已同步的联盟机构商品目录中找到该推广链接/);
+  assert.match(route, /promotionLink \? candidates : preferredLeaguePromotionCandidates/);
   assert.match(route, /preferredLeaguePromotionCandidates/);
   assert.match(route, /existingProduct/);
   assert.match(route, /cacheHits: lookup\.cacheHits/);
@@ -709,6 +750,10 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
 
   const league = await readFile(new URL("../lib/league-product.ts", import.meta.url), "utf8");
   assert.match(league, /export async function lookupLeagueProductCandidates/);
+  assert.match(league, /export async function lookupLeagueProductCandidatesByPromotionLink/);
+  assert.match(league, /loadCachedLeagueCooperativeItemsByLink/);
+  assert.match(league, /head_supplier_item_link = \$\{promotionLink\}/);
+  assert.match(league, /同一推广链接对应多个机构账号或商品 ID/);
   assert.match(league, /fetchLeagueCooperativeItemLinks\(account\)/);
   assert.match(league, /refreshLeagueCooperativeItemCache/);
   assert.match(league, /loadCachedLeagueCooperativeItems/);
@@ -746,6 +791,9 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
   const institutionCacheRefreshMigration = await readFile(new URL("../migrations/034_refresh_institution_promotion_cache.sql", import.meta.url), "utf8");
   assert.match(institutionCacheRefreshMigration, /sync_status = 'pending'/);
   assert.match(institutionCacheRefreshMigration, /DELETE FROM league_product_lookup_throttles/);
+  const linkLookupMigration = await readFile(new URL("../migrations/037_league_promotion_link_lookup.sql", import.meta.url), "utf8");
+  assert.match(linkLookupMigration, /league_cooperative_item_link_idx/);
+  assert.match(linkLookupMigration, /head_supplier_item_link, league_account_id/);
 
   const directoryWorker = await readFile(new URL("../scripts/league-directory-sync.mjs", import.meta.url), "utf8");
   assert.match(directoryWorker, /primaryIntervalMinutes = 30/);
@@ -783,7 +831,9 @@ test("登记到样支持通过 out_product_id 查询联盟资料并继续疑似�
 
   const form = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   assert.match(form, /选择登记方式/);
-  assert.match(form, /填写商品 ID 获取资料/);
+  assert.match(form, /填写商品 ID 或推广链接获取资料/);
+  assert.match(form, /weixinstorehs\/\.\.\./);
+  assert.match(form, /weixinstoresubhs\/\.\.\./);
   assert.match(form, /\/api\/product-id-lookup/);
   assert.match(form, /apiProductId: result\.outProductId/);
   assert.match(form, /registrationMode === "product-id"/);

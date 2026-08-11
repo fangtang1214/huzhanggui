@@ -4,11 +4,19 @@ import { fetchWindowProductDetail, loadTalentAccount } from "./talent-window";
 const API_BASE = "https://api.weixin.qq.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const QUALITY_CONCURRENCY = 10;
+const LEAGUE_PROMOTION_LINK = /^(weixinstorehs|weixinstoresubhs)\/([A-Za-z0-9_-]+)$/i;
 
 function safeText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const str = String(value).trim();
   return str || null;
+}
+
+export function normalizeLeaguePromotionLink(value: unknown) {
+  const text = safeText(value);
+  if (!text) return null;
+  const match = LEAGUE_PROMOTION_LINK.exec(text);
+  return match ? `${match[1].toLowerCase()}/${match[2]}` : null;
 }
 
 export function effectiveWindowProductId(productId: unknown, outProductId: unknown) {
@@ -524,6 +532,23 @@ async function loadCachedLeagueCooperativeItems(accountId: string, productId: st
   return items;
 }
 
+async function loadCachedLeagueCooperativeItemsByLink(accountId: string, promotionLink: string) {
+  const sql = getDb();
+  const rows = await sql`
+    SELECT product_id, head_supplier_item_link, promotion_detail_link, link_type, cooperative_item_id
+    FROM league_cooperative_item_cache
+    WHERE league_account_id = ${accountId} AND head_supplier_item_link = ${promotionLink}
+    ORDER BY product_id
+  `;
+  return rows.map((row) => ({
+    productId: String(row.productId),
+    link: String(row.headSupplierItemLink),
+    promotionDetailLink: String(row.promotionDetailLink),
+    linkType: row.linkType as LeaguePromotionLinkType,
+    cooperativeItemId: row.cooperativeItemId ? String(row.cooperativeItemId) : null,
+  } satisfies CooperativeItem));
+}
+
 type TargetedCooperativeScanResult = {
   matches: CooperativeItem[];
   limited: boolean;
@@ -810,6 +835,66 @@ export async function lookupLeagueProductCandidates(productId: string): Promise<
     cacheHits: results.filter((result) => result.cacheHit).length,
     refreshedAccounts: results.filter((result) => result.refreshed).length,
     scanLimited: results.some((result) => result.scanLimited),
+  };
+}
+
+export async function lookupLeagueProductCandidatesByPromotionLink(promotionLink: string): Promise<{
+  outProductId: string | null;
+  candidates: LeagueProductLookupCandidate[];
+  errors: string[];
+  accountCount: number;
+  cacheHits: number;
+  refreshedAccounts: number;
+  scanLimited: boolean;
+  duplicate: boolean;
+}> {
+  const normalizedLink = normalizeLeaguePromotionLink(promotionLink);
+  if (!normalizedLink) throw new Error("推广链接格式不正确");
+  const accounts = await loadActiveLeagueAccounts();
+  const matchesByAccount = await Promise.all(accounts.map(async (account) => ({
+    account,
+    matches: await loadCachedLeagueCooperativeItemsByLink(account.id, normalizedLink),
+  })));
+  const occurrences = matchesByAccount.flatMap(({ account, matches }) => matches.map((match) => ({ account, match })));
+  const identities = new Set(occurrences.map(({ account, match }) => `${account.id}\u0000${match.productId}`));
+  if (identities.size > 1) {
+    return {
+      outProductId: null,
+      candidates: [],
+      errors: ["同一推广链接对应多个机构账号或商品 ID，请先检查机构商品目录"],
+      accountCount: accounts.length,
+      cacheHits: occurrences.length,
+      refreshedAccounts: 0,
+      scanLimited: false,
+      duplicate: true,
+    };
+  }
+  const occurrence = occurrences[0];
+  if (!occurrence) {
+    return {
+      outProductId: null,
+      candidates: [],
+      errors: [],
+      accountCount: accounts.length,
+      cacheHits: 0,
+      refreshedAccounts: 0,
+      scanLimited: false,
+      duplicate: false,
+    };
+  }
+  const matches = occurrences
+    .filter(({ account, match }) => account.id === occurrence.account.id && match.productId === occurrence.match.productId)
+    .map(({ match }) => match);
+  const resolved = await resolveLeagueLookupMatches(occurrence.account, occurrence.match.productId, matches);
+  return {
+    outProductId: occurrence.match.productId,
+    candidates: resolved.candidates,
+    errors: resolved.errors,
+    accountCount: accounts.length,
+    cacheHits: 1,
+    refreshedAccounts: 0,
+    scanLimited: false,
+    duplicate: false,
   };
 }
 

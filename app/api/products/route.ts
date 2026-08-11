@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { writeAudit } from "@/lib/audit";
 import { productLinkSchema } from "@/lib/product-link";
-import { nextProductSampleCode, nextProductSku } from "@/lib/sku";
+import { beijingDate, isProductSkuForDate, nextProductSampleCode, nextProductSku, ProductSkuConflictError } from "@/lib/sku";
 import { productSearchConditions } from "@/lib/search";
 import { syncProductImageQueue, urlHash } from "@/lib/image-matching";
 import { imageUrlSchema } from "@/lib/image-url";
@@ -37,6 +37,7 @@ const productSchema = z.object({
   submissionMode: z.enum(["add_samples", "update_only"]).default("add_samples"),
   windowProductId: z.string().uuid().optional().nullable(),
   apiProductId: z.string().trim().max(100).optional().nullable(),
+  requestedSku: z.string().trim().max(8).optional().nullable(),
 }).superRefine((input, context) => {
   if (input.matchDecision === "matched" && !input.matchedProductId) context.addIssue({ code: "custom", path: ["matchedProductId"], message: "请选择确认的同款商品" });
   if (input.submissionMode === "add_samples" && !input.specs.length) context.addIssue({ code: "custom", path: ["specs"], message: "请至少添加一行规格与数量" });
@@ -130,6 +131,10 @@ export async function POST(request: Request) {
     ` : [null];
     const effectiveMatchDecision = apiMatchedProduct ? "matched" : input.matchDecision;
     const effectiveMatchedProductId = apiMatchedProduct ? String(apiMatchedProduct.id) : input.matchedProductId;
+    const requestedSku = effectiveMatchDecision === "matched" ? null : nullable(input.requestedSku);
+    if (requestedSku && !isProductSkuForDate(requestedSku, beijingDate())) {
+      return Response.json({ ok: false, message: "商品货号必须使用当前年月加四位序号，后四位范围为 0001–9999" }, { status: 400 });
+    }
     if (updateOnly && effectiveMatchDecision !== "matched") return Response.json({ ok: false, message: "仅更新信息前必须先人工确认同款商品" }, { status: 409 });
     if (!run || (effectiveMatchDecision !== "matched" && !input.imageUrls.some((imageUrl) => urlHash(imageUrl) === run.imageUrlHash))) return Response.json({ ok: false, message: "图片识别结果已失效，请重新识别" }, { status: 409 });
     if (effectiveMatchDecision === "failed_continue" && run.status !== "failed") return Response.json({ ok: false, message: "识别状态与登记方式不一致" }, { status: 409 });
@@ -161,7 +166,11 @@ export async function POST(request: Request) {
         product = updated[0]; mergedProductVersion = Number(product.version);
         if (wasArchived) await tx`UPDATE samples SET archived=false, archived_with_product=false, updated_at=now() WHERE product_id=${product.id} AND archived_with_product=true`;
       } else {
-        const sku = await nextProductSku(tx);
+        const sku = requestedSku || await nextProductSku(tx);
+        if (requestedSku) {
+          const existingSku = await tx`SELECT 1 FROM products WHERE lower(sku) = lower(${requestedSku}) LIMIT 1`;
+          if (existingSku.length) throw new ProductSkuConflictError();
+        }
         const inserted = await tx`INSERT INTO products(sku,name,business_contact_id,store_name,price,product_url,commission,store_rating,supply_chain,cooperation_mechanism,category_id,image_urls,notes,created_by)
           VALUES(${sku},${input.name},${input.businessContactId || null},${cooperation.storeName},${cooperation.price},${cooperation.productUrl},${cooperation.commission},${cooperation.storeRating},${cooperation.supplyChain},${cooperation.cooperationMechanism},${input.categoryId || null},${tx.json(input.imageUrls)},${nullable(input.notes)},${user.id}) RETURNING *`;
         product = inserted[0];

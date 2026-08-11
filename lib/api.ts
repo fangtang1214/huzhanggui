@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AuthError } from "./auth";
-import { SkuGenerationError } from "./sku";
+import { ProductSkuConflictError, SkuGenerationError } from "./sku";
 
 export function ok(data: unknown, init?: ResponseInit) {
   return NextResponse.json({ ok: true, data }, init);
@@ -21,6 +21,9 @@ export function apiError(error: unknown) {
       { status: 400 },
     );
   }
+  if (error instanceof ProductSkuConflictError) {
+    return NextResponse.json({ ok: false, message: error.message }, { status: 409 });
+  }
   if (error instanceof SkuGenerationError) {
     console.error(error);
     return NextResponse.json({ ok: false, message: "自动编号生成异常，本次登记未保存，请联系管理员" }, { status: 500 });
@@ -31,7 +34,7 @@ export function apiError(error: unknown) {
     const message = constraint.includes("product_api_ids")
       ? "该微信商品 ID 已与现有商品关联，请返回橱窗刷新后直接使用已登记商品"
       : constraint.includes("products_sku")
-        ? "商品编号发生冲突，请重试；系统会重新生成编号"
+        ? "商品货号已存在，请更换后重试"
         : constraint.includes("appid")
           ? "该 AppID 已经配置"
           : "相同记录已经存在，请刷新后重试";

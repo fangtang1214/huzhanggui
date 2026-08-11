@@ -9,6 +9,13 @@ export class SkuGenerationError extends Error {
   }
 }
 
+export class ProductSkuConflictError extends Error {
+  constructor(message = "商品货号已存在，请更换后重试") {
+    super(message);
+    this.name = "ProductSkuConflictError";
+  }
+}
+
 export function beijingDate(now = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai",
@@ -16,6 +23,20 @@ export function beijingDate(now = new Date()) {
     month: "2-digit",
     day: "2-digit",
   }).format(now);
+}
+
+export function productSkuPrefix(date = beijingDate()) {
+  const year = date.slice(2, 4);
+  const month = date.slice(5, 7);
+  if (!/^\d{2}$/.test(year) || !/^\d{2}$/.test(month)) throw new SkuGenerationError("商品货号日期异常");
+  return `${year}${month}`;
+}
+
+export function isProductSkuForDate(sku: unknown, date = beijingDate()) {
+  const value = typeof sku === "string" ? sku.trim() : "";
+  if (!/^\d{8}$/.test(value) || !value.startsWith(productSkuPrefix(date))) return false;
+  const sequence = Number(value.slice(4));
+  return Number.isSafeInteger(sequence) && sequence >= 1 && sequence <= 9999;
 }
 
 function validSequence(value: unknown, label: string) {
@@ -27,10 +48,7 @@ function validSequence(value: unknown, label: string) {
 export function formatProductSku(date: string, sequence: number) {
   const value = validSequence(sequence, "商品货号");
   if (value > 9999) throw new SkuGenerationError("本月商品数量已达到 9999 件");
-  const year = date.slice(2, 4);
-  const month = date.slice(5, 7);
-  if (!/^\d{2}$/.test(year) || !/^\d{2}$/.test(month)) throw new SkuGenerationError("商品货号日期异常");
-  return `${year}${month}${String(value).padStart(4, "0")}`;
+  return `${productSkuPrefix(date)}${String(value).padStart(4, "0")}`;
 }
 
 export function formatSampleCode(productSku: string, sequence: number) {
@@ -56,6 +74,18 @@ export async function nextProductSku(tx: Queryable, date = beijingDate()) {
     if (!existing.length) return sku;
   }
   throw new SkuGenerationError("本月商品货号序列存在冲突");
+}
+
+export async function suggestNextProductSku(tx: Queryable, date = beijingDate()) {
+  const sequenceDate = `${date.slice(0, 4)}-${date.slice(5, 7)}-01`;
+  const [row] = await tx`SELECT last_value FROM product_sku_sequences WHERE sku_date = ${sequenceDate}`;
+  const firstSequence = row ? validSequence(row.lastValue, "商品货号") + 1 : 1;
+  for (let sequence = firstSequence; sequence <= 9999; sequence += 1) {
+    const sku = formatProductSku(date, sequence);
+    const existing = await tx`SELECT 1 FROM products WHERE lower(sku)=lower(${sku}) LIMIT 1`;
+    if (!existing.length) return sku;
+  }
+  throw new SkuGenerationError("本月商品数量已达到 9999 件");
 }
 
 export async function nextProductSampleCode(tx: Queryable, productId: string, productSku: string) {
