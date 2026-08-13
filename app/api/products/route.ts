@@ -11,6 +11,7 @@ import { imageUrlSchema } from "@/lib/image-url";
 import { COMMISSION_INPUT_PATTERN, normalizeCommission } from "@/lib/commission";
 import { setCurrentProductApiId } from "@/lib/product-api-ids";
 import { mergeWindowRegistrationCooperation } from "@/lib/window-registration";
+import { SAMPLE_STATUSES } from "@/lib/constants";
 
 const optionalText = z.string().trim().max(1000).optional().nullable();
 const commissionSchema = z.string().trim().max(30).refine(
@@ -55,11 +56,14 @@ export async function GET(request: Request) {
     const archived = url.searchParams.get("view") === "archived";
     const departmentId = url.searchParams.get("departmentId") || null; const categoryId = url.searchParams.get("categoryId") || null;
     const storageDepartmentId = url.searchParams.get("storageDepartmentId") || null;
+    const requestedStatus = url.searchParams.get("status") || "";
+    const status = SAMPLE_STATUSES.some((item) => item.value === requestedStatus) ? requestedStatus : null;
     const selectedPrices = Array.from(new Set(url.searchParams.getAll("price").filter((value) => /^\d+(?:\.\d{1,2})?$/.test(value)))).slice(0, 10000);
     const priceOrder = url.searchParams.get("priceOrder");
     const page = Math.max(1, Number(url.searchParams.get("page") || 1)); const pageSize = Math.min(100, Math.max(10, Number(url.searchParams.get("pageSize") || 20))); const offset = (page - 1) * pageSize;
     const priceFilter = selectedPrices.length ? sql`AND p.price = ANY(${selectedPrices}::numeric[])` : sql``;
     const storageDepartmentFilter = storageDepartmentId ? sql`AND EXISTS (SELECT 1 FROM samples sdept WHERE sdept.product_id = p.id AND (p.archived = true OR sdept.archived = false) AND sdept.current_department_id = ${storageDepartmentId}::uuid)` : sql``;
+    const statusFilter = status ? sql`AND EXISTS (SELECT 1 FROM samples sstatus WHERE sstatus.product_id = p.id AND (p.archived = true OR sstatus.archived = false) AND sstatus.status = ${status})` : sql``;
     const orderBy = priceOrder === "asc" ? sql`p.price ASC NULLS LAST, p.created_at DESC` : priceOrder === "desc" ? sql`p.price DESC NULLS LAST, p.created_at DESC` : sql`p.created_at DESC`;
     const rows = await sql`
        SELECT p.id, p.sku, p.name, p.store_name, p.price, p.product_url, p.commission, p.store_rating, p.supply_chain, p.archived,
@@ -77,12 +81,12 @@ export async function GET(request: Request) {
       LEFT JOIN departments d ON d.id = pd.department_id LEFT JOIN product_tags pt ON pt.product_id = p.id LEFT JOIN tags t ON t.id = pt.tag_id
        WHERE p.archived = ${archived} AND ${searchFrag}
          AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-         ${priceFilter} ${storageDepartmentFilter}
+         ${priceFilter} ${storageDepartmentFilter} ${statusFilter}
        GROUP BY p.id, c.name, u.name ORDER BY ${orderBy} LIMIT ${pageSize} OFFSET ${offset}`;
     const [countRow] = await sql`SELECT count(DISTINCT p.id)::int AS total FROM products p LEFT JOIN product_departments pd ON pd.product_id = p.id
       WHERE p.archived = ${archived} AND ${searchFrag}
       AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-      ${priceFilter} ${storageDepartmentFilter}`;
+      ${priceFilter} ${storageDepartmentFilter} ${statusFilter}`;
     const priceOptions = await sql`
       SELECT p.price::text AS price, count(DISTINCT p.id)::int AS count
       FROM products p
@@ -90,7 +94,7 @@ export async function GET(request: Request) {
       WHERE p.archived = ${archived} AND p.price IS NOT NULL
         AND ${searchFrag}
         AND (${departmentId}::uuid IS NULL OR pd.department_id = ${departmentId}) AND (${categoryId}::uuid IS NULL OR p.category_id = ${categoryId})
-        ${storageDepartmentFilter}
+        ${storageDepartmentFilter} ${statusFilter}
       GROUP BY p.price ORDER BY p.price ASC`;
     return ok({ rows, total: countRow.total, page, pageSize, priceOptions });
   } catch (error) { return apiError(error); }

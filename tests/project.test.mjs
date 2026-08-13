@@ -274,7 +274,7 @@ test("新商品货号允许修改后四位并进行前后端查重", async () =>
   assert.match(form, /requestedSku: recognition\.decision === "matched" \? null : form\.sku/);
 });
 
-test("样品列表空筛选可安全加载，商品档案提供价格多选和排序", async () => {
+test("样品列表空筛选可安全加载，商品档案提供状态、价格筛选和排序", async () => {
   const samplesRoute = await readFile(new URL("../app/api/samples/route.ts", import.meta.url), "utf8");
   assert.equal((samplesRoute.match(/\$\{status\}::text IS NULL/g) || []).length, 2);
   const productsRoute = await readFile(new URL("../app/api/products/route.ts", import.meta.url), "utf8");
@@ -282,10 +282,15 @@ test("样品列表空筛选可安全加载，商品档案提供价格多选和�
   assert.match(productsRoute, /priceOptions/);
   assert.match(productsRoute, /p\.price ASC NULLS LAST/);
   assert.match(productsRoute, /p\.price DESC NULLS LAST/);
+  assert.match(productsRoute, /url\.searchParams\.get\("status"\)/);
+  assert.match(productsRoute, /sstatus\.status = \$\{status\}/);
+  assert.equal((productsRoute.match(/\$\{statusFilter\}/g) || []).length, 3);
   const productsView = await readFile(new URL("../components/views/products-view.tsx", import.meta.url), "utf8");
   for (const step of ["01", "02", "03", "04"]) assert.match(productsView, new RegExp(`section-number">${step}`));
   assert.match(productsView, /className="arrival-submit"/);
   assert.match(productsView, /已选 \$\{prices\.length\} 个价格/);
+  assert.equal((productsView.match(/全部商品状态/g) || []).length, 2);
+  assert.match(productsView, /queryParams\.set\("status", productStatus\)/);
 });
 
 test("商品档案可通过当前及历史商品 ID 搜索", async () => {
